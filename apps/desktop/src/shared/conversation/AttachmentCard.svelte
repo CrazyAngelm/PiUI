@@ -5,11 +5,12 @@
   import { useTranslation } from '../../features/locale/context';
   import type { ConversationAttachment, ConversationMedia } from '../../../../../contracts/conversation-presentation-v1';
 
-  let { attachment, open, download, resolve }: {
+  let { attachment, open, download, resolve, printMode = false }: {
     attachment: ConversationAttachment;
     open?: (id: string) => Promise<void>;
     download?: (id: string) => Promise<void>;
     resolve?: (id: string) => Promise<ConversationMedia>;
+    printMode?: boolean;
   } = $props();
   const t = useTranslation();
   const id = untrack(() => attachment.id);
@@ -21,7 +22,7 @@
   const mediaKind = untrack(() => attachment.presentation);
 
   onMount(() => {
-    if (ports.resolve && mediaKind && mediaKind !== 'file' && !attachment.unavailable) {
+    if (ports.resolve && mediaKind && mediaKind !== 'file' && (!printMode || mediaKind === 'image') && !attachment.unavailable) {
       void ports.resolve(id).then(media => {
         if (disposed) return;
         if (typeof media.src !== 'string' || !media.src) throw new Error('Missing media source.');
@@ -48,11 +49,11 @@
 
 <div class="attachment" data-file-name={attachment.label} data-file-url={src || undefined}>
   {#if src && mediaKind === 'image'}
-    {#if ports.open && attachment.openable !== false && !attachment.unavailable}
+    {#if !printMode && ports.open && attachment.openable !== false && !attachment.unavailable}
     <button class="image" type="button" aria-label={attachment.label} onclick={() => void act('open')}>
       <img {src} alt={attachment.label} loading="lazy" onerror={() => { src = ''; error = 'Preview unavailable. Open the attachment to continue.'; }} />
     </button>
-    {:else}<img {src} alt={attachment.label} loading="lazy" onerror={() => { src = ''; error = 'Preview unavailable. Open the attachment to continue.'; }} />{/if}
+    {:else}<img {src} alt={attachment.label} loading={printMode ? 'eager' : 'lazy'} onerror={() => { src = ''; error = 'Preview unavailable. Open the attachment to continue.'; }} />{/if}
   {:else if src && mediaKind === 'audio'}
     <audio {src} controls preload="none" aria-label={attachment.label} onerror={() => { src = ''; error = 'Preview unavailable. Open the attachment to continue.'; }}></audio>
   {:else if src && mediaKind === 'video'}
@@ -60,10 +61,10 @@
     <video {src} controls preload="none" aria-label={attachment.label} onerror={() => { src = ''; error = 'Preview unavailable. Open the attachment to continue.'; }}></video>
   {/if}
   <div class="caption">
-    {#if ports.open && !attachment.unavailable && attachment.openable !== false}
+    {#if !printMode && ports.open && !attachment.unavailable && attachment.openable !== false}
       <Button size="sm" variant="ghost" disabled={busy} onclick={() => void act('open')}>{attachment.label}</Button>
     {:else}<span>{attachment.label}</span>{/if}
-    {#if attachment.downloadable && ports.download && !attachment.unavailable}
+    {#if !printMode && attachment.downloadable && ports.download && !attachment.unavailable}
       <IconButton size="sm" label={$t('Download attachment')} disabled={busy} onclick={() => void act('download')}><Download size={14} /></IconButton>
     {/if}
   </div>

@@ -22,7 +22,7 @@ const COMMAND_BOUND_MS = 5_000;
 // beyond this before its own 720 s terminal bound.
 const INNER_HARNESS_BOUND_MS = 700_000;
 const JOB_RUNNER_BUILD_BOUND_MS = 600_000;
-const SCENARIO_FLAGS = ['--agent-api', '--safe-only', '--avatar', '--conversation', '--plugin-style'];
+const SCENARIO_FLAGS = ['--agent-api', '--safe-only', '--avatar', '--conversation', '--plugin-style', '--composer'];
 
 function waitFor(milliseconds) {
   return new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));

@@ -14,6 +14,12 @@ const source = (path: string): string => readFileSync(resolve(repository, path),
 function conversationBoundary(): Plugin {
   return {
     name: 'nano-conversation-boundary', enforce: 'pre',
+    transform(code, id) {
+      if (normalizePath(id.split('?')[0]) !== normalizePath(resolve(repository, 'apps/desktop/src/styles/tokens.css'))) return;
+      // The same token source serves two independent owner-controlled roots.
+      // Transcript layout rules below must not turn the composer into a scroll viewport.
+      return code.replace(/:root/g, ':is(.nano-conversation-root, [data-nano-composer="root"])');
+    },
     resolveId(id, importer) {
       if (!importer || !id.startsWith('.')) return;
       const path = normalizePath(resolve(dirname(importer.split('?')[0]), id)).replace(/\.ts$/, '');
@@ -31,12 +37,12 @@ function conversationBoundary(): Plugin {
         const css = postcss.parse(String(item.source));
         css.walkRules(rule => {
           if (rule.parent?.type === 'atrule' && /keyframes$/i.test(rule.parent.name)) return;
-          rule.selectors = rule.selectors.map(selector => selector.includes(':root') ? selector.replace(/:root/g, '.nano-conversation-root') : `.nano-conversation-root ${selector}`);
+          rule.selectors = rule.selectors.map(selector => selector.includes('[data-nano-composer') ? selector : selector.includes(':root') ? selector.replace(/:root/g, '.nano-conversation-root') : `.nano-conversation-root ${selector}`);
         });
         item.source = css.toString();
       }
       const prefix = normalizePath(repository) + '/';
-      const paths = [...new Set([...ids.filter(id => id.startsWith(prefix) && !id.includes('/node_modules/')).map(id => relative(repository, id).replaceAll('\\', '/')), 'packages/nano-ui/vite.conversation.config.ts', 'packages/nano-ui/package.json', 'contracts/conversation-presentation-v1.ts', 'contracts/workspace-v15.ts', 'apps/desktop/src/host-api/types.ts', 'pnpm-lock.yaml'])].sort();
+      const paths = [...new Set([...ids.filter(id => id.startsWith(prefix) && !id.includes('/node_modules/')).map(id => relative(repository, id).replaceAll('\\', '/')), 'packages/nano-ui/vite.conversation.config.ts', 'packages/nano-ui/package.json', 'contracts/composer-presentation-v1.ts', 'contracts/conversation-presentation-v1.ts', 'contracts/workspace-v15.ts', 'apps/desktop/src/host-api/types.ts', 'pnpm-lock.yaml'])].sort();
       const sourceFiles = paths.map(path => ({ path, sha256: hash(source(path)) }));
       const artifacts = Object.values(bundle).map(item => ({ path: item.fileName, sha256: hash(item.type === 'chunk' ? item.code : item.source) }));
       this.emitFile({ type: 'asset', fileName: 'conversation-manifest.json', source: JSON.stringify({ manifestVersion: 1, package: '@piui/nano-ui', contractVersion: 1, entry: 'nano-conversation.js', stylesheet: 'nano-conversation.css', sourceEncoding: 'utf8-lf', sourceTreeSha256: hash(JSON.stringify(sourceFiles)), sourceFiles, artifacts }, null, 2) + '\n' });

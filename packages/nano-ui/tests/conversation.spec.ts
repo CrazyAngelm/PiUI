@@ -6,6 +6,7 @@ interface OwnerCall { name: string; location: 'native' | 'cloud'; sessionId: str
 interface Fixture {
   mount(location?: 'native' | 'cloud', fullHistory?: boolean): Promise<void>;
   mountRich(): Promise<void>;
+  mountPolicy(): Promise<void>; scroll(force:boolean):Promise<boolean>;
   stream(): void; disconnect(): void; switchOwner(): void;
   loadOlder(): void; replaceWindow(): void;
   longApproval(): void;
@@ -15,6 +16,105 @@ interface Fixture {
   calls(): OwnerCall[]; mountSecond(): void; dispose(): Promise<void>;
 }
 declare global { interface Window { nanoConversationFixture: Fixture } }
+
+test('shared owner policy keeps images inert, history independent, and forced scrolling explicit', async ({ page }) => {
+  const resources:string[]=[];
+  page.on('request',request=>{if(request.url().includes('example.invalid')) resources.push(request.url());});
+  await page.goto('/tests/conversation-host.html');
+  await page.waitForFunction(()=>!!window.nanoConversationFixture);
+  await page.evaluate(()=>window.nanoConversationFixture.mountPolicy());
+  const root=page.locator('#conversation');
+  await expect(root.locator('[data-image-url]')).toHaveCount(2);
+  await expect(root.locator('img')).toHaveCount(0);
+  expect(resources).toEqual([]);
+  await expect(root.getByRole('button',{name:'Retry history',exact:true})).toBeVisible();
+  await expect(root.getByRole('button',{name:'Allow once',exact:true})).toBeEnabled();
+  const log=root.getByRole('log');
+  await expect(log).toHaveAttribute('aria-live','polite');
+  await expect(log).toHaveAttribute('aria-relevant','additions');
+  await expect(log.getByRole('button',{name:'Search this chat'})).toHaveCount(0);
+  await log.hover(); await page.mouse.wheel(0,-600);
+  await expect(root.getByRole('button',{name:'Latest',exact:true})).toBeVisible();
+  // The wheel completed; a non-forced update may not take the reader back to the end.
+  const before=await log.evaluate(node=>node.scrollTop);
+  expect(await page.evaluate(()=>window.nanoConversationFixture.scroll(false))).toBe(false);
+  expect(await log.evaluate(node=>node.scrollTop)).toBe(before);
+  expect(await page.evaluate(()=>window.nanoConversationFixture.scroll(true))).toBe(true);
+  await expect.poll(()=>log.evaluate(node=>node.scrollHeight-node.clientHeight-node.scrollTop)).toBe(0);
+  await page.evaluate(()=>window.nanoConversationFixture.disconnect());
+  await expect(root.getByRole('button',{name:'Allow once',exact:true})).toBeDisabled();
+  await page.evaluate(()=>window.nanoConversationFixture.dispose());
+  expect(await page.evaluate(()=>window.nanoConversationFixture.scroll(true))).toBe(false);
+  expect(resources).toEqual([]);
+});
+declare global { interface Window {
+  nanoComposerFixture: { mount():void; touch(value:boolean):void; menu():void; update():void; replace():void; narrow():void; calls():string[]; dispose():void };
+  nanoPrintFixture: { mount():Promise<void> };
+} }
+
+test('shared editor retains owner draft, menu priority, IME and touch semantics across replacement/disposal', async ({ page }) => {
+  await page.goto('/tests/conversation-host.html');
+  await page.waitForFunction(() => !!window.nanoComposerFixture);
+  await page.evaluate(() => window.nanoComposerFixture.mount());
+  const input = page.getByRole('textbox', { name: 'Shared draft' });
+  await input.fill('Unsent owner draft');
+  await input.press('Enter');
+  await expect(input).toHaveValue('Unsent owner draft');
+  await input.press('Shift+Enter');
+  await input.press('Alt+Enter');
+  await input.dispatchEvent('keydown', { key: 'Enter', isComposing: true });
+  await input.dispatchEvent('keydown', { key: 'Enter', keyCode: 229 });
+  expect(await page.evaluate(() => window.nanoComposerFixture.calls())).toEqual(['first']);
+  await page.evaluate(() => window.nanoComposerFixture.menu());
+  await input.press('Enter');
+  expect(await page.evaluate(() => window.nanoComposerFixture.calls())).toEqual(['first', 'menu']);
+  await page.evaluate(() => window.nanoComposerFixture.touch(true));
+  await input.press('Enter');
+  await input.press('Control+Enter');
+  await input.press('Meta+Enter');
+  expect(await page.evaluate(() => window.nanoComposerFixture.calls())).toEqual(['first', 'menu', 'first', 'first']);
+  await page.evaluate(() => { window.nanoComposerFixture.touch(false); window.nanoComposerFixture.update(); });
+  await input.press('Enter');
+  await page.evaluate(() => window.nanoComposerFixture.replace());
+  await input.press('Enter');
+  expect(await page.evaluate(() => window.nanoComposerFixture.calls())).toEqual(['first', 'menu', 'first', 'first', 'second', 'replacement']);
+  await input.fill('This owner text wraps when the existing editor changes width. '.repeat(8));
+  const before = await input.evaluate(node => node.clientHeight);
+  await page.evaluate(() => window.nanoComposerFixture.narrow());
+  await expect.poll(() => input.evaluate(node => node.clientHeight)).toBeGreaterThan(before);
+  await expect(input).toHaveValue('This owner text wraps when the existing editor changes width. '.repeat(8));
+  // A freshly attached instance is the sole owner; disposing an older handle cannot detach it.
+  await input.evaluate((node: HTMLTextAreaElement) => { node.disabled = true; });
+  await input.dispatchEvent('keydown', { key: 'Enter' });
+  expect((await page.evaluate(() => window.nanoComposerFixture.calls())).at(-1)).toBe('replacement');
+  await input.evaluate((node: HTMLTextAreaElement) => { node.disabled = false; });
+  await page.evaluate(() => window.nanoComposerFixture.dispose());
+  await input.press('Enter');
+  expect(await page.evaluate(() => window.nanoComposerFixture.calls())).toHaveLength(6);
+});
+
+test('print displays the complete snapshot and inert files without changing the interactive owner', async ({ page }) => {
+  await page.goto('/tests/conversation-host.html');
+  await page.waitForFunction(() => !!window.nanoPrintFixture);
+  await page.evaluate(() => window.nanoConversationFixture.mountSecond());
+  await page.evaluate(() => window.nanoPrintFixture.mount());
+  const root = page.locator('.nano-conversation-root[data-mode="print"]');
+  await expect(root.locator('[data-timeline-block]')).toHaveCount(122);
+  await expect(root.getByText('Printed message 0', { exact: true })).toBeVisible();
+  await expect(root.getByText('Printed message 120', { exact: true })).toBeVisible();
+  await expect(root.getByText('Complete printable tool result')).toBeVisible();
+  await expect(root.getByText('Owner author and day')).toBeVisible();
+  await expect(root.getByText('Generic author')).toBeHidden();
+  await expect(root.getByRole('button')).toHaveCount(0);
+  await expect(root.getByText('const printed = true;', { exact: true })).toBeVisible();
+  expect(await root.locator('pre').evaluate(node => getComputedStyle(node).whiteSpace)).toBe('pre-wrap');
+  await expect(root.getByRole('img', { name: 'Printed image' })).toBeVisible();
+  await expect.poll(() => root.locator('img').evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0)).toBe(true);
+  expect(await root.locator('.scroller').evaluate(node => getComputedStyle(node).overflowY)).toBe('visible');
+  await expect(page.locator('#second').getByText('Starting russian', { exact: true })).toBeVisible();
+  await expect(page.locator('#second .nano-conversation-root')).toHaveAttribute('data-mode', 'interactive');
+  await page.evaluate(() => window.nanoConversationFixture.dispose());
+});
 
 test('rich owner media, paging and decoration preserve state and retire together', async ({ page }) => {
   await page.goto('/tests/conversation-host.html');

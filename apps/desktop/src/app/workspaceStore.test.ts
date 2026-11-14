@@ -3,6 +3,7 @@ import { workspaceHost } from '../host-api/workspaceClient';
 import { WorkspaceStore } from './workspaceStore.svelte';
 import * as settingsApi from '../host-api/runtimeSettings';
 import * as composerApi from '../host-api/composerClient';
+import { pickAttachments, type ComposerImage } from '../host-api/composerInputsClient';
 
 // Extension surfaces are their own chunk with their own tests; starting the shell does not need them.
 vi.mock('./chat/extensions/extensionSurfaces.svelte', () => ({
@@ -59,6 +60,85 @@ describe('WorkspaceStore start', () => {
     expect(result).toEqual({ sessionId: session.id, error: 'The requested reasoning level is unavailable.' });
     expect(send).not.toHaveBeenCalled();
     expect(store.drafts[session.id]).toBe(message);
+    store.dispose();
+  });
+
+  it('acknowledges the untouched Home draft after navigation while the first send is pending', async () => {
+    const store = new WorkspaceStore();
+    await store.loadCatalog();
+    const workspaceId = store.catalog.workspaces.find(workspace => workspace.trust === 'trusted' && !workspace.personal)!.id;
+    const { images } = await pickAttachments(workspaceId);
+    expect(images).toHaveLength(1);
+    store.updateDraft('new-chat', 'First message with an image');
+    store.updateAttachments('new-chat', images);
+    const acknowledge = store.captureDraftAcknowledgement('new-chat');
+    const originalSend = composerApi.composerRequest;
+    let started!: (command: composerApi.ComposerCommand) => void;
+    const sendStarted = new Promise<composerApi.ComposerCommand>(resolve => { started = resolve; });
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    vi.spyOn(composerApi, 'composerRequest').mockImplementationOnce(async command => {
+      started(command);
+      await held;
+      return originalSend(command);
+    });
+    const pending = store.startChat({ workspaceId, harness: 'codex', permissionMode: 'native',
+      text: store.draftFor('new-chat'), attachments: images });
+    try {
+      const command = await sendStarted;
+      expect(command.type).toBe('send');
+      expect(store.route).toEqual({ name: 'chat', sessionId: command.sessionId });
+      store.navigate({ name: 'home' }); // Rehydration reads state; it is not an edit.
+      expect(store.draftFor('new-chat')).toBe('First message with an image');
+      expect(store.attachmentsFor('new-chat')).toEqual(images);
+      store.updateDraft('another-chat', 'Unrelated editing must not retire this acknowledgement');
+      release();
+      await pending;
+      acknowledge();
+      expect(store.draftFor('new-chat')).toBe('');
+      expect(store.attachmentsFor('new-chat')).toEqual([]);
+      expect(store.draftFor('another-chat')).toBe('Unrelated editing must not retire this acknowledgement');
+      // The image really moved to the original Lab outbox: it cannot be sent
+      // under another request ID. Leaving it on Home would break the next send.
+      if (command.type !== 'send') throw new Error('Expected first-message send');
+      await expect(originalSend({ ...command, requestId: crypto.randomUUID() })).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' });
+      store.updateDraft('new-chat', 'A subsequent draft');
+      acknowledge();
+      expect(store.draftFor('new-chat')).toBe('A subsequent draft');
+    } finally {
+      release();
+      await pending;
+      store.dispose();
+    }
+  });
+
+  it('retains text edited away and back across Home navigation while acknowledging unchanged images', () => {
+    const store = new WorkspaceStore();
+    const image: ComposerImage = { id: '00000000-0000-4000-8000-000000000001', name: 'sent.png', mimeType: 'image/png', size: 1 };
+    store.updateDraft('new-chat', 'Same words');
+    store.updateAttachments('new-chat', [image]);
+    const acknowledge = store.captureDraftAcknowledgement('new-chat');
+    store.navigate({ name: 'settings', section: 'general' });
+    store.navigate({ name: 'home' });
+    store.updateDraft('new-chat', '');
+    store.updateDraft('new-chat', 'Same words');
+    acknowledge();
+    expect(store.draftFor('new-chat')).toBe('Same words');
+    expect(store.attachmentsFor('new-chat')).toEqual([]);
+    store.dispose();
+  });
+
+  it('preserves the entire changed image collection while acknowledging untouched text', () => {
+    const store = new WorkspaceStore();
+    const sent: ComposerImage = { id: '00000000-0000-4000-8000-000000000001', name: 'sent.png', mimeType: 'image/png', size: 1 };
+    const next: ComposerImage = { id: '00000000-0000-4000-8000-000000000002', name: 'next.png', mimeType: 'image/png', size: 1 };
+    store.updateDraft('new-chat', 'Captured message');
+    store.updateAttachments('new-chat', [sent]);
+    const acknowledge = store.captureDraftAcknowledgement('new-chat');
+    store.updateAttachments('new-chat', [sent, next]);
+    acknowledge();
+    expect(store.draftFor('new-chat')).toBe('');
+    expect(store.attachmentsFor('new-chat')).toEqual([sent, next]);
     store.dispose();
   });
 

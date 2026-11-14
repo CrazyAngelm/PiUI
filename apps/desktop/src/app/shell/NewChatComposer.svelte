@@ -10,7 +10,8 @@
   import type { HarnessCatalogModel, HarnessModelsResult, HarnessResource } from '../../../../../contracts/harness-models-v18';
   import type { HarnessKind, PermissionMode, WorkspaceSummary } from '../../../../../contracts/workspace-v15';
   import { composerSupport, imageSupport } from '../../harness-adapters/composer';
-  import { Spinner, Textarea, toasts } from '../../lib/ui';
+  import { Spinner, toasts } from '../../lib/ui';
+  import ComposerTextarea from '../../lib/ui/ComposerTextarea.svelte';
   import { harnessMeta } from '../harnessMeta';
   import { errorMessage } from '../workspaceStore.svelte';
   import { WorkspaceOperationError, workspaceError } from '../../host-api/workspaceClient';
@@ -99,6 +100,19 @@
   let menuDismissed = $state(false);
   let htmlDragging = $state(false);
   const attachments = new ComposerAttachments(store.attachmentsFor(DRAFT_KEY), (images) => store.updateAttachments(DRAFT_KEY, images));
+  // A previous instance may acknowledge a send after Home was reopened. Keep
+  // this editor on the authoritative draft without counting hydration as an edit.
+  $effect(() => {
+    const savedText = store.draftFor(DRAFT_KEY);
+    const savedImages = store.attachmentsFor(DRAFT_KEY);
+    untrack(() => {
+      if (text !== savedText) {
+        text = savedText;
+        caret = Math.min(caret, text.length);
+      }
+      attachments.syncFromOwner(savedImages);
+    });
+  });
   const fileMentions = new FileMentions();
   /** A lazy template load that finishes after the project changed, a newer click or unmount is dropped. */
   const templateOpens = createOpenGuard<string>();
@@ -432,6 +446,11 @@
     store.updateDraft(DRAFT_KEY, value);
   }
 
+  /** Clear only this acknowledged request, including across navigation away. */
+  function captureDraftAcknowledgement(): () => void {
+    return store.captureDraftAcknowledgement(DRAFT_KEY);
+  }
+
   async function place(value: string, position: number): Promise<void> {
     setText(value);
     caret = position;
@@ -476,6 +495,7 @@
     if (!values || !fallback) return;
     busy = true;
     const message = text;
+    const acknowledgeDraft = captureDraftAcknowledgement();
     try {
       await chatPipelines.startChat(store, {
         workspaceId,
@@ -488,8 +508,7 @@
         safeMode: store.safeMode,
         title: (message.trim().split(/\r?\n/u)[0] ?? '').slice(0, 80),
       });
-      text = '';
-      store.updateDraft(DRAFT_KEY, '');
+      acknowledgeDraft();
     } catch (error) {
       toasts.error($t('Could not start the chat'), $t(errorMessage(error)));
     } finally {
@@ -505,7 +524,7 @@
     const targetId = workspaceId;
     const message = text;
     const images = attachments.images;
-    const imageIds = images.map((image) => image.id).join();
+    const acknowledgeDraft = captureDraftAcknowledgement();
     busy = true;
     try {
       const { startFusionChat } = await import('../fusion/startFusionChat');
@@ -515,11 +534,7 @@
         return;
       }
       // Only what was sent is cleared; text typed or images added meanwhile stay.
-      if (attachments.images.map((image) => image.id).join() === imageIds) attachments.handOver();
-      if (text === message) {
-        text = '';
-        store.updateDraft(DRAFT_KEY, '');
-      }
+      acknowledgeDraft();
       if (outcome.error) toasts.error($t('The Fusion chat started, but the first message was not sent'), $t(outcome.error));
     } catch (error) {
       toasts.error($t('Could not start the chat'), $t(fusionErrorText(error)));
@@ -549,6 +564,7 @@
     const message = text;
     // The images move to the new chat: to its queued message, or to its draft if sending fails.
     const images = attachments.images;
+    const acknowledgeDraft = captureDraftAcknowledgement();
     try {
       await store.startChat({
         workspaceId,
@@ -560,9 +576,7 @@
         text: message,
         ...(images.length ? { attachments: images } : {}),
       });
-      attachments.handOver();
-      text = '';
-      store.updateDraft(DRAFT_KEY, '');
+      acknowledgeDraft();
     } catch (error) {
       toasts.error($t('Could not start the chat'), errorMessage(error));
     } finally {
@@ -582,9 +596,6 @@
     } else if (items.length && (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey))) {
       event.preventDefault();
       choose(activeIndex);
-    } else if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      void send();
     }
   }
 
@@ -627,6 +638,7 @@
   }
 </script>
 
+<div data-nano-composer="root" class="new-composer">
 <FusionModeBar
   {workspaceId}
   {trusted}
@@ -639,6 +651,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions (Drop target for files; the paperclip is the keyboard path.) -->
 <div
   class="composer"
+  data-nano-composer="surface"
   class:composer--busy={busy}
   class:composer--drop={htmlDragging || composerDropTargets.dragging}
   ondragover={(event) => {
@@ -681,7 +694,7 @@
       <PipelineInputsBar bind:this={inputsBar} detail={pipelineDetail} loading={pipelineLoading} error={pipelineError} disabled={busy} />
     {/await}
   {/if}
-  <Textarea
+  <ComposerTextarea
     bind:ref={textarea}
     value={text}
     oninput={(event) => {
@@ -690,7 +703,8 @@
       menuDismissed = false;
       menuIndex = 0;
     }}
-    onkeydown={keydown}
+    beforeKeyDown={keydown}
+    onSubmit={() => void send()}
     onkeyup={(event) => {
       if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) syncCaret();
     }}
@@ -706,7 +720,7 @@
     class="composer__input"
     disabled={store.safeMode}
   />
-  <div class="composer__bar">
+  <div data-nano-composer="bar">
     <div class="chips">
       <AttachButton images={imageState} busy={attachments.busy} disabled={busy || store.safeMode || !workspaceId || (Boolean(pipelineId) && !fusionMode)} onPick={pick} />
       {#if nanoAccount.canDictate}
@@ -770,7 +784,7 @@
         onPermission={(value) => (permissionMode = value)}
       />
     </div>
-    <button type="button" class="send" onclick={() => void send()} disabled={!canSend} aria-label={$t('Start chat')}>
+    <button type="button" data-nano-composer="send" onclick={() => void send()} disabled={!canSend} aria-label={$t('Start chat')}>
       {#if busy}<Spinner size={14} />{:else}<ArrowUp size={16} />{/if}
     </button>
   </div>
@@ -802,42 +816,20 @@
     <view.default references={attachments.references} onConfirm={insertReferences} onCancel={() => attachments.cancelReferences()} />
   {/await}
 {/if}
+</div>
 
 <style>
-  .composer {
-    position: relative;
-    border: 1px solid var(--piui-border);
-    border-radius: 14px;
-    background: var(--piui-surface-1);
-    box-shadow: var(--piui-shadow-1);
-    transition: border-color var(--piui-duration-fast) var(--piui-ease-out);
-  }
-  .composer:focus-within {
-    border-color: var(--piui-border-strong);
+  .new-composer {
+    --nano-composer-editor-padding: 14px 16px 6px;
+    --nano-composer-bar-padding: 6px 8px 8px 10px;
   }
   .composer--drop {
     border-color: var(--piui-focus);
-  }
-  .composer :global(.composer__input) {
-    padding: 14px 16px 6px;
-    border: 0;
-    background: transparent;
-    font-size: var(--piui-chat-composer-font-size);
-    resize: none;
-  }
-  .composer :global(.composer__input:focus-visible) {
-    box-shadow: none;
   }
   .composer__warning {
     margin: 8px 12px 0;
     color: var(--piui-warning-text);
     font-size: var(--piui-text-sm);
-  }
-  .composer__bar {
-    display: flex;
-    align-items: center;
-    gap: var(--piui-space-2);
-    padding: 6px 8px 8px 10px;
   }
   .composer__drop {
     position: absolute;
@@ -845,7 +837,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 14px;
+    border-radius: var(--piui-radius-lg);
     background: color-mix(in srgb, var(--piui-surface-1) 88%, transparent);
     color: var(--piui-text);
     font-size: var(--piui-text-sm);
@@ -889,29 +881,6 @@
   }
   .chip--warn {
     color: var(--piui-warning);
-  }
-  .send {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex: none;
-    width: 32px;
-    height: 32px;
-    border: 0;
-    border-radius: 50%;
-    background: var(--piui-action);
-    color: var(--piui-action-ink);
-    transition:
-      background-color var(--piui-duration-fast) var(--piui-ease-out),
-      opacity var(--piui-duration-fast) var(--piui-ease-out);
-  }
-  .send:hover:not(:disabled) {
-    background: var(--piui-action-hover);
-  }
-  .send:disabled {
-    background: var(--piui-surface-3);
-    color: var(--piui-text-disabled);
-    opacity: 1;
   }
   .notice {
     margin: var(--piui-space-2) 4px 0;

@@ -58,6 +58,12 @@ export class ComposerAttachments {
     this.save(images);
   }
 
+  /** Hydrate an owner's saved draft without editing it or deleting host bytes. */
+  syncFromOwner(images: readonly ComposerImage[]): void {
+    if (this.images.length === images.length && this.images.every((image, index) => image === images[index])) return;
+    this.images = [...images];
+  }
+
   private async run(operation: () => Promise<ComposerAttachmentsResult>, support: ImageSupport, notices: AttachmentNotice[] = []): Promise<void> {
     if (this.busy) return;
     this.busy = true;

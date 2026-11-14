@@ -405,3 +405,33 @@ type's declared fields. `FailureRecord.code` gains `plugin-unavailable`,
 and runs decode unchanged; older builds reject a document with a plugin
 executor instead of running it as an agent. See
 `crates/piui-orchestration/src/plugin_steps.rs`.
+
+# Shared conversation and composer presentation
+
+`conversation-presentation-v1.ts` is an ephemeral UI projection. Native histories,
+cloud APIs, execution, credentials and file authorization remain with explicit
+owners. Additive capabilities include message actions, media, paging and trusted
+content/header decorators with owner-bound disposal. Header decorators receive
+an empty slot; they do not move owner-managed DOM into a Svelte-owned subtree.
+Setting the slot's `data-active="true"` hides the generic author fallback only
+after the owner's existing presentation has mounted.
+
+The optional `mode: 'print'` displays every supplied block without interactive
+search, approval, attachment or message controls. The owner collects a complete
+immutable snapshot, supplies inert decorators and approved resources, and owns
+the print frame. `ready()` flushes Svelte DOM work; it is not evidence that the
+owner's media/font/header I/O has completed. Printing never changes live history
+or the active renderer.
+
+`composer-presentation-v1.ts` attaches shared keyboard/geometry behavior to an
+existing textarea. It does not store or assign draft text, transfer files or
+send requests. Owner menus get priority; composition/IME, Shift/Alt+Enter and
+touch newline behavior are preserved, while Ctrl/Meta+Enter sends an intention
+to the owner. Row bounds are explicit owner policy; omission uses existing CSS
+height bounds. Replacing or disposing a handle retires its listeners. Shared
+CSS uses semantic `data-nano-composer` attributes and the same token source as
+the transcript, scoped independently from transcript scrolling/layout.
+
+These browser-local contracts introduce no IPC command, persisted history
+format or new native capability. Missing optional capabilities keep the generic
+presentation and existing owner behavior.

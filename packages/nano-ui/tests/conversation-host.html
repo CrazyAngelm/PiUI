@@ -3,7 +3,7 @@
 <head><meta charset="utf-8"><title>Conversation owner boundary</title><link rel="stylesheet" href="/dist-conversation/nano-conversation.css"><style>body { background: linen; } #conversation, #second { height: 650px; } .nano-conversation-root { height: 100%; }</style></head>
 <body><h1>Host conversation fixture</h1><div id="conversation"></div><div id="second"></div>
 <script type="module">
-  import { mountConversation } from '/dist-conversation/nano-conversation.js';
+  import { mountConversation, attachComposer } from '/dist-conversation/nano-conversation.js';
   let handle, second, current, view;
   const log = [];
   const waits = new Map();
@@ -74,6 +74,19 @@
           {id:'missing',blockId:'answer',label:'Unavailable file',unavailable:true,detail:'Upload interrupted',progress:25}]};
       handle=mountConversation(document.getElementById('conversation'),{contractVersion:1,language:'en',agentLabel:'Agent',owner:current,snapshot:view});
     },
+    async mountPolicy() {
+      await handle?.dispose(); log.length=0;
+      current=owner('native','policy');
+      // A decoration hook permits rich typed tokens, but grants no URL-loading authority.
+      current.decorateMessage=()=>({update(){},dispose(){}});
+      view={...snapshot('policy'),historyFailed:true,attachments:[],blocks:[
+        {id:'policy-image',kind:'assistant',status:'complete',text:'![Inert image](https://example.invalid/shared-policy.png) ![Unsafe image](javascript:alert(1))'},
+        {id:'policy-long',kind:'assistant',status:'complete',text:'Reader line\n'.repeat(window.innerHeight)}
+      ]};
+      handle=mountConversation(document.getElementById('conversation'),{contractVersion:1,language:'en',agentLabel:'Agent',announceMessages:true,owner:current,snapshot:view});
+      await handle.ready();
+    },
+    scroll(force) { return handle.scrollToEnd(force,false); },
     stream() { view = { ...view, blocks: view.blocks.map(block => block.id === 'answer' ? { ...block, text: 'Streamed final answer', status: 'complete' } : block) }; handle.update(current.identity, view); },
     loadOlder() { view = { ...view, blocks: [{ id: 'older', kind: 'assistant', text: 'Older final answer', status: 'complete' }, ...view.blocks] }; handle.update(current.identity, view); },
     replaceWindow() { view = { ...view, blocks: [{ id: 'replacement', kind: 'assistant', text: 'Replacement final answer', status: 'complete' }], attachments: [] }; handle.update(current.identity, view); },
@@ -106,5 +119,46 @@
     calls() { return log; },
     mountSecond() { second = mountConversation(document.getElementById('second'), { contractVersion: 1, language: 'ru', agentLabel: 'Агент', owner: owner('cloud', 'russian'), snapshot: snapshot('russian') }); },
     async dispose() { await handle?.dispose(); await second?.dispose(); },
+  };
+  let editorHandle, editor, editorRoot, touch = false, menu = false;
+  const submits = [];
+  function editorOptions(name) {
+    return { contractVersion: 1, autoGrow: { minRows: 1, maxRows: 14 }, touchOnly: () => touch,
+      beforeKeyDown(event) { if (menu && event.key === 'Enter') { event.preventDefault(); menu = false; submits.push('menu'); } },
+      onSubmit() { submits.push(name); }
+    };
+  }
+  window.nanoComposerFixture = {
+    mount() {
+      editorRoot = document.createElement('section'); editorRoot.dataset.nanoComposer = 'root';
+      editorRoot.dataset.theme = 'light'; editorRoot.style.width = '600px';
+      const surface = document.createElement('div'); surface.dataset.nanoComposer = 'surface';
+      editor = document.createElement('textarea'); editor.dataset.nanoComposer = 'editor'; editor.setAttribute('aria-label', 'Shared draft');
+      surface.append(editor); editorRoot.append(surface); document.body.prepend(editorRoot);
+      editorHandle = attachComposer(editor, editorOptions('first'));
+    },
+    touch(value) { touch = value; }, menu() { menu = true; },
+    update() { editorHandle.update(editorOptions('second')); },
+    replace() { const old = editorHandle; editorHandle = attachComposer(editor, editorOptions('replacement')); old.dispose(); },
+    narrow() { editorRoot.style.width = '180px'; },
+    calls() { return submits; }, dispose() { editorHandle.dispose(); },
+  };
+  window.nanoPrintFixture = {
+    async mount() {
+      const identity = { location: 'cloud', scopeId: 'print-proof', sessionId: 'full' };
+      // One more than the existing 120-row interactive window, plus readable tool output.
+      const blocks = Array.from({ length: 121 }, (_, i) => ({ id: `printed-${i}`, kind: 'assistant', status: 'complete', text: `Printed message ${i}`, createdAt: '2026-11-14T01:00:00Z' }));
+      blocks.push({ id: 'print-tool', kind: 'tool', status: 'complete', toolName: 'read', text: 'Complete printable tool result' });
+      blocks[1].text += '\n\n```javascript\nconst printed = true;\n```';
+      const snapshot = { blocks, approvals: [{id:'print-approval',sessionId:'full',kind:'command',title:'Never offer print approval',decisions:['approve-once']}], attachments: [{ id:'print-image',blockId:'printed-0',label:'Printed image',presentation:'image',downloadable:true }], connection:'connected',loading:false,
+        messageControls:[{id:'print-action',blockId:'printed-0',actions:[{kind:'copy'}]}],presentation:[{blockId:'printed-0',author:'Generic author'}] };
+      handle = mountConversation(document.getElementById('conversation'), {contractVersion:1,language:'en',appearance:'light',agentLabel:'Nano',mode:'print',snapshot,
+        owner:{identity,readHistory:()=>{throw new Error('Print must use the provided complete snapshot');},
+          resolveAttachment:async()=>({src:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII='}),
+          decorateMessageHeader(element,block) { if(block.id==='printed-0'){element.textContent='Owner author and day';element.dataset.active='true';} return {update(){},dispose(){element.replaceChildren();}}; },
+          openAttachment:()=>{throw new Error('Print cannot open files');},actOnMessage:()=>{throw new Error('Print cannot act');},respond:()=>{throw new Error('Print cannot approve');}}
+      });
+      await handle.ready();
+    }
   };
 </script></body></html>

@@ -1,5 +1,10 @@
 # Nano Web / Desktop unification
 
+**Current status: all implementation stages complete in both isolated worktrees.**
+The final Stage 8 four-review gate and targeted remediation checks are closed.
+The entries below retain earlier discoveries and failed attempts as a chronological
+record; the completion entry at the end supersedes their pending status.
+
 Implementation contract, authorized 2026-11-13. Work is isolated in the
 `codex/nano-unification` worktrees of PIUI and NanoAgentProject. This is not
 authorization to merge, deploy, replace the installed application or migrate
@@ -679,3 +684,152 @@ five artifact hashes match. Reports, reviewer summaries and checksums are under
 Stage 7 is complete. Stage 8 remains active under the same authorization: common
 composer, every existing conversation owner, full print, automatic fallback and
 default activation. Completion of this milestone does not end the task.
+
+### Stage 8 — default shared conversation and owner-managed composer
+
+Implementation in progress from PIUI `b82ec5f` and server `4920ce9e`.
+The shared composer attaches to the existing textarea and shares tokens, surface,
+editor and action presentation. Drafts, attachments, menus, send/queue/steer
+semantics, request identities and voice controllers remain in their owners.
+The shared editor never assigns a value. A direct key handler gives native
+mention/slash menus priority before common submit intent and preserves IME,
+touch/newline and modifier semantics. Independent roots avoid leaking transcript
+height/scroll rules into the composer or the embedding page.
+
+Shared presentation adds a trusted empty header slot so web owners can reuse
+their existing author/pet/date components, with a generic fallback if unavailable.
+A print mode renders a complete owner-supplied snapshot without interactive
+controls or transcript windowing; the live view and draft are untouched. The
+owner remains responsible for complete history, approved media, inert enhancement
+and asynchronous header/resource readiness.
+
+Initial shared checks pass: Svelte zero errors/warnings, controller 16/16 including
+header retirement, browser 12/12 including owner draft/menu/IME/touch behavior,
+replacement/disposal and width-driven resize, plus full print beyond the existing
+interactive window and prior rich/owner regressions. These are shared-module
+checks; actual final native and Blazor owner integration and four independent
+Sol/max reviews remain required before completion.
+
+Stage 8 owner checks now establish the common editor in actual Tauri/WebView2
+157.0.0.0, in separate normal and safe starts. Desktop Svelte is clean,
+E2E TypeScript passes, and all 20 distinct composer Lab cases have passing
+evidence, including identical text retyped while a previous start is pending.
+Native queues/attachments keep their Lab happy-path proof; the native reply
+fixture proves production component interaction and actual host NOT_FOUND
+refusal with the draft retained, not a provider turn or successful native send.
+Reports, captures and hashes are in
+`evidence/nano-unification-20261113/stage8-composer-native/`.
+
+The final common-module Svelte check is clean. Controller tests pass 16/16;
+shared browser checks pass 12/12, with the modified print/editor cases passing
+again after the code-copy/overflow correction. The graph browser passes 4/4.
+All 192 normalized source hashes and five imported artifacts match. Conversation
+source is `e2373cd6a65085dcc22fb36007871f3d471c2bc5443e5482eb2172140ac42014`;
+graph source is `c35a7f61287352ef90943a683940fa5bffe2ea688c0a081490535cd9cc86ec18`.
+
+The first actual default Blazor flow passed ten scenario groups: personal
+headers/live watch; composer keyboard and pending acknowledgements; complete
+separate print; cancellation of held print on owner change; new and temporary
+owners; group order/round/Stop; existing voice signaling/retry/cleanup;
+support; guest queue/gate. Its final module-failure print check found an empty
+fallback print: Blazor root creation resolved before rendering. That failure is
+preserved and its correction remains required before the final review freeze.
+The earlier server build and 67/67 focused checks passed; they alone do not
+close this runtime finding.
+
+Post-readiness runtime: normal shared print, including actual face/date/time
+roots, and held-frame retirement passed. Fallback then exposed Blazor's logical
+node realm guard. Installed .NET10.0.14 checks `instanceof Element` in its own
+realm; the target was created by the iframe document. Creating the target in the
+parent document and adopting it into the same separate print frame closes that
+root cause. JS-only fingerprint build r6 passed with zero errors/warnings;
+unchanged C#68 tests were not repeated. Final runtime proof follows below.
+
+The r6 actual print flow passes: complete shared print with rendered face/date/
+time roots; held-resource cancellation; full safe fallback with shared assets
+blocked; unchanged live transcript/draft/files; legacy keyboard submission.
+The final default-compatible rich flow separately passes all nine Stage7 scenario
+groups, with no page/fixture errors. Root inspected its media/document-version
+and stateful widget captures. A final print-only styling correction is required:
+legacy fallback time opacity, code/table overflow and image sizing otherwise
+carry interactive layout into the new separate document. This does not reopen
+rich execution, native or C# checks; only the affected print proof is repeated.
+
+The first print-style screenshot was rejected by parent visual inspection even
+though its limited assertions passed: the iframe's missing light-theme attribute
+selected existing dark tokens and body::before overlay; legacy pre>code rules
+also kept the shared code horizontally scrollable. Actual computed evidence
+confirmed the dark overlay and code scrollWidth10016 against clientWidth599.
+This is a concrete incomplete-print finding, not a cosmetic expansion. The final
+correction pins the print document to the existing light theme, removes its body
+decoration, and applies wrapping to both print variants and actual code nodes.
+The final corrected print-media evidence supersedes the limited first pass.
+
+Final print visual inspection: the parent inspected the actual r8 shared and
+fallback print-frame captures. Both are readable with the existing light theme;
+long code/table cells wrap completely, and the image fits the parent width.
+The first strengthened assertion incorrectly required display:none for a pseudo
+element suppressed by content:none. Only that fixture assertion was corrected;
+no additional product mutation or build was justified. Production source is
+frozen pending the four requested read-only Sol/max reviews.
+
+Final actual print-media proof passes all six focused groups with zero page/
+fixture errors. Shared/fallback decorated code uses pre-wrap and visible overflow;
+measured scroll/client widths are1248/1248 and1252/1252. Both print documents use
+the existing light theme, no decorative pseudo box, readable text and bounded
+tables/images. Parent visually inspected both corrected frame captures. This
+closes the readiness, realm and inherited-style findings. The fixture only pauses
+the delivered print module after readiness to photograph its real iframe before
+disposal; published shared bytes remain unchanged. No OS print dialog is claimed.
+Owned browser/proxy/server processes are stopped. Final reports are under
+`evidence/nano-unification-20261113/stage8/`, including initial default10groups,
+final rich9groups and corrected print6groups; this is aggregated scoped evidence,
+not a claim that an unrelated full server/provider suite was run.
+
+The candidate then entered the four independent read-only reviews.
+
+## Completion after Stage 8 reviews
+
+Harvey, Aristotle, Mencius and Galileo each reviewed the same frozen candidate
+with GPT-6.1 Sol, max reasoning, read-only. Source was thawed only after all four
+final reports. `evidence/nano-unification-20261113/stage8/REVIEW_RESOLUTIONS.md`
+maps confirmed findings to fixes and records rejected claims. No additional
+review round was substituted for remediation and proof.
+
+The fixes preserve acknowledged native drafts across Home remounts without
+clearing newer edits; separate history failure from live connection; route
+existing forced scroll to the real shared scroller; restore visible streaming
+time, steer/stop, checked inline media/links and group log semantics; keep stable
+voice widget identities and voice-owned signed links; retain the visible tail in
+immutable exports; and preserve safe chat/print fallback when optional assets,
+mount or readiness fail. Print frames are inert and retire with their owner.
+
+Final targeted evidence:
+
+- Desktop Svelte: 0 errors/warnings; E2E types pass. Draft units 19/19 and seven
+  owner Lab flows pass. Initial clipboard failures were a fixture catalog-ready
+  race, confirmed by preserved traces; production behavior was not weakened.
+- Shared parser/controller units 29/29 and built-package owner-policy browser
+  scenario pass, including zero image requests without owner authority, connected
+  approvals despite history failure, message-only announcements, paused reader,
+  exact end position on force and retired-handle refusal.
+- WebApp builds with 0 errors and its existing `_projectsLoaded` warning;
+  focused .NET tests 74/74 pass, no skips.
+- Six post-review actual Blazor scenario groups pass with zero page/fixture
+  errors. Evidence combines the first two proven personal/export groups and the
+  four context/fallback groups; this is not one uninterrupted full-suite claim.
+  Historical Stage 7 module delivery and injected mount failure are labelled.
+  The parent inspected live timestamp and inline-markdown captures.
+- All 192 normalized source files and five imported artifacts match. Conversation
+  source is `ce009ebf0463c937cb0a483b11c797ff775ab686b530a1a7e1e826b8a0734fd3`;
+  the unchanged graph source remains `c35a7f61287352ef90943a683940fa5bffe2ea688c0a081490535cd9cc86ec18`.
+
+Stable reports/checksums are under `evidence/nano-unification-20261113/stage8/`
+and `stage8-composer-native/ACK_REMEDIATION.md`. Earlier real Tauri/WebView2
+normal/safe presentation and host-refusal proofs remain scoped to those unchanged
+boundaries. The final store acknowledgement fix uses Lab ownership proof; its
+native binary was not rebuilt and no successful real provider send is claimed.
+Browser API/SSE/media/voice/clipboard are synthetic; no physical microphone,
+OS print dialog, Linux installer, merge, deployment or installed-app replacement
+is claimed. Owned proof processes were stopped. The approved worktree scope is
+complete; release remains a separate operation.

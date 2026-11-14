@@ -97,6 +97,18 @@ separate from the unchanged session registry format and all native transcripts.
 The additive `workspace_composer_v19` command and `piui://composer-v19` event
 carry revisioned snapshots. Safe mode and managed run sessions deny these actions.
 
+Home can be reopened while its first-message acknowledgement is still pending.
+Its text and pending images remain owned by `WorkspaceStore`, with separate
+in-memory edit generations per draft key. Mounting an editor only reads that
+state. An acknowledgement clears each unchanged captured field even if the
+original editor has unmounted; the active Home editor synchronizes from the
+store without writing an edit back. Text edited away and back is newer input,
+and a changed image collection is preserved as a whole. An unrelated chat's
+draft does not retire Home's acknowledgement. Synchronizing acknowledged images
+does not discard host bytes: the original outbox or chat draft owns them now.
+These generations are UI-lifetime metadata, with no new persistence or IPC
+format. Direct, pipeline and Fusion starts use the same acknowledgement rule.
+
 Slash suggestions expose typed operations only: `/stop`, and `/compact` where
 supported. Unsupported slash input remains a draft and is not a model prompt.
 Pi uses RPC compact/steer; Codex uses thread/compact/start and turn/steer; Prime

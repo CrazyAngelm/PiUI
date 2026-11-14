@@ -199,6 +199,9 @@ export class WorkspaceStore {
   private flushScheduled = false;
   private deleted = new Set<string>();
   private draftTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Edit identity belongs to the saved draft, not a particular mounted editor. */
+  private draftEdits = new Map<string, symbol>();
+  private attachmentEdits = new Map<string, symbol>();
   private unlisten: (() => void) | undefined;
   private stopSurfaces: (() => void) | undefined;
   private unlistenRegistry: (() => void) | undefined;
@@ -418,6 +421,7 @@ export class WorkspaceStore {
   }
 
   updateAttachments(key: string, images: readonly ComposerImage[]): void {
+    this.attachmentEdits.set(key, Symbol());
     const next = { ...this.attachmentDrafts };
     if (images.length) next[key] = [...images];
     else delete next[key];
@@ -425,12 +429,30 @@ export class WorkspaceStore {
   }
 
   updateDraft(key: string, text: string): void {
+    this.draftEdits.set(key, Symbol());
     const next = { ...this.drafts };
     if (text) next[key] = text;
     else delete next[key];
     this.drafts = next;
     if (this.draftTimer !== undefined) clearTimeout(this.draftTimer);
     this.draftTimer = setTimeout(() => this.persistDraftsNow(), 400);
+  }
+
+  /**
+   * A send acknowledgement clears unchanged fields even if their editor was
+   * remounted. Any intervening edit, including the same text typed again,
+   * retires that field's acknowledgement. No attachment bytes are discarded.
+   */
+  captureDraftAcknowledgement(key: string): () => void {
+    const textEdit = this.draftEdits.get(key);
+    const imageEdit = this.attachmentEdits.get(key);
+    const text = this.draftFor(key);
+    const images = this.attachmentDrafts[key];
+    return () => {
+      if (this.disposed) return;
+      if (this.draftEdits.get(key) === textEdit && this.draftFor(key) === text) this.updateDraft(key, '');
+      if (this.attachmentEdits.get(key) === imageEdit && this.attachmentDrafts[key] === images) this.updateAttachments(key, []);
+    };
   }
 
   private persistDraftsNow(): void {

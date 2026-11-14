@@ -1,6 +1,6 @@
 # Shared conversation presentation
 
-Stage 5 of [Nano unification](NANO_UNIFICATION.md) extracts Desktop's existing
+The shared boundary in [Nano unification](NANO_UNIFICATION.md) extracts Desktop's existing
 transcript and approval presentation without changing native history formats,
 runtime ownership or the existing isolated Cloud window.
 
@@ -61,7 +61,8 @@ share one quiet history read per owner, preventing an older response from erasin
 a recovered answer. Detached temporary-chat cleanup retains its original account
 context and storage key without taking navigation back from the user.
 
-The shared surface makes no requests on mount. Reading history is optional;
+The shared surface has no implicit transport. Explicit media/header decoration
+ports may start owner-authorized display work on mount. Reading history is optional;
 without that port, search covers only the supplied snapshot. Reconnection is
 explicit, owner-provided and never starts an internal retry loop. Missing
 approval/opening capabilities leave the corresponding actions unavailable. Safe
@@ -74,19 +75,63 @@ identifiers, including when it displays a temporary cloud chat. Search without
 a full-history port follows the owner's current loaded window as it streams or
 pages older messages.
 
-## Parity boundary
+## Rich presentation, composer and print
 
-The shared browser surface is a presentation experiment, not a replacement for
-all native or Blazor chat workflows. Existing native composer, attachments and
-provider transport retain their owners. The opt-in Blazor adapter keeps its
-existing composer, uploads, SSE, history paging, preview and approval services.
-Cloud search over a windowed projection must not be described as full-history
-search. Native plugin/custom tool rendering is only supplied by the native
-wrapper; the browser artifact keeps the generic readable fallback.
+Optional media ports resolve owner-authorized images, audio and video, and keep
+Open and Download separate. Paging and full-history search invoke existing owner
+reads; a window-only owner still searches only its supplied snapshot. Trusted
+message decorators reuse existing safe code/math/widget renderers. They preserve
+unchanged widget state and immediately retire removed controls. Off-window search
+never grants a historical widget execution authority.
 
-The remaining migration scenarios are composer parity, pagination and
-full-history search, inline media and preview/download behavior,
-provider-specific extension UI, native plugin panels and accessibility/layout
-parity across the complete legacy screen. These must be checked in their owning
-application before replacing that screen. No provider turn, deployment or
-installed application replacement is implied by the synthetic owner fixtures.
+`decorateMessageHeader` receives a separate empty element for the owner's
+existing author/date presentation. The web uses its existing Blazor face/pet
+component there; native presentation does not acquire a new cloud dependency.
+Generic author text remains until the host marks its slot active. All decoration
+operations share the current owner generation and disposal boundary.
+
+`contracts/composer-presentation-v1.ts` and `shared/composer/` share keyboard,
+auto-grow and visual rules on owner-managed textarea DOM. Native mention/slash
+menus retain priority. The web keeps its Razor textarea, InputFile, voice controls
+and original IDs. The module neither assigns draft text nor stores files or
+request identities. Native queues, Fusion and pipelines, and web send/steer/voice
+semantics remain in their existing controllers.
+
+Print mode renders every supplied block, including expanded generic tool text,
+without live actions, approval controls or interactive windowing. The owner
+collects complete history and resolves authorized resources into a separate print
+frame. `ready()` flushes Svelte DOM; the owner separately awaits header/media/font
+work. This does not switch the live renderer, change its scroll or touch a draft.
+
+## Owner boundaries and verification
+
+History read failure is separate from connection state: Retry history must not
+disable an approval for a connected turn. Existing owner requests to reveal the
+latest message use `scrollToEnd(force, smooth)`; ordinary updates respect a
+reader who scrolled up. Group owners opt into polite additions on the message
+log, leaving search and other controls outside that live region.
+
+Rich Markdown images are typed inert placeholders. The shared component has no
+image-loading authority: only the existing trusted web decorator validates a URL
+and creates its image in an empty owner slot. Native rendering does not fetch
+Markdown images. Failed or unsafe media remains readable as its alternative text.
+Bare HTTP links follow the same existing web-owner link policy.
+
+Stage 8 enables the shared presentation by default for personal, temporary,
+guest/support, group and voice owners while preserving their distinct services
+and admission rules. Empty new/guest views retain their existing introduction
+until a message exists. A failed shared module restores usable owner presentation
+and editor behavior. Presentation identity is independent of draft persistence;
+a guest or support view does not gain persistence or ordinary account authority.
+
+Group polling, target order, rounds and cancellation remain group operations.
+Voice recording, signaling, speaker/microphone controls, retries and transcript
+updates remain voice operations. OfficeView, document versions, Results and live
+browser/document controls stay web-owned. Native extensions, custom tool frames,
+harness permissions, histories and queues stay native-owned. These are deliberate
+platform boundaries, not unfinished copies of the shared transcript.
+
+The stage ledger records final checks and their actual or synthetic boundaries.
+No provider turn, deployment or installed-application replacement is implied by
+owner fixtures. Stage 8 implementation and its four-review gate are complete;
+the recorded checks are not a release or installer claim.

@@ -9,6 +9,7 @@ const russian: Readonly<Record<string, string>> = {
   'Reconnecting…': 'Восстановление соединения…',
   'Disconnected': 'Соединение потеряно',
   'Reconnect': 'Восстановить соединение',
+  'Retry history': 'Повторить загрузку истории',
   'Attachments': 'Вложения',
   'Download attachment': 'Скачать вложение',
   'Attachment unavailable': 'Вложение недоступно',

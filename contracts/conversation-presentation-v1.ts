@@ -61,6 +61,8 @@ export interface ConversationSnapshot {
   attachments: ConversationAttachment[];
   connection: 'connected' | 'reconnecting' | 'disconnected';
   loading: boolean;
+  /** A failed history read does not imply the active turn is disconnected. */
+  historyFailed?: boolean;
   /** Optional additive v1 capability. Omitted owners keep the existing native copy display. */
   messageControls?: ConversationMessageControls[];
   presentation?: ConversationMessagePresentation[];
@@ -79,6 +81,8 @@ export interface ConversationOwner {
   loadOlder?: (signal: AbortSignal) => Promise<void>;
   /** A trusted hosting application may enhance its message subtree with existing safe renderers. */
   decorateMessage?: (element: HTMLElement, block: ConversationBlock, signal: AbortSignal) => ConversationDecoration | void;
+  /** Empty owner slot for existing author/date presentation; generic author text remains as fallback. */
+  decorateMessageHeader?: (element: HTMLElement, block: ConversationBlock, signal: AbortSignal) => ConversationDecoration | void;
   reconnect?: (signal: AbortSignal) => Promise<ConversationSnapshot>;
   actOnMessage?: (controlId: string, action: ConversationMessageAction, signal: AbortSignal) => Promise<void>;
 }
@@ -87,12 +91,20 @@ export interface ConversationOptions {
   contractVersion: 1;
   language: 'en' | 'ru';
   appearance?: 'light' | 'dark' | 'system';
+  /** An immutable full snapshot for printing; the caller owns history collection and print lifecycle. */
+  mode?: 'interactive' | 'print';
+  /** Existing owner log announcements, outside the search controls. */
+  announceMessages?: boolean;
   agentLabel: string;
   owner: ConversationOwner;
   snapshot: ConversationSnapshot;
 }
 
 export interface ConversationHandle {
+  /** Flush the presentation's pending DOM work; media/header owners track their own I/O. */
+  ready(): Promise<void>;
+  /** Nonforced owner requests preserve the reader's current position. */
+  scrollToEnd(force: boolean, smooth: boolean): Promise<boolean>;
   /** Owner-projected streaming snapshots replace the display; they are not saved here. */
   update(identity: ConversationIdentity, snapshot: ConversationSnapshot): void;
   /** Retires the prior owner's pending operations before displaying the new owner. */

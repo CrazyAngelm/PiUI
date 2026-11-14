@@ -41,6 +41,190 @@ async function deliverImage(page: Page, kind: 'paste' | 'drop', name: string): P
   );
 }
 
+declare global {
+  interface Window {
+    composerSendGate?: {
+      phase: 'ready' | 'waiting' | 'complete';
+      finish: (fail?: boolean) => void;
+      restore: () => void;
+    };
+  }
+}
+
+/** Delay the existing owner operation, without replacing its actual Lab path. */
+async function holdNewChat(page: Page, kind: 'direct' | 'pipeline', position: 'before' | 'after' = 'before'): Promise<void> {
+  await page.evaluate(async ({ kind, position }) => {
+    type Owner = { startChat: (...args: unknown[]) => Promise<unknown> };
+    const path = kind === 'direct' ? '/src/app/workspaceStore.svelte.ts' : '/src/app/chatPipelines/chatPipelines.svelte.ts';
+    const module = await import(/* @vite-ignore */ path) as { WorkspaceStore: { prototype: Owner }; chatPipelines: Owner };
+    const owner = kind === 'direct' ? module.WorkspaceStore.prototype : module.chatPipelines;
+    const original = owner.startChat;
+    let finish!: (fail?: boolean) => void;
+    const held = new Promise<void>((resolve, reject) => {
+      finish = (fail = false) => fail ? reject(new Error('Synthetic delayed start refusal')) : resolve();
+    });
+    const gate: NonNullable<Window['composerSendGate']> = {
+      phase: 'ready', finish, restore: () => { owner.startChat = original; delete window.composerSendGate; },
+    };
+    window.composerSendGate = gate;
+    owner.startChat = async function (...args: unknown[]) {
+      try {
+        if (position === 'before') { gate.phase = 'waiting'; await held; }
+        const result = await original.apply(this, args);
+        if (position === 'after') { gate.phase = 'waiting'; await held; }
+        return result;
+      } finally { gate.phase = 'complete'; }
+    };
+  }, { kind, position });
+}
+
+async function releaseNewChat(page: Page, fail = false): Promise<void> {
+  await page.evaluate((fail) => window.composerSendGate?.finish(fail), fail);
+  await expect.poll(() => page.evaluate(() => window.composerSendGate?.phase)).toBe('complete');
+  await page.evaluate(() => window.composerSendGate?.restore());
+}
+
+test.describe('shared composer owner integration', () => {
+  test.beforeEach(async ({ lab, page }) => {
+    await lab.open();
+    // First paint precedes catalog selection. A clipboard dispatch bypasses
+    // the disabled controls, so require the actual fixture project/harness.
+    await expect(home(page).getByRole('button', { name: 'Project and permissions: piui', exact: true })).toBeVisible();
+    await expect(home(page).getByRole('button', { name: 'Pi', exact: true })).toBeEnabled();
+  });
+  test('new and existing editors share resizing and IME/newline behavior while keeping native controls', async ({ lab, page }) => {
+    const editor = home(page).getByRole('textbox', { name: 'Message' });
+    await expect(editor).toHaveAttribute('data-nano-composer', 'editor');
+    await expect(home(page).getByRole('button', { name: /^Project and permissions:/ })).toBeVisible();
+    await editor.fill('First line');
+    const before = await editor.evaluate(input => input.getBoundingClientRect().height);
+    await editor.press('Shift+Enter');
+    await editor.pressSequentially('Second line');
+    await expect(editor).toHaveValue('First line\nSecond line');
+    await editor.dispatchEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true });
+    await expect(editor).toHaveValue('First line\nSecond line');
+    await expect(home(page)).toBeVisible();
+    await editor.fill('Line\n'.repeat(8));
+    await expect.poll(() => editor.evaluate(input => input.getBoundingClientRect().height)).toBeGreaterThan(before);
+
+    const reply = await openChat(lab, /Route host calls through one transport/);
+    await expect(reply).toHaveAttribute('data-nano-composer', 'editor');
+    await reply.fill('Follow-up');
+    await reply.press('Shift+Enter');
+    await reply.pressSequentially('with details');
+    await reply.dispatchEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true });
+    await expect(reply).toHaveValue('Follow-up\nwith details');
+    await reply.press('Enter');
+    await expect(page.getByRole('region', { name: 'Conversation messages' }).getByText('Follow-up\nwith details')).toBeVisible();
+  });
+
+  test('a successful normal start clears its acknowledged Home draft and images', async ({ lab, page }) => {
+    await holdNewChat(page, 'direct');
+    await home(page).getByRole('textbox', { name: 'Message' }).fill('Acknowledged first message');
+    await deliverImage(page, 'paste', 'sent.png');
+    await expect(home(page).getByText('sent.png')).toBeVisible();
+    await home(page).getByRole('button', { name: 'Start chat' }).click();
+    await expect.poll(() => page.evaluate(() => window.composerSendGate?.phase)).toBe('waiting');
+    await releaseNewChat(page);
+    await lab.nav('New chat').click();
+    await expect(home(page).getByRole('textbox', { name: 'Message' })).toHaveValue('');
+    await expect(home(page).getByRole('list', { name: 'Attached images' })).toHaveCount(0);
+  });
+
+  test('typing and attaching while a direct start is pending preserves the next draft', async ({ lab, page }) => {
+    await holdNewChat(page, 'direct');
+    const editor = home(page).getByRole('textbox', { name: 'Message' });
+    await editor.fill('Captured first message');
+    await home(page).getByRole('button', { name: 'Start chat' }).click();
+    await expect.poll(() => page.evaluate(() => window.composerSendGate?.phase)).toBe('waiting');
+    await editor.fill('My next draft');
+    await editor.fill('Captured first message'); // The next draft may deliberately repeat the same words.
+    await deliverImage(page, 'paste', 'next.png');
+    await expect(home(page).getByText('next.png')).toBeVisible();
+    await releaseNewChat(page);
+    await lab.nav('New chat').click();
+    await expect(home(page).getByRole('textbox', { name: 'Message' })).toHaveValue('Captured first message');
+    await expect(home(page).getByRole('list', { name: 'Attached images' }).getByText('next.png')).toBeVisible();
+  });
+
+  test('a late acknowledgement cannot clear the same text retyped by a newer Home owner', async ({ lab, page }) => {
+    await holdNewChat(page, 'direct', 'after');
+    await home(page).getByRole('textbox', { name: 'Message' }).fill('Same words, new draft');
+    await home(page).getByRole('button', { name: 'Start chat' }).click();
+    await expect.poll(() => page.evaluate(() => window.composerSendGate?.phase)).toBe('waiting');
+    await lab.nav('New chat').click();
+    const editor = home(page).getByRole('textbox', { name: 'Message' });
+    await editor.fill('');
+    await editor.fill('Same words, new draft');
+    await deliverImage(page, 'paste', 'new-owner.png');
+    await expect(home(page).getByText('new-owner.png')).toBeVisible();
+    await releaseNewChat(page);
+    // Remount once more to prove the authoritative saved draft, not stale DOM.
+    await lab.openSettings();
+    await lab.nav('New chat').click();
+    await expect(home(page).getByRole('textbox', { name: 'Message' })).toHaveValue('Same words, new draft');
+    await expect(home(page).getByRole('list', { name: 'Attached images' }).getByText('new-owner.png')).toBeVisible();
+  });
+
+  test('an untouched reopened Home clears acknowledged text and claimed images before the next send', async ({ lab, page }) => {
+    await holdNewChat(page, 'direct', 'after');
+    await home(page).getByRole('textbox', { name: 'Message' }).fill('Consumed first draft');
+    await deliverImage(page, 'paste', 'consumed.png');
+    await expect(home(page).getByText('consumed.png')).toBeVisible();
+    await home(page).getByRole('button', { name: 'Start chat' }).click();
+    await expect.poll(() => page.evaluate(() => window.composerSendGate?.phase)).toBe('waiting');
+    // The real Lab outbox has claimed the image; its owner's acknowledgement
+    // is held. Simply reopening Home must not turn that old draft into an edit.
+    await lab.nav('New chat').click();
+    await expect(home(page).getByRole('textbox', { name: 'Message' })).toHaveValue('Consumed first draft');
+    await expect(home(page).getByText('consumed.png')).toBeVisible();
+    await releaseNewChat(page);
+    await expect(home(page).getByRole('textbox', { name: 'Message' })).toHaveValue('');
+    await expect(home(page).getByRole('list', { name: 'Attached images' })).toHaveCount(0);
+    await lab.openSettings();
+    await lab.nav('New chat').click();
+    await expect(home(page).getByRole('textbox', { name: 'Message' })).toHaveValue('');
+    await expect(home(page).getByRole('list', { name: 'Attached images' })).toHaveCount(0);
+    await home(page).getByRole('textbox', { name: 'Message' }).fill('Second draft with a fresh image');
+    await deliverImage(page, 'paste', 'fresh.png');
+    await expect(home(page).getByText('fresh.png')).toBeVisible();
+    await home(page).getByRole('button', { name: 'Start chat' }).click();
+    const transcript = page.getByRole('region', { name: 'Conversation messages' });
+    await expect(transcript.getByText('Second draft with a fresh image')).toBeVisible();
+    await expect(transcript.getByRole('list', { name: 'Attached images' }).getByText('Image')).toBeVisible();
+  });
+
+  test('a pipeline start acknowledges only its captured draft', async ({ lab, page }) => {
+    await home(page).getByRole('button', { name: 'Pi', exact: true }).click();
+    await page.getByRole('combobox', { name: 'Who answers' }).fill('Code review');
+    await lab.option(/^Code review/).click();
+    await holdNewChat(page, 'pipeline');
+    const editor = home(page).getByRole('textbox', { name: 'Message' });
+    await editor.fill('Captured pipeline message');
+    await home(page).getByRole('button', { name: 'Start chat' }).click();
+    await expect.poll(() => page.evaluate(() => window.composerSendGate?.phase)).toBe('waiting');
+    await editor.fill('The next pipeline draft');
+    await releaseNewChat(page);
+    await lab.nav('New chat').click();
+    await expect(home(page).getByRole('textbox', { name: 'Message' })).toHaveValue('The next pipeline draft');
+  });
+
+  test('a refused start retains the unsent draft and attachments', async ({ lab, page }) => {
+    await holdNewChat(page, 'direct');
+    const editor = home(page).getByRole('textbox', { name: 'Message' });
+    await editor.fill('Retry this draft');
+    await deliverImage(page, 'paste', 'retry.png');
+    await expect(home(page).getByText('retry.png')).toBeVisible();
+    await home(page).getByRole('button', { name: 'Start chat' }).click();
+    await expect.poll(() => page.evaluate(() => window.composerSendGate?.phase)).toBe('waiting');
+    await releaseNewChat(page, true);
+    await expect(lab.toast('Could not start the chat')).toBeVisible();
+    await expect(editor).toHaveValue('Retry this draft');
+    await expect(home(page).getByRole('list', { name: 'Attached images' }).getByText('retry.png')).toBeVisible();
+    await expect(home(page).getByRole('button', { name: 'Start chat' })).toBeEnabled();
+  });
+});
+
 test.describe('attachments', () => {
   test('the paperclip attaches a screenshot and confirms a file reference; remove discards the image', async ({ lab, page }) => {
     await lab.open();

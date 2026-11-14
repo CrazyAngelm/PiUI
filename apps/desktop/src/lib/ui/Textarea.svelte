@@ -1,11 +1,14 @@
 <script lang="ts">
   import type { HTMLTextareaAttributes } from 'svelte/elements';
+  import { resizeComposer } from '../../shared/composer/composer';
 
   interface Props extends HTMLTextareaAttributes {
     value?: string;
     invalid?: boolean;
     /** Grow with content up to maxRows, then scroll. */
     autoGrow?: boolean;
+    /** A composed presentation supplies its own CSS without competing scoped rules. */
+    unstyled?: boolean;
     minRows?: number;
     maxRows?: number;
     ref?: HTMLTextAreaElement | null;
@@ -15,6 +18,7 @@
     value = $bindable(''),
     invalid = false,
     autoGrow = true,
+    unstyled = false,
     minRows = 3,
     maxRows = 16,
     ref = $bindable(null),
@@ -25,21 +29,16 @@
   $effect(() => {
     void value;
     if (!autoGrow || ref === null) return;
-    const style = getComputedStyle(ref);
-    const line = parseFloat(style.lineHeight) || 20;
-    const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-    ref.style.height = 'auto';
-    const min = minRows * line + padding;
-    const max = maxRows * line + padding;
-    ref.style.height = `${Math.min(Math.max(ref.scrollHeight, min), max)}px`;
+    resizeComposer(ref, { minRows, maxRows });
   });
 </script>
 
 <textarea
   bind:this={ref}
   bind:value
-  class="textarea {className}"
-  class:textarea--invalid={invalid}
+  class={className}
+  class:textarea={!unstyled}
+  class:textarea--invalid={invalid && !unstyled}
   aria-invalid={invalid || undefined}
   rows={minRows}
   {...rest}

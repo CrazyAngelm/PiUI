@@ -5,6 +5,7 @@ export type InlineNode =
   | { kind: 'delete'; children: InlineNode[] }
   | { kind: 'code'; text: string }
   | { kind: 'math'; text: string; display: boolean }
+  | { kind: 'image'; alt: string; href: string }
   | { kind: 'link'; label: InlineNode[]; href: string };
 
 export type MarkdownBlock =
@@ -180,14 +181,14 @@ function splitRow(line: string): string[] {
   return cells;
 }
 
-export function parseInline(source: string, rich = false): InlineNode[] {
+export function parseInline(source: string, rich = false, autoLinks = true): InlineNode[] {
   const nodes: InlineNode[] = [];
   // Repeated unfinished math openers must not rescan the entire remaining stream.
   const mathEnds = rich ? new Map(['\\)', '\\]', '$$', '$'].map(close => [close, source.lastIndexOf(close)])) : undefined;
   let plain = '';
   let cursor = 0;
   while (cursor < source.length) {
-    const match = inlineTokenAt(source, cursor, rich, mathEnds);
+    const match = inlineTokenAt(source, cursor, rich, mathEnds, autoLinks);
     if (match === undefined) {
       plain += source[cursor] ?? '';
       cursor += 1;
@@ -207,16 +208,40 @@ interface InlineMatch {
   node: InlineNode;
 }
 
-function inlineTokenAt(source: string, start: number, rich: boolean, mathEnds: ReadonlyMap<string, number> | undefined): InlineMatch | undefined {
+function inlineTokenAt(source: string, start: number, rich: boolean, mathEnds: ReadonlyMap<string, number> | undefined, autoLinks: boolean): InlineMatch | undefined {
   const math = mathEnds ? mathAt(source, start, mathEnds) : undefined;
   if (math) return math;
+  if (rich && source.startsWith('![', start) && source[start - 1] !== BACKSLASH) return linkAt(source, start + 1, rich, true);
   if (source[start] === '[') return linkAt(source, start, rich);
   if (source[start] === '`') return delimitedAt(source, start, '`', (text) => ({ kind: 'code', text }));
-  if (source.startsWith('**', start)) return delimitedAt(source, start, '**', (text) => ({ kind: 'strong', children: parseInline(text, rich) }));
-  if (source.startsWith('__', start)) return delimitedAt(source, start, '__', (text) => ({ kind: 'strong', children: parseInline(text, rich) }));
-  if (source.startsWith('~~', start)) return delimitedAt(source, start, '~~', (text) => ({ kind: 'delete', children: parseInline(text, rich) }));
-  if (source[start] === '*') return delimitedAt(source, start, '*', (text) => ({ kind: 'emphasis', children: parseInline(text, rich) }));
+  if (source.startsWith('**', start)) return delimitedAt(source, start, '**', (text) => ({ kind: 'strong', children: parseInline(text, rich, autoLinks) }));
+  if (source.startsWith('__', start)) return delimitedAt(source, start, '__', (text) => ({ kind: 'strong', children: parseInline(text, rich, autoLinks) }));
+  if (source.startsWith('~~', start)) return delimitedAt(source, start, '~~', (text) => ({ kind: 'delete', children: parseInline(text, rich, autoLinks) }));
+  if (source[start] === '*') return delimitedAt(source, start, '*', (text) => ({ kind: 'emphasis', children: parseInline(text, rich, autoLinks) }));
+  if (rich && autoLinks) return autoLinkAt(source, start);
   return undefined;
+}
+
+/** Text-only tokens: the trusted owner still decides whether a URL can be used. */
+function autoLinkAt(source: string, start: number): InlineMatch | undefined {
+  const angle = source[start] === '<';
+  const begin = start + (angle ? 1 : 0);
+  if (!source.startsWith('https://', begin) && !source.startsWith('http://', begin)) return undefined;
+  if (!angle && /[\w]/u.test(source[start - 1] ?? '')) return undefined;
+  const match = /^https?:\/\/[^\s<>]+/u.exec(source.slice(begin));
+  if (!match) return undefined;
+  let href = match[0];
+  if (angle) {
+    if (source[begin + href.length] !== '>') return undefined;
+  } else {
+    href = href.replace(/[.,;:!?]+$/u, '');
+    for (const [open, close] of [['(', ')'], ['[', ']']]) {
+      let balance = 0;
+      for (const char of href) { if (char === open) balance += 1; else if (char === close) balance -= 1; }
+      while (balance < 0 && href.endsWith(close!)) { href = href.slice(0, -1); balance += 1; }
+    }
+  }
+  return { end: begin + href.length + (angle ? 1 : 0), node: { kind: 'link', href, label: [{ kind: 'text', text: href }] } };
 }
 
 /** Rich owner formulas are opaque TeX before Markdown emphasis/link parsing. */
@@ -248,7 +273,7 @@ function delimitedAt(source: string, start: number, delimiter: string, node: (te
   return { end: close + delimiter.length, node: node(source.slice(contentStart, close)) };
 }
 
-function linkAt(source: string, start: number, rich: boolean): InlineMatch | undefined {
+function linkAt(source: string, start: number, rich: boolean, image = false): InlineMatch | undefined {
   if (source[start + 1] === '[') return undefined;
   // Bound malformed-link probing. Streaming output can contain thousands of
   // unmatched `[` characters; each one must remain constant-work rather than
@@ -272,9 +297,19 @@ function linkAt(source: string, start: number, rich: boolean): InlineMatch | und
   }
   if (hrefEnd >= hrefWindowEnd) return undefined;
   const label = source.slice(start + 1, labelEnd);
-  const href = source.slice(labelEnd + 2, hrefEnd).trim().replace(/\\([\\()])/gu, '$1');
-  if (label.length === 0 || href.length === 0) return undefined;
-  return { end: hrefEnd + 1, node: { kind: 'link', label: parseInline(label, rich), href } };
+  let href = source.slice(labelEnd + 2, hrefEnd).trim().replace(/\\([\\()])/gu, '$1');
+  if ((!image && label.length === 0) || href.length === 0) return undefined;
+  if (image) {
+    const destination = /^(?:<([^<>]+)>|(\S+?))(?:\s+(?:"[^"]*"|'[^']*'))?$/u.exec(href);
+    if (destination) href = destination[1] ?? destination[2]!;
+    return { end: hrefEnd + 1, node: { kind: 'image', alt: inlineText(parseInline(label, false, false)), href } };
+  }
+  return { end: hrefEnd + 1, node: { kind: 'link', label: parseInline(label, rich, false), href } };
+}
+
+function inlineText(nodes: InlineNode[]): string {
+  return nodes.map(node => node.kind === 'image' ? node.alt : node.kind === 'link' ? inlineText(node.label)
+    : 'children' in node ? inlineText(node.children) : node.text).join('');
 }
 
 function pushText(nodes: InlineNode[], text: string): void {

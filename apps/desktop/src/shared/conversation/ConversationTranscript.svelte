@@ -47,6 +47,9 @@
     resolveAttachment?: (id: string) => Promise<ConversationMedia>;
     messagePresentation?: readonly ConversationMessagePresentation[];
     decorateMessage?: ConversationOwner['decorateMessage'];
+    decorateMessageHeader?: ConversationOwner['decorateMessageHeader'];
+    printMode?: boolean;
+    announceMessages?: boolean;
     messageControls?: readonly ConversationMessageControls[];
     onMessageAction?: (id: string, action: ConversationMessageAction) => Promise<void>;
     busyMessageActions?: Readonly<Record<string, boolean>>;
@@ -76,6 +79,9 @@
     resolveAttachment,
     messagePresentation = [],
     decorateMessage,
+    decorateMessageHeader,
+    printMode = false,
+    announceMessages = false,
     messageControls,
     onMessageAction,
     busyMessageActions = {},
@@ -111,13 +117,19 @@
 
   // Unchanged rows keep their identity while a reply streams.
   const groupBlocks = createTimelineGrouper();
-  const items = $derived(groupBlocks(blocks));
+  const items = $derived<TimelineViewItem[]>(printMode ? blocks.map(block => ({ type: 'block', block })) : groupBlocks(blocks));
   const controlsByBlock = $derived(new Map(messageControls?.map(item => [item.blockId, item])));
   const appearanceByBlock = $derived(new Map(messagePresentation.map(item => [item.blockId, item])));
   const decorator = untrack(() => decorateMessage);
+  const headerDecorator = untrack(() => decorateMessageHeader);
   function decorate(node: HTMLElement, block: TimelineBlock) {
     const controller = new AbortController();
     const mounted = decorator?.(node, block, controller.signal);
+    return { update(next: TimelineBlock) { mounted?.update(next); }, destroy() { controller.abort(); mounted?.dispose(); } };
+  }
+  function decorateHeader(node: HTMLElement, block: TimelineBlock) {
+    const controller = new AbortController();
+    const mounted = headerDecorator?.(node, block, controller.signal);
     return { update(next: TimelineBlock) { mounted?.update(next); }, destroy() { controller.abort(); mounted?.dispose(); } };
   }
   const attachmentsByBlock = $derived.by(() => {
@@ -129,7 +141,7 @@
     }
     return grouped;
   });
-  const hidden = $derived(Math.max(0, items.length - limit));
+  const hidden = $derived(printMode ? 0 : Math.max(0, items.length - limit));
   const visible = $derived(hidden > 0 ? items.slice(hidden) : items);
   // A window-only owner keeps publishing streaming/paged snapshots. Search those
   // current blocks; only an explicit full-history read has its own snapshot.
@@ -149,7 +161,7 @@
       : [],
   );
   const currentMatch = $derived(Math.min(match, Math.max(0, matches.length - 1)));
-  const searching = $derived(searchOpen && query.trim().length > 0);
+  const searching = $derived(!printMode && searchOpen && query.trim().length > 0);
   // The last assistant message before the reader's next prompt carries the
   // copy/time actions; intermediate narration between tools stays compact.
   const turnEnds = $derived.by(() => {
@@ -177,7 +189,7 @@
   const rows = $derived(interleave(shown, itemTime, placed));
 
   $effect(() => {
-    if (searchOpen) void openSearch();
+    if (!printMode && searchOpen) void openSearch();
   });
 
   async function openSearch(): Promise<void> {
@@ -217,10 +229,19 @@
     });
   }
 
-  function scrollToEnd(): void {
-    if (!scroller) return;
+  export async function scrollToEnd(force: boolean = true, smooth: boolean = false): Promise<boolean> {
+    if (disposed || printMode || !scroller || (!force && (!following || searchOpen))) return false;
+    if (force && searchOpen) {
+      searchOpen = false;
+      query = '';
+      match = 0;
+      searchOrigin = null;
+    }
     following = true;
-    scroller.scrollTop = scroller.scrollHeight;
+    await tick();
+    if (disposed || !scroller) return false;
+    scroller.scrollTo({ top: scroller.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+    return true;
   }
 
   // Follow new content while the reader is at the bottom; remember the
@@ -231,6 +252,7 @@
   const viewReady = $derived(blocks.length > 0 || !loading);
 
   function follow(node: HTMLDivElement, params: { key: string; ready: boolean }) {
+    if (printMode) return;
     let current = params.key;
     let pendingView: { top: number; following: boolean } | undefined;
     let gestureAt = 0;
@@ -372,7 +394,7 @@
   {#if files.length}
     <ul class="attachments" aria-label={$t('Attachments')}>
       {#each files as attachment (attachment.id)}
-        <li><AttachmentCard {attachment} open={onOpenAttachment} download={onDownloadAttachment} resolve={resolveAttachment} /></li>
+        <li><AttachmentCard {attachment} {printMode} open={onOpenAttachment} download={onDownloadAttachment} resolve={resolveAttachment} /></li>
       {/each}
     </ul>
   {/if}
@@ -380,7 +402,7 @@
 
 {#snippet messageFooter(block: TimelineBlock)}
   {@const controls = controlsByBlock.get(block.id)}
-  {#if controls}
+  {#if controls && !printMode}
     <div class="message-footer" class:message-footer--user={block.kind === 'user'}>
       {#key controls.id}
       <MessageControls {controls} createdAt={block.createdAt} available={!!onMessageAction}
@@ -390,8 +412,8 @@
   {/if}
 {/snippet}
 
-<div class="transcript">
-  {#if searchOpen}
+<div class="transcript" class:transcript--print={printMode}>
+  {#if searchOpen && !printMode}
     <div class="search" role="search">
       <Input
         bind:ref={searchInput}
@@ -419,7 +441,7 @@
   {/if}
 
   <!-- svelte-ignore a11y_no_noninteractive_tabindex (The scroll region must support keyboard scrolling.) -->
-  <div class="scroller" bind:this={scroller} use:follow={{ key: sessionKey, ready: viewReady }} tabindex="0" role="region" aria-label={$t('Conversation messages')}>
+  <div class="scroller" bind:this={scroller} use:follow={{ key: sessionKey, ready: viewReady }} tabindex={printMode ? undefined : 0} role={announceMessages && !printMode ? 'log' : 'region'} aria-live={announceMessages && !printMode ? 'polite' : undefined} aria-relevant={announceMessages && !printMode ? 'additions' : undefined} aria-label={$t('Conversation messages')}>
     <div class="column">
       {#if blocks.length === 0 && loading}
         <div class="loading"><Skeleton lines={4} /></div>
@@ -431,7 +453,7 @@
         <div class="earlier">
           <Button size="sm" variant="ghost" onclick={() => (limit += PAGE)}>{$t('Show earlier messages ({0})', [hidden])}</Button>
         </div>
-      {:else if olderAvailable && onLoadOlder && !searching}
+      {:else if olderAvailable && onLoadOlder && !searching && !printMode}
         <div class="earlier">
           <Button size="sm" variant="ghost" loading={olderLoading} onclick={onLoadOlder}>{$t('Load earlier history')}</Button>
         </div>
@@ -454,6 +476,7 @@
           {@const block = item.block}
           {@const appearance = appearanceByBlock.get(block.id)}
           <div class="item" class:item--controls={controlsByBlock.has(block.id)} data-timeline-block={block.id}>
+            {#if headerDecorator}<div class="message-header-host" use:decorateHeader={block}></div>{/if}
             {#if appearance?.author}<div class="message-author">{appearance.author}</div>{/if}
             {#if appearance?.note}<p class="message-note">{appearance.note}</p>{/if}
             {#if block.kind === 'user'}
@@ -462,15 +485,15 @@
               {@const split = nativeMarkers ? splitPipelineContext(rawText) : { text: rawText, contexts: [] }}
               {@const user = nativeMarkers ? splitImageMarkers(split.text) : { text: split.text, images: 0 }}
               {#each split.contexts as context, index (index)}
-                <details class="handed">
+                <details class="handed" open={printMode || undefined}>
                   <summary><Route size={12} /> {$t('Handed on the result of {0}', [context.pipelineName || $t('a pipeline')])}</summary>
-                  <MarkdownContent source={context.body} compact={true} />
+                  <MarkdownContent source={context.body} compact={true} {printMode} />
                 </details>
               {/each}
               <div class="user">
                 {#if user.text || !user.images}
                   <div class="message-markdown" use:decorate={block}>
-                    {#if appearance?.literal}<p class="literal">{user.text}</p>{:else}<MarkdownContent source={user.text} rich={!!decorator} />{/if}
+                    {#if appearance?.literal}<p class="literal">{user.text}</p>{:else}<MarkdownContent source={user.text} rich={!!decorator} {printMode} />{/if}
                   </div>
                 {/if}
                 {#if user.images}
@@ -485,17 +508,17 @@
               <article class="assistant" class:assistant--end={turnEnds.has(block.id)} class:assistant--failed={block.status === 'failed'} class:assistant--stopped={block.status === 'interrupted'}>
                 {#if block.text}
                   <div class="message-markdown" use:decorate={block}>
-                    {#if appearance?.literal}<p class="literal">{block.text}</p>{:else}<MarkdownContent source={fullAnswers[block.id] ?? block.text} rich={!!decorator} />{/if}
+                    {#if appearance?.literal}<p class="literal">{block.text}</p>{:else}<MarkdownContent source={fullAnswers[block.id] ?? block.text} rich={!!decorator} {printMode} />{/if}
                   </div>
                 {:else if block.safeSummary}
                   <p class="muted">{block.safeSummary}</p>
                 {/if}
-                {#if block.status === 'streaming'}<span class="caret" aria-hidden="true"></span>{/if}
+                {#if block.status === 'streaming' && !printMode}<span class="caret" aria-hidden="true"></span>{/if}
                 {#if block.status === 'failed' || block.status === 'interrupted' || (messageControls === undefined && turnEnds.has(block.id) && block.status !== 'streaming' && block.text)}
                 <div class="assistant__meta">
                   {#if block.status === 'failed'}<span class="warn">{$t('The turn failed')}</span>{/if}
                   {#if block.status === 'interrupted'}<span class="warn">{$t('Stopped')}</span>{/if}
-                  {#if block.text && messageControls === undefined}
+                  {#if block.text && messageControls === undefined && !printMode}
                     <span class="assistant__actions">
                       <IconButton size="sm" label={$t('Copy answer')} onclick={() => void answerAction(block, true)} disabled={busyAnswers[block.id]}><Copy /></IconButton>
                       {#if block.truncated && !fullAnswers[block.id] && readHistory}
@@ -519,17 +542,18 @@
               <div class="divider"><span>{block.status === 'streaming' ? $t('Compacting context…') : $t('Context compacted')}</span></div>
             {:else}
               <!-- Generic fallback: unknown or extension content stays readable. -->
-              <details class="fallback">
+              <details class="fallback" open={printMode || undefined}>
                 <summary class="fallback__head">
-                  <span class="fallback__label">{block.label || $t('Extension message')}</span>
+                  <span class="fallback__label">{block.label || (printMode ? block.toolName : '') || $t('Extension message')}</span>
                   {#if block.fallback}<span class="fallback__tag">· {$t('Compatibility view')}</span>{/if}
                   <span class="fallback__chevron"><ChevronRight size={12} /></span>
                 </summary>
-                {#if block.text}<MarkdownContent source={block.text} compact={true} />{:else}<p class="muted">{block.safeSummary ?? $t('This session event is not supported by a richer renderer yet.')}</p>{/if}
+                {#if block.text}<MarkdownContent source={block.text} compact={true} {printMode} />{:else}<p class="muted">{block.safeSummary ?? $t('This session event is not supported by a richer renderer yet.')}</p>{/if}
               </details>
             {/if}
             {@render attachmentList(attachmentsByBlock.get(block.id) ?? [])}
             {@render messageFooter(block)}
+            {#if printMode && block.createdAt}<time datetime={block.createdAt}>{time(block.createdAt)}</time>{/if}
           </div>
         {/if}
         {/if}
@@ -537,12 +561,17 @@
     </div>
   </div>
 
-  {#if !following && !searchOpen}
-    <button type="button" class="latest" onclick={scrollToEnd}><ArrowDown size={14} /> {$t('Latest')}</button>
+  {#if !following && !searchOpen && !printMode}
+    <button type="button" class="latest" onclick={() => void scrollToEnd()}><ArrowDown size={14} /> {$t('Latest')}</button>
   {/if}
 </div>
 
 <style>
+  .message-header-host:global([data-active='true']) + .message-author { display: none; }
+  .transcript--print, .transcript--print .scroller { display: block; height: auto; overflow: visible; }
+  .transcript--print .item { content-visibility: visible; contain-intrinsic-size: none; }
+  .transcript--print .column { width: 100%; padding: 0; }
+  .transcript--print time { display: block; color: var(--piui-text-muted); font-size: var(--piui-text-xs); margin-bottom: var(--piui-space-3); }
   .literal { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
   .message-author { color: var(--piui-text-muted); font-size: var(--piui-text-sm); font-weight: 600; margin-bottom: var(--piui-space-2); }
   .message-note { color: var(--piui-text-muted); font-size: var(--piui-text-xs); }

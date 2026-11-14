@@ -24,6 +24,17 @@ beforeEach(() => {
 });
 
 describe('composer attachments', () => {
+  it('synchronizes an owner acknowledgement without saving an edit or discarding claimed bytes', () => {
+    const save = vi.fn();
+    const attachments = new ComposerAttachments([image(1)], save);
+    attachments.syncFromOwner([]);
+    expect(attachments.images).toEqual([]);
+    attachments.syncFromOwner([image(2)]);
+    expect(attachments.images).toEqual([image(2)]);
+    expect(save).not.toHaveBeenCalled();
+    expect(client.discardImages).not.toHaveBeenCalled();
+  });
+
   it('keeps picked images, queues references for confirmation and reports rejections', async () => {
     const saved: (readonly ComposerImage[])[] = [];
     const attachments = new ComposerAttachments([], (images) => saved.push(images));

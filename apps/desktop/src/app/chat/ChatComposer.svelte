@@ -12,6 +12,7 @@
   import type { SessionSnapshot } from '../../host-api/workspaceClient';
   import { composerSupport, imageSupport } from '../../harness-adapters/composer';
   import { Button, IconButton, Segmented, Spinner, Textarea } from '../../lib/ui';
+  import ComposerTextarea from '../../lib/ui/ComposerTextarea.svelte';
   import { harnessMeta } from '../harnessMeta';
   import { errorMessage } from '../workspaceStore.svelte';
   import { runLauncher } from '../triggers/runLauncher.svelte';
@@ -467,9 +468,6 @@
     } else if (items.length && (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey))) {
       event.preventDefault();
       choose(activeIndex, event.key === 'Tab' ? 'Tab' : 'Enter');
-    } else if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      void send();
     }
   }
 
@@ -506,7 +504,7 @@
   }
 </script>
 
-<div class="composer-wrap">
+<div class="composer-wrap" data-nano-composer="root">
   {#if queue.length}
     <section class="queue" aria-label={$t('Message queue')}>
       <header>
@@ -580,6 +578,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions (Drop target for files; the paperclip is the keyboard path.) -->
   <div
     class="composer"
+    data-nano-composer="surface"
     class:composer--running={running}
     class:composer--drop={htmlDragging || composerDropTargets.dragging}
     ondragover={(event) => {
@@ -614,7 +613,7 @@
     {#if !pipelineId}
       <HandoffChips {workspaceId} {sessionId} {text} disabled={busy || safeMode} onHandedOff={() => void place('', 0)} />
     {/if}
-    <Textarea
+    <ComposerTextarea
       bind:ref={input}
       value={text}
       oninput={(event) => {
@@ -623,7 +622,8 @@
         menuDismissed = false;
         menuIndex = 0;
       }}
-      onkeydown={keydown}
+      beforeKeyDown={keydown}
+      onSubmit={() => void send()}
       onkeyup={(event) => {
         if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) syncCaret();
       }}
@@ -638,7 +638,7 @@
       aria-activedescendant={menu && menu.items.length ? `${menuId}-${activeIndex}` : undefined}
       placeholder={pipelineId ? $t('Describe the task for the pipeline…') : running ? $t('Queue a follow-up…') : $t('Reply, type / for commands or @ to mention a file…')}
     />
-    <div class="composer__bar">
+    <div data-nano-composer="bar">
       <div class="composer__left">
         <AttachButton images={imageState} busy={attachments.busy} disabled={busy || Boolean(pipelineId)} onPick={() => void attachments.pick(workspaceId, imageState)} />
         <DictateButton onText={dictated} disabled={busy || safeMode} />
@@ -670,13 +670,13 @@
       </div>
       <div class="composer__right">
         {#if running || stopping}
-          <IconButton label={interruptBusy || stopping ? $t('Stopping…') : $t('Stop turn')} shortcut="Mod+." variant="subtle" disabled={interruptBusy || stopping} onclick={() => void interrupt()}>
+          <IconButton data-nano-composer="action" label={interruptBusy || stopping ? $t('Stopping…') : $t('Stop turn')} shortcut="Mod+." variant="subtle" disabled={interruptBusy || stopping} onclick={() => void interrupt()}>
             <Square />
           </IconButton>
         {/if}
         <button
           type="button"
-          class="send"
+          data-nano-composer="send"
           onclick={() => void send()}
           disabled={busy || !composer || !text.trim()}
           aria-label={running ? (mode === 'steer' ? $t('Steer') : $t('Follow up')) : $t('Send')}
@@ -779,41 +779,13 @@
     color: var(--piui-danger);
     font-size: var(--piui-text-sm);
   }
-  .composer {
-    position: relative;
-    border: 1px solid var(--piui-border);
-    border-radius: 14px;
-    background: var(--piui-surface-1);
-    box-shadow: var(--piui-shadow-1);
-    transition: border-color var(--piui-duration-fast) var(--piui-ease-out);
-  }
-  .composer:focus-within {
-    border-color: var(--piui-border-strong);
-  }
   .composer--drop {
     border-color: var(--piui-focus);
-  }
-  .composer :global(.composer__input) {
-    padding: 12px 14px 4px;
-    border: 0;
-    background: transparent;
-    font-size: var(--piui-chat-composer-font-size);
-    resize: none;
-  }
-  .composer :global(.composer__input:focus-visible) {
-    box-shadow: none;
   }
   .composer__warning {
     margin: 8px 12px 0;
     color: var(--piui-warning-text);
     font-size: var(--piui-text-sm);
-  }
-  .composer__bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--piui-space-2);
-    padding: 4px 8px 8px 8px;
   }
   .composer__left,
   .composer__right {
@@ -828,31 +800,11 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 14px;
+    border-radius: var(--piui-radius-lg);
     background: color-mix(in srgb, var(--piui-surface-1) 88%, transparent);
     color: var(--piui-text);
     font-size: var(--piui-text-sm);
     pointer-events: none;
-  }
-  .send {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    border: 0;
-    border-radius: 50%;
-    background: var(--piui-action);
-    color: var(--piui-action-ink);
-    transition: background-color var(--piui-duration-fast) var(--piui-ease-out);
-  }
-  .send:hover:not(:disabled) {
-    background: var(--piui-action-hover);
-  }
-  .send:disabled {
-    background: var(--piui-surface-3);
-    color: var(--piui-text-disabled);
-    opacity: 1;
   }
   .error {
     margin: 0;

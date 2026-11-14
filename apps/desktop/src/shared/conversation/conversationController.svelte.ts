@@ -172,7 +172,7 @@ export class ConversationController {
     };
   }
 
-  bindMessageDecoration(): NonNullable<ConversationOwner['decorateMessage']> {
+  bindMessageDecoration(kind: 'message' | 'header' = 'message'): NonNullable<ConversationOwner['decorateMessage']> {
     const generation = this.generation;
     const owner = this.active();
     return (element, block, parentSignal) => {
@@ -191,7 +191,7 @@ export class ConversationController {
       };
       controller.signal.addEventListener('abort', dispose, { once: true });
       parentSignal.addEventListener('abort', dispose, { once: true });
-      try { decoration = owner.decorateMessage?.(element, block, controller.signal); }
+      try { decoration = (kind === 'header' ? owner.decorateMessageHeader : owner.decorateMessage)?.(element, block, controller.signal); }
       catch { dispose(); return; }
       if (disposed || parentSignal.aborted) { decoration?.dispose(); dispose(); return; }
       return {

@@ -1,0 +1,56 @@
+/* Shared presentation; hosts retain controls, ownership and layout-specific spacing. */
+[data-nano-composer="root"] { color: var(--piui-text); font-family: var(--piui-font-ui); }
+[data-nano-composer="surface"] {
+  position: relative;
+  border: 1px solid var(--piui-border);
+  border-radius: var(--piui-radius-lg);
+  background: var(--piui-surface-1);
+  box-shadow: var(--piui-shadow-1);
+  transition: border-color var(--piui-duration-fast) var(--piui-ease-out);
+}
+[data-nano-composer="surface"]:focus-within { border-color: var(--piui-border-strong); }
+[data-nano-composer="editor"] {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: var(--nano-composer-editor-padding, 12px 14px 4px);
+  border: 0;
+  background: transparent;
+  color: var(--piui-text);
+  font: inherit;
+  font-size: var(--piui-chat-composer-font-size);
+  line-height: var(--piui-leading-normal);
+  resize: none;
+}
+[data-nano-composer="editor"]:focus-visible { outline: none; box-shadow: none; }
+[data-nano-composer="editor"]::placeholder { color: var(--piui-text-disabled); }
+[data-nano-composer="bar"] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--piui-space-2);
+  padding: var(--nano-composer-bar-padding, 4px 8px 8px);
+}
+[data-nano-composer="action"], [data-nano-composer="send"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--nano-composer-action-size, 32px);
+  height: var(--nano-composer-action-size, 32px);
+  padding: 0;
+  border: 0;
+  border-radius: var(--piui-radius-full);
+  cursor: pointer;
+}
+[data-nano-composer="action"] { color: var(--piui-text-muted); background: transparent; }
+[data-nano-composer="action"]:hover:not(:disabled) { background: var(--piui-hover); }
+[data-nano-composer="send"] { background: var(--piui-action); color: var(--piui-action-ink); }
+[data-nano-composer="send"]:hover:not(:disabled) { background: var(--piui-action-hover); }
+[data-nano-composer="action"]:disabled, [data-nano-composer="send"]:disabled { cursor: default; color: var(--piui-text-disabled); }
+[data-nano-composer="send"]:disabled { background: var(--piui-surface-3); opacity: 1; }
+[data-nano-composer="action"]:focus-visible, [data-nano-composer="send"]:focus-visible {
+  outline: 2px solid var(--piui-focus); outline-offset: 2px;
+}

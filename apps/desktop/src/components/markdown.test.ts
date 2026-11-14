@@ -2,6 +2,24 @@ import { describe, expect, it } from 'vitest';
 import { parseInline, parseMarkdown } from './markdown';
 
 describe('safe chat Markdown projection', () => {
+  it('keeps images inert unless rich presentation and a trusted owner both participate', () => {
+    const source = '![A **diagram**](https://example.invalid/chart.png "Diagram")';
+    expect(parseInline(source).some(node => node.kind === 'image')).toBe(false);
+    expect(parseInline(source, true)).toEqual([{ kind: 'image', alt: 'A diagram', href: 'https://example.invalid/chart.png' }]);
+    expect(parseInline('![blocked](javascript:alert(1))', true)).toEqual([{ kind: 'image', alt: 'blocked', href: 'javascript:alert(1)' }]);
+    expect(parseInline('`![code](https://example.invalid/chart.png)`', true)[0]?.kind).toBe('code');
+    expect(parseInline('\\![escaped](https://example.invalid/chart.png)', true).some(node => node.kind === 'image')).toBe(false);
+  });
+
+  it('projects rich HTTP autolinks without punctuation or nested link labels', () => {
+    expect(parseInline('See https://example.invalid/a_(b).', true)).toEqual([
+      { kind: 'text', text: 'See ' }, { kind: 'link', href: 'https://example.invalid/a_(b)', label: [{ kind: 'text', text: 'https://example.invalid/a_(b)' }] }, { kind: 'text', text: '.' },
+    ]);
+    expect(parseInline('<https://example.invalid/a>', true)[0]).toMatchObject({ kind: 'link', href: 'https://example.invalid/a' });
+    expect(parseInline('[https://label.invalid](https://target.invalid)', true)[0]).toEqual({ kind: 'link', href: 'https://target.invalid', label: [{ kind: 'text', text: 'https://label.invalid' }] });
+    expect(parseInline('https://example.invalid')).toEqual([{ kind: 'text', text: 'https://example.invalid' }]);
+  });
+
   it('keeps prose, lists, and fenced code as typed nodes', () => {
     const blocks = parseMarkdown('# Result\n\n- first\n- **second**\n\n```ts\nconst ready = true;\n```');
 

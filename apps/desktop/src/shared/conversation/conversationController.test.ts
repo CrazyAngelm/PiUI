@@ -140,17 +140,18 @@ describe('explicit conversation owner boundary', () => {
     expect(loadOlder).toHaveBeenCalledTimes(2);
   });
 
-  it('disposes trusted message decorations immediately on owner retirement', () => {
+  it.each(['message', 'header'] as const)('disposes trusted %s decorations immediately on owner retirement', kind => {
     const dispose = vi.fn(); const update = vi.fn();
     const decorateMessage = vi.fn(() => ({ dispose, update }));
     const view = snapshot();
-    const controller = new ConversationController({ identity, decorateMessage }, view);
-    const port = controller.bindMessageDecoration();
+    const owner = { identity, [kind === 'header' ? 'decorateMessageHeader' : 'decorateMessage']: decorateMessage };
+    const controller = new ConversationController(owner, view);
+    const port = controller.bindMessageDecoration(kind);
     const abort = new AbortController();
     const decoration = port({} as HTMLElement, view.blocks[1]!, abort.signal);
     decoration?.update({ ...view.blocks[1]!, text: 'new stream' });
     expect(update).toHaveBeenCalledOnce();
-    controller.setOwner({ identity, decorateMessage }, view);
+    controller.setOwner(owner, view);
     expect(dispose).toHaveBeenCalledOnce();
     decoration?.update(view.blocks[1]!); decoration?.dispose();
     port({} as HTMLElement, view.blocks[1]!, abort.signal);

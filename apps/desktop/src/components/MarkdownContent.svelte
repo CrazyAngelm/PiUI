@@ -3,7 +3,7 @@
   const t = useTranslation();
   import { parseMarkdown, type InlineNode } from './markdown';
 
-  let { source, compact = false, rich = false }: { source: string; compact?: boolean; rich?: boolean } = $props();
+  let { source, compact = false, rich = false, printMode = false }: { source: string; compact?: boolean; rich?: boolean; printMode?: boolean } = $props();
 
   let copiedCode = $state<string | undefined>();
   const parsed = $derived.by(() => {
@@ -46,13 +46,18 @@
       {#key node.text}<span class="math" class:math--display={node.display}>{node.text}</span>{/key}
     {:else if node.kind === 'link'}
       <span class="safe-link" title={node.href} data-link-url={rich ? node.href : undefined}>{@render inline(node.label)}</span>
+    {:else if node.kind === 'image'}
+      {#key JSON.stringify([node.href, node.alt])}
+        <!-- The core never fetches Markdown URLs. Only a trusted owner may fill this empty slot. -->
+        <span class="inline-image"><span class="inline-image-host" data-image-url={rich ? node.href : undefined} data-image-alt={node.alt}></span><span class="inline-image-fallback">{node.alt || $t('Image')}</span></span>
+      {/key}
     {:else}
       {node.text}
     {/if}
   {/each}
 {/snippet}
 
-<div class:compact class="markdown-content">
+<div class:compact class:print={printMode} class="markdown-content">
   {#each parsed as { block, key } (key)}
     {#if block.kind === 'heading'}
       {#if block.depth === 1}<h1>{@render inline(block.inline)}</h1>
@@ -63,16 +68,16 @@
       <p>{@render inline(block.inline)}</p>
     {:else if block.kind === 'code'}
       <figure class="code-block">
-        <figcaption><span>{languageLabel(block.language)}</span><button type="button" onclick={() => void copyCode(block.text)} aria-label={$t("Copy {0} code", [languageLabel(block.language)])}>{copiedCode === block.text ? $t('Copied') : $t('Copy')}</button></figcaption>
+        <figcaption><span>{languageLabel(block.language)}</span>{#if !printMode}<button type="button" onclick={() => void copyCode(block.text)} aria-label={$t("Copy {0} code", [languageLabel(block.language)])}>{copiedCode === block.text ? $t('Copied') : $t('Copy')}</button>{/if}</figcaption>
         {#if rich && block.language === 'hermes-ui'}
           <!-- Widgets append their own container but do not replace this source node. -->
           <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-          <pre tabindex="0" role="region" aria-label={`${languageLabel(block.language)} code`}><code class="language-hermes-ui">{block.text}</code></pre>
+          <pre tabindex={printMode ? undefined : 0} role="region" aria-label={`${languageLabel(block.language)} code`}><code class="language-hermes-ui">{block.text}</code></pre>
         {:else}
           {#key rich ? `${block.language ?? ''}:${block.text}` : block.language}
             <!-- A highlighter may replace the code's children. Changed source owns a fresh node. -->
             <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-            <pre tabindex="0" role="region" aria-label={`${languageLabel(block.language)} code`}><code class={rich && block.language ? `language-${block.language}` : undefined}>{block.text}</code></pre>
+            <pre tabindex={printMode ? undefined : 0} role="region" aria-label={`${languageLabel(block.language)} code`}><code class={rich && block.language ? `language-${block.language}` : undefined}>{block.text}</code></pre>
           {/key}
         {/if}
       </figure>
@@ -86,7 +91,7 @@
       {/if}
     {:else if block.kind === 'table'}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-      <div class="table-wrap" tabindex="0" role="region" aria-label={$t('Table')}>
+      <div class="table-wrap" tabindex={printMode ? undefined : 0} role="region" aria-label={$t('Table')}>
         <table>
           <thead>
             <tr>{#each block.head as cell, column}<th style:text-align={block.align[column]}>{@render inline(cell)}</th>{/each}</tr>
@@ -123,9 +128,14 @@
   .table-wrap tbody tr:hover td { background: var(--piui-hover); }
   .inline-code { padding: .08em .3em; border: 0; border-radius: 5px; background: color-mix(in srgb, var(--piui-surface-1) 70%, transparent); color: var(--piui-text); font-family: var(--piui-font-mono); font-size: .86em; white-space: break-spaces; }
   .safe-link { color: var(--piui-accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--piui-accent) 45%, transparent); text-underline-offset: .18em; cursor: help; }
+  .inline-image-host:global([data-active='true']) + .inline-image-fallback { display: none; }
+  .inline-image-host :global(img) { display: block; max-width: 100%; height: auto; }
   .code-block { width: min(100%, 78ch); margin: 1em 0; overflow: hidden; border: 1px solid var(--piui-border-subtle); border-radius: var(--piui-radius-md); background: color-mix(in srgb, var(--piui-bg) 72%, var(--piui-surface-1)); }
   .code-block figcaption { display: flex; min-height: 32px; align-items: center; justify-content: space-between; gap: var(--piui-space-3); padding: 0 10px 0 12px; border-bottom: 1px solid var(--piui-border-subtle); color: var(--piui-text-faint); font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
   .code-block button { padding: 4px 6px; border: 0; border-radius: 5px; background: transparent; color: var(--piui-text-muted); font-size: 10px; text-transform: none; letter-spacing: normal; }.code-block button:hover { background: var(--piui-surface-2); color: var(--piui-text); }
   .code-block pre { max-width: 100%; margin: 0; padding: 13px 14px; overflow: auto; color: var(--piui-text); font-family: var(--piui-font-mono); font-size: var(--piui-chat-code-font-size); line-height: 1.58; tab-size: 2; white-space: pre; }
+  .print .code-block pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow: visible; }
+  .print .table-wrap { overflow: visible; }
+  .print .table-wrap th, .print .table-wrap td { white-space: normal; overflow-wrap: anywhere; }
   .compact { max-width: none; font-size: calc(var(--piui-chat-font-size) - 3px); line-height: 1.55; }.compact p { margin-bottom: .55em; }
 </style>
