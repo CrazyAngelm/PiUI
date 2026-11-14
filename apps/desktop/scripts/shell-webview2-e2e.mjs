@@ -97,7 +97,7 @@ export async function runShellWebview2Proof({
     return evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)}, ${JSON.stringify(args)})`);
   }
 
-  async function waitForTheme(theme, label, acceptsBackground = () => true, boundMs = commandBoundMs) {
+  async function waitForTheme(theme, label, acceptsBackground = () => true, boundMs = commandBoundMs, style = undefined) {
     let sample;
     try {
       return await waitFor(async () => {
@@ -111,20 +111,30 @@ export async function runShellWebview2Proof({
           }
           const root = document.documentElement;
           const shell = document.querySelector('main#main')?.closest('.app');
+          const rootStyle = getComputedStyle(root);
+          const bodyStyle = getComputedStyle(document.body);
+          const shellStyle = shell ? getComputedStyle(shell) : null;
           return {
             hostTheme,
             rootTheme: root.dataset.theme ?? null,
             rootStyle: root.dataset.style ?? null,
             pluginTheme: root.dataset.pluginTheme ?? null,
-            backgroundToken: getComputedStyle(root).getPropertyValue('--piui-bg').trim(),
-            bodyBackground: getComputedStyle(document.body).backgroundColor,
-            shellBackground: shell ? getComputedStyle(shell).backgroundColor : null,
+            backgroundToken: rootStyle.getPropertyValue('--piui-bg').trim(),
+            rootBackground: rootStyle.backgroundColor,
+            bodyBackground: bodyStyle.backgroundColor,
+            shellBackground: shellStyle?.backgroundColor ?? null,
+            bodyBackgroundToken: bodyStyle.getPropertyValue('--piui-bg').trim(),
+            shellBackgroundToken: shellStyle?.getPropertyValue('--piui-bg').trim() ?? null,
+            bodyTransition: bodyStyle.transition,
+            shellTransition: shellStyle?.transition ?? null,
+            systemPrefersDark: matchMedia('(prefers-color-scheme: dark)').matches,
+            systemPrefersLight: matchMedia('(prefers-color-scheme: light)').matches,
             preferencesError: document.querySelector('.settings__body > [role="alert"]')?.textContent?.trim() ?? null,
           };
         })()`);
-        const { hostTheme, rootTheme, shellBackground, preferencesError } = sample;
+        const { hostTheme, rootTheme, rootStyle, shellBackground, preferencesError } = sample;
         if (hostTheme === theme && rootTheme === theme && shellBackground?.startsWith('rgb(') &&
-          !preferencesError && acceptsBackground(shellBackground)) return shellBackground;
+          (style === undefined || rootStyle === style) && !preferencesError && acceptsBackground(shellBackground)) return shellBackground;
         return false;
       }, label, boundMs);
     } catch (cause) {
@@ -348,29 +358,38 @@ export async function runShellWebview2Proof({
   checks.push(`theme-persisted-by-host (${lightBackground} → ${darkBackground})`);
 
   // Design style is a local preference, independent of the host's appearance.
+  // Compare the same opaque shell as the theme proof; body is behind it.
+  // Sample style, rendered color and committed host appearance together.
   const styleGroup = `document.querySelector('[role="group"][aria-label="Visual style"]')`;
   await waitFor(styleGroup, 'visual style control');
-  const nanoBackground = await evaluate(`getComputedStyle(document.body).backgroundColor`);
+  const nanoBackground = await waitForTheme(
+    'system', 'Nano baseline rendered with the committed system appearance',
+    () => true, commandBoundMs, 'nano',
+  );
   await focusButton('Nano', styleGroup);
   await automation.dispatchKey({ key: 'ArrowRight', code: 'ArrowRight' });
   await waitFor(`document.activeElement === (${buttonExpression('Chaos', styleGroup)})`, 'arrow key reaches Chaos');
   await automation.dispatchKey({ key: 'Enter', code: 'Enter' });
-  await waitFor(`document.documentElement.dataset.style === 'chaos'`, 'Chaos selected by keyboard');
+  const chaosBackground = await waitForTheme(
+    'system', `Chaos selected by keyboard with a different shell background from Nano ${nanoBackground}`,
+    (background) => background !== nanoBackground, commandBoundMs, 'chaos',
+  );
   await waitFor(`(${buttonExpression('Chaos', styleGroup)})?.getAttribute('aria-checked') === 'true'`, 'Chaos exposes checked state');
-  const chaosBackground = await evaluate(`getComputedStyle(document.body).backgroundColor`);
-  assertion(nanoBackground !== chaosBackground, 'Nano and Chaos render the same background.');
-  assertion(await evaluate(`document.documentElement.dataset.theme === 'system'`), 'Style changed host appearance.');
   await reload();
-  await waitFor(`document.documentElement.dataset.style === 'chaos'`, 'Chaos persisted after reload', startupBoundMs);
+  await waitForTheme(
+    'system', `Chaos restored with shell background ${chaosBackground} and the committed system appearance after reload`,
+    (background) => background === chaosBackground, startupBoundMs, 'chaos',
+  );
   await click('Settings', sidebar);
   await capture('shell-style-chaos');
   await focusButton('Chaos', styleGroup);
   await automation.dispatchKey({ key: 'ArrowLeft', code: 'ArrowLeft' });
   await waitFor(`document.activeElement === (${buttonExpression('Nano', styleGroup)})`, 'arrow key reaches Nano');
   await automation.dispatchKey({ key: 'Enter', code: 'Enter' });
-  await waitFor(`document.documentElement.dataset.style === 'nano'`, 'Nano selected by keyboard');
-  assertion(await evaluate(`document.documentElement.dataset.theme === 'system'`), 'Nano changed host appearance.');
-  assertion(await evaluate(`getComputedStyle(document.body).backgroundColor`) === nanoBackground, 'Nano palette was not restored.');
+  await waitForTheme(
+    'system', `Nano selected by keyboard restores its exact shell background ${nanoBackground} and the committed system appearance`,
+    (background) => background === nanoBackground, commandBoundMs, 'nano',
+  );
   await capture('shell-style-nano');
   checks.push('nano-chaos-keyboard-persistence-independent-appearance');
 
