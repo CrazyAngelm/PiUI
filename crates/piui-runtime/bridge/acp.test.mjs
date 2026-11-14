@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, rmdirSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync } from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -426,10 +426,13 @@ test('requests outside the advertised client surface get method-not-found and ne
 });
 
 // --- Nano model source (ADR-050) ---------------------------------------------
+// The standalone bridge gate also runs before Cargo has created target/.
+const nanoSessionDir = join(process.cwd(), 'target');
+mkdirSync(nanoSessionDir, { recursive: true });
 const nanoModes = [{ id: 'auto', name: 'Auto' }, { id: 'fast', name: 'Fast' }];
 const nanoConfig = (overrides = {}, modes = nanoModes) => config(['--nano-models'], {
   harness: 'acp:opencode',
-  sessionDir: join(process.cwd(), 'target'),
+  sessionDir: nanoSessionDir,
   acp: { id: 'opencode', displayName: 'OpenCode', disable: {}, nano: { provider: 'nano', modes } },
   model: { id: 'auto', provider: 'nano', name: 'Auto' },
   ...overrides,
@@ -531,7 +534,7 @@ test('the Nano source refuses MCP and host tool subprocess routes', async () => 
 });
 
 test('Goose starts privately, preserves the project cwd and locks the Nano model and permissions', { skip: process.platform !== 'win32' }, async () => {
-  const root = mkdtempSync(join(process.cwd(), 'target', 'goose-nano-test-'));
+  const root = mkdtempSync(join(nanoSessionDir, 'goose-nano-test-'));
   const provider = 'nano-goose-subscription';
   const model = { id: 'fast', provider, name: 'Fast' };
   const environment = {
