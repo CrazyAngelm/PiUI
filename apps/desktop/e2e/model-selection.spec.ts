@@ -1,9 +1,11 @@
 import type { Page } from '@playwright/test';
-import { DEMO_PROJECTS } from '../src/host-api/lab/scenarios/demoChats';
+import { labUuid } from '../src/host-api/lab/labRandom';
 import { expect, test } from './fixtures';
 
 const codexModel = JSON.stringify(['openai-lab', 'gpt-lab-5-codex']);
 const codexMini = JSON.stringify(['openai-lab', 'gpt-lab-5-mini']);
+// Same seed as demoChats, without loading the browser-only Lab runtime in Node.
+const demoProjectId = labUuid('demo:project:piui');
 
 /** `SLOW_CATALOG_LATENCY_MS` of the lab host: how long `?catalog=slow` withholds a catalog. */
 const SLOW_CATALOG_MS = 5_000;
@@ -30,7 +32,7 @@ test('a cold remembered model blocks the first send until its own catalog answer
     localStorage.setItem('piui.shell.newchat.v1', JSON.stringify({
       [workspace]: { harness: 'codex', modelKey, thinkingLevel: 'high', fast: true },
     }));
-  }, { workspace: DEMO_PROJECTS.piui, modelKey: codexModel });
+  }, { workspace: demoProjectId, modelKey: codexModel });
   await lab.open('demo', '&catalog=slow');
   const home = page.getByRole('region', { name: 'What should we work on?' });
   const message = home.getByRole('textbox', { name: 'Message' });
@@ -51,7 +53,7 @@ test('an unavailable remembered model requires a deliberate choice', async ({ la
     localStorage.setItem('piui.shell.newchat.v1', JSON.stringify({
       [workspace]: { harness: 'codex', modelKey: JSON.stringify(['openai-lab', 'removed-model']) },
     }));
-  }, { workspace: DEMO_PROJECTS.piui });
+  }, { workspace: demoProjectId });
   await lab.open();
   const home = page.getByRole('region', { name: 'What should we work on?' });
   await home.getByRole('textbox', { name: 'Message' }).fill('Keep the draft');
@@ -160,7 +162,7 @@ test('fresh catalog capabilities clear obsolete reasoning and Fast for a new ass
     localStorage.setItem('piui.harness.catalog.v1:' + JSON.stringify([workspaceId, harness]), JSON.stringify({
       at: Date.now(), result: { protocol: 18, harness, models: [model], resources: { items: [], warnings: [] } },
     }));
-  }, DEMO_PROJECTS.piui);
+  }, demoProjectId);
   const editor = await lab.openPipelines();
   await editor.getByRole('button', { name: 'Assistant', exact: true }).click();
   const assistant = page.getByRole('complementary', { name: 'Pipeline assistant' });

@@ -53,7 +53,11 @@ describe('plugin registry', () => {
   it('offers panels, themes, templates and node types of active plugins only', async () => {
     const { registry } = await labRegistry();
     expect(registry.panels('chat-details').map(({ plugin, panel }) => `${plugin.id}/${panel.id}`)).toEqual(['example.hello-command/hello']);
-    expect(registry.themes().map(({ theme }) => theme.id)).toEqual(['midnight', 'paper', 'partial']);
+    const themeKeys = () => registry.themes().map(({ plugin, theme }) => `${plugin.id}/${theme.id}`);
+    expect(themeKeys()).toEqual([
+      'example.midnight-theme/midnight', 'example.midnight-theme/paper', 'example.midnight-theme/partial',
+      'example.paper-style/paper', 'example.paper-style/terminal',
+    ]);
     expect(registry.templates().map(({ template }) => template.id)).toEqual(['draft-and-critique', 'collect-and-reshape']);
     expect(registry.nodeTypes().map(({ nodeType }) => nodeType.id)).toEqual(['json-transform']);
     expect(registry.activeTheme()).toBeUndefined();
@@ -64,7 +68,7 @@ describe('plugin registry', () => {
     // The choice is kept, but a disabled plugin's theme no longer applies.
     expect(registry.registry?.activeTheme).toEqual({ pluginId: 'example.midnight-theme', themeId: 'midnight' });
     expect(registry.activeTheme()).toBeUndefined();
-    expect(registry.themes()).toEqual([]);
+    expect(themeKeys()).toEqual(['example.paper-style/paper', 'example.paper-style/terminal']);
   });
 
   it('finds the chat renderer of an active plugin by tool name, without letter case', async () => {

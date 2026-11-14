@@ -182,6 +182,9 @@ describe('run debugging markup', () => {
 });
 
 describe('run debugging copy', () => {
+  // Product names stay the same in both languages, as in the Fusion copy checks.
+  const SAME_IN_RUSSIAN = new Set(['Nano Cloud']);
+
   it('has Russian text for every new string', () => {
     const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
     const files = [
@@ -207,7 +210,7 @@ describe('run debugging copy', () => {
       ]),
     ].filter((text) => text.trim() !== '' && text !== 'stderr');
     expect(strings.length).toBeGreaterThan(80);
-    const missing = strings.filter((text) => translate(text, 'ru') === text);
+    const missing = strings.filter((text) => !SAME_IN_RUSSIAN.has(text) && translate(text, 'ru') === text);
     expect(missing).toEqual([]);
   });
 });
