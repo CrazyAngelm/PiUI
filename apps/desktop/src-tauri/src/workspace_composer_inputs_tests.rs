@@ -638,6 +638,12 @@ async fn a_queued_image_reaches_the_harness_once_and_its_bytes_are_released() {
                 .items
                 .iter()
                 .any(|item| item.id == request_id && item.status == Delivery::Sent)
+                // settle_message releases the queue lock before deleting the bytes.
+                // Observe both effects of settlement before asserting its result.
+                && matches!(
+                    host.workspace.inner.attachments.read(&image),
+                    Err(super::super::attachments::AttachmentError::NotFound)
+                )
             {
                 return queue;
             }
@@ -645,7 +651,7 @@ async fn a_queued_image_reaches_the_harness_once_and_its_bytes_are_released() {
         }
     })
     .await
-    .expect("the message is delivered");
+    .expect("the message is delivered and its image bytes are released");
     assert!(delivered.referenced_images().next().is_none());
     assert_eq!(
         host.workspace.inner.attachments.read(&image),
