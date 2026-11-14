@@ -113,7 +113,8 @@ Absolute FTS duration depends on storage; the release regression gate uses ±15%
 
 ### 4.5 Package
 
-- the current emitted frontend asset smoke gate is **260 KiB**. The current v10 read-only Prime lane and project-session UI build measures **259,817 bytes**, below the 266,240-byte gate; this is a local build-size check, not a public performance or release-gate closure;
+- `pnpm perf:smoke` follows the manifest's initial static import graph and enforces the existing **160 KiB gzip / 560 KiB raw** limits in `apps/desktop/scripts/perf-smoke.mjs`; this asset check does not prove native startup, RSS or rendering performance;
+- production JavaScript uses pinned Terser 5.51.2 with its default compression options. The shell, sidebar, Home composer and its executor/model pickers stay in the initial graph. Closed shell confirmations load when requested; a load failure cancels the pending trust, deletion or navigation request and reports an error without performing the action or offering an ineffective same-module Retry;
 - compressed PiUI application payload target ≤35 MiB, excluding optional WebView bootstrap and managed Pi runtime;
 - runtime and UI artifact sizes reported separately;
 - no dependency may add >5 MiB compressed without ADR;

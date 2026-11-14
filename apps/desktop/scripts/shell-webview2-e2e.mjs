@@ -75,12 +75,14 @@ export async function runShellWebview2Proof({
     return automation.evaluate(expression);
   }
 
-  async function waitFor(expression, label, boundMs = commandBoundMs) {
+  async function waitFor(condition, label, boundMs = commandBoundMs) {
+    const check = typeof condition === 'function' ? condition : () => evaluate(`Boolean(${condition})`);
     const deadline = performance.now() + boundMs;
     let lastError;
     while (performance.now() < deadline) {
       try {
-        if (await evaluate(`Boolean(${expression})`)) return;
+        const result = await check();
+        if (result) return result;
       } catch (error) {
         lastError = error;
         if (!(error instanceof Error) || !error.message.includes('Execution context was destroyed')) throw error;
@@ -93,6 +95,41 @@ export async function runShellWebview2Proof({
 
   async function invoke(command, args) {
     return evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)}, ${JSON.stringify(args)})`);
+  }
+
+  async function waitForTheme(theme, label, acceptsBackground = () => true, boundMs = commandBoundMs) {
+    let sample;
+    try {
+      return await waitFor(async () => {
+        sample = await evaluate(`(async () => {
+          let hostTheme = null;
+          try {
+            const { preferences } = await window.__TAURI_INTERNALS__.invoke('bootstrap_v10');
+            hostTheme = preferences.theme;
+          } catch {
+            // Keep the renderer sample available when the host read fails.
+          }
+          const root = document.documentElement;
+          const shell = document.querySelector('main#main')?.closest('.app');
+          return {
+            hostTheme,
+            rootTheme: root.dataset.theme ?? null,
+            rootStyle: root.dataset.style ?? null,
+            pluginTheme: root.dataset.pluginTheme ?? null,
+            backgroundToken: getComputedStyle(root).getPropertyValue('--piui-bg').trim(),
+            bodyBackground: getComputedStyle(document.body).backgroundColor,
+            shellBackground: shell ? getComputedStyle(shell).backgroundColor : null,
+            preferencesError: document.querySelector('.settings__body > [role="alert"]')?.textContent?.trim() ?? null,
+          };
+        })()`);
+        const { hostTheme, rootTheme, shellBackground, preferencesError } = sample;
+        if (hostTheme === theme && rootTheme === theme && shellBackground?.startsWith('rgb(') &&
+          !preferencesError && acceptsBackground(shellBackground)) return shellBackground;
+        return false;
+      }, label, boundMs);
+    } catch (cause) {
+      throw new Error(`${label} failed. Last theme sample: ${JSON.stringify(sample ?? null)}`, { cause });
+    }
   }
 
   async function catalog() {
@@ -291,19 +328,22 @@ export async function runShellWebview2Proof({
   const themeGroup = `document.querySelector('[role="group"][aria-label="Theme"]')`;
   await waitFor(themeGroup, 'theme control');
   await click('Light', themeGroup);
-  await waitFor(`document.documentElement.dataset.theme === 'light'`, 'light theme applied');
-  const lightBackground = await evaluate(`getComputedStyle(document.body).backgroundColor`);
+  const lightBackground = await waitForTheme('light', 'light theme rendered and saved');
   await capture('shell-settings-light');
   await click('Dark', themeGroup);
-  await waitFor(`document.documentElement.dataset.theme === 'dark'`, 'dark theme applied');
-  const darkBackground = await evaluate(`getComputedStyle(document.body).backgroundColor`);
-  assertion(lightBackground !== darkBackground, `Light and dark themes render the same background (${lightBackground}).`);
+  const darkBackground = await waitForTheme(
+    'dark', `dark theme rendered and saved with a different shell background from ${lightBackground}`,
+    (background) => background !== lightBackground,
+  );
   await reload();
-  await waitFor(`document.documentElement.dataset.theme === 'dark'`, 'dark theme restored from the host after reload', startupBoundMs);
+  await waitForTheme(
+    'dark', `dark theme restored from the host with shell background ${darkBackground} after reload`,
+    (background) => background === darkBackground, startupBoundMs,
+  );
   await capture('shell-settings-dark');
   await click('Settings', sidebar);
   await click('System', `document.querySelector('[role="group"][aria-label="Theme"]')`);
-  await waitFor(`document.documentElement.dataset.theme === 'system'`, 'system theme restored');
+  await waitForTheme('system', 'system theme rendered and saved');
   timings.theme = normalizedMilliseconds(performance.now() - phase);
   checks.push(`theme-persisted-by-host (${lightBackground} → ${darkBackground})`);
 

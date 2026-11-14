@@ -1,10 +1,10 @@
 <script lang="ts">
   import { Tooltip as TooltipPrimitive } from 'bits-ui';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import Menu from '@lucide/svelte/icons/menu';
   import { t } from '../../features/locale/language';
   import type { WorkspaceSummary } from '../../../../../contracts/workspace-v15';
-  import { Button, Dialog, IconButton, Toaster, matchesShortcut, toasts } from '../../lib/ui';
+  import { Button, IconButton, Toaster, matchesShortcut, toasts } from '../../lib/ui';
   import { WorkspaceStore, errorMessage } from '../workspaceStore.svelte';
   import HomeView from './HomeView.svelte';
   import Sidebar from './Sidebar.svelte';
@@ -34,6 +34,58 @@
   let PluginShell = $state<typeof import('../plugins/PluginShellContributions.svelte').default | undefined>();
 
   const deleteSession = $derived(store.catalog.sessions.find((session) => session.id === deleteTarget));
+
+  // Closed confirmations do not participate in first paint. Their owners stay here;
+  // a failed import cancels the request and never authorizes the native operation.
+  let Confirmations = $state<typeof import('./ShellConfirmations.svelte').default>();
+  let confirmationLoad: Promise<void> | undefined;
+  let confirmationLoadFailed = false;
+  let confirmationFocus: HTMLElement | undefined;
+  const needsConfirmation = $derived(trustTarget !== undefined || deleteTarget !== undefined || store.pendingNavigation !== undefined);
+
+  function restoreLoadingFocus(): void {
+    if (!(document.activeElement instanceof HTMLElement) || !document.activeElement.closest('[data-confirmation-loading]')) return;
+    (confirmationFocus?.isConnected ? confirmationFocus : document.getElementById('main'))?.focus();
+  }
+
+  function cancelUnloadedConfirmation(): void {
+    restoreLoadingFocus();
+    trustTarget = undefined;
+    deleteTarget = undefined;
+    store.cancelPendingNavigation();
+  }
+
+  function confirmationUnavailable(): void {
+    cancelUnloadedConfirmation();
+    toasts.error($t('This view could not be loaded'));
+  }
+
+  async function loadConfirmations(): Promise<void> {
+    if (confirmationLoadFailed) { confirmationUnavailable(); return; }
+    if (confirmationLoad) return confirmationLoad;
+    confirmationLoad = import('./ShellConfirmations.svelte')
+      .then((module) => {
+        restoreLoadingFocus();
+        Confirmations = module.default;
+      })
+      .catch(() => {
+        // Chromium remembers failed module URLs. Do not offer a false same-page Retry.
+        confirmationLoadFailed = true;
+        confirmationUnavailable();
+      });
+    return confirmationLoad;
+  }
+
+  $effect(() => {
+    // Observe each owner, including replacement requests while the import is
+    // pending. Menu close autofocus has already returned to its trigger here.
+    const pendingOwners = [trustTarget, deleteTarget, store.pendingNavigation];
+    if (pendingOwners.some((owner) => owner !== undefined) && !Confirmations) untrack(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && !active.closest('[data-confirmation-loading]')) confirmationFocus = active;
+      void loadConfirmations();
+    });
+  });
 
   const routeView = $derived<LazyView | undefined>(
     store.route.name === 'home' ? undefined : store.route.name === 'chat' ? 'chat' : store.route.name,
@@ -79,6 +131,11 @@
 
   function keydown(event: KeyboardEvent): void {
     if (event.defaultPrevented) return;
+    if (event.key === 'Escape' && needsConfirmation && !Confirmations) {
+      event.preventDefault();
+      cancelUnloadedConfirmation();
+      return;
+    }
     if (matchesShortcut(event, 'Mod+N')) {
       event.preventDefault();
       store.goHome();
@@ -154,6 +211,12 @@
     <a class="skip-link" href="#main">{$t('Skip to main content')}</a>
     {#if store.safeMode}
       <div class="safe-mode" role="status">{$t('Safe mode: history is read-only and agents are not started.')}</div>
+    {/if}
+    {#if needsConfirmation && !Confirmations}
+      <div class="confirmation-loading" data-confirmation-loading role="status">
+        <span>{$t('Loading…')}</span>
+        <Button size="sm" variant="ghost" onclick={cancelUnloadedConfirmation}>{$t('Cancel')}</Button>
+      </div>
     {/if}
     <div class="frame">
       {#if !narrow || drawerOpen}
@@ -237,53 +300,18 @@
     {/await}
   {/if}
 
-  <Dialog
-    open={trustTarget !== undefined}
-    title={trustTarget ? $t('Trust {0}?', [trustTarget.name]) : ''}
-    description={$t('Agents can then work on files in this folder within the permissions of each chat.')}
-    onOpenChange={(open) => {
-      if (!open && !trustBusy) trustTarget = undefined;
-    }}
-  >
-    <p class="dialog-text"><strong>{$t('Trust is not a sandbox.')}</strong> {$t('Native agent processes may access more of your computer unless their permission mode is enforced by the harness.')}</p>
-    {#if trustError}<p class="dialog-error" role="alert">{$t(trustError)}</p>{/if}
-    {#snippet footer()}
-      <Button variant="ghost" onclick={() => (trustTarget = undefined)} disabled={trustBusy}>{$t('Cancel')}</Button>
-      <Button variant="primary" onclick={() => void confirmTrust()} loading={trustBusy}>{$t('Trust folder')}</Button>
-    {/snippet}
-  </Dialog>
-
-  <Dialog
-    open={deleteTarget !== undefined}
-    title={$t('Delete chat?')}
-    description={deleteSession?.title}
-    size="sm"
-    onOpenChange={(open) => {
-      if (!open && !deleteBusy) deleteTarget = undefined;
-    }}
-  >
-    <p class="dialog-text">{$t('The chat is removed from Nano Desktop. The harness keeps its own history.')}</p>
-    {#if deleteTarget && placements.get(deleteTarget)?.worktree?.state === 'ready'}
-      <p class="dialog-text">{$t('Its worktree folder and branch stay on disk. Remove the worktree from the chat details first if you no longer need it.')}</p>
-    {/if}
-    {#snippet footer()}
-      <Button variant="ghost" onclick={() => (deleteTarget = undefined)} disabled={deleteBusy}>{$t('Cancel')}</Button>
-      <Button variant="danger" onclick={() => void confirmDelete()} loading={deleteBusy}>{$t('Delete chat')}</Button>
-    {/snippet}
-  </Dialog>
-
-  <Dialog
-    open={store.pendingNavigation !== undefined}
-    title={$t('Leave the pipeline editor?')}
-    description={$t('The draft has unsaved changes.')}
-    size="sm"
-    dismissible={false}
-  >
-    {#snippet footer()}
-      <Button variant="ghost" onclick={() => store.cancelPendingNavigation()}>{$t('Keep editing')}</Button>
-      <Button variant="danger" onclick={() => store.confirmPendingNavigation()}>{$t('Discard changes')}</Button>
-    {/snippet}
-  </Dialog>
+  {#if Confirmations}
+    <Confirmations {trustTarget} {trustBusy} {trustError} {deleteTarget} {deleteBusy}
+      deleteTitle={deleteSession?.title}
+      deleteHasWorktree={Boolean(deleteTarget && placements.get(deleteTarget)?.worktree?.state === 'ready')}
+      pendingNavigation={store.pendingNavigation !== undefined}
+      onTrustOpenChange={(open) => { if (!open && !trustBusy) trustTarget = undefined; }}
+      onDeleteOpenChange={(open) => { if (!open && !deleteBusy) deleteTarget = undefined; }}
+      cancelTrust={() => (trustTarget = undefined)} {confirmTrust}
+      cancelDelete={() => (deleteTarget = undefined)} {confirmDelete}
+      cancelNavigation={() => store.cancelPendingNavigation()}
+      confirmNavigation={() => store.confirmPendingNavigation()} />
+  {/if}
 
   <Toaster dismissLabel={$t('Dismiss')} />
 </TooltipPrimitive.Provider>
@@ -388,16 +416,13 @@
     width: min(760px, calc(100% - 48px));
     margin: var(--piui-space-12) auto;
   }
-  .dialog-text {
-    margin: 0;
+  .confirmation-loading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--piui-space-3);
+    padding: var(--piui-space-2) var(--piui-space-4);
+    border-bottom: 1px solid var(--piui-border);
     color: var(--piui-text-muted);
-    line-height: var(--piui-leading-normal);
-  }
-  .dialog-text strong {
-    color: var(--piui-text);
-  }
-  .dialog-error {
-    margin: var(--piui-space-3) 0 0;
-    color: var(--piui-danger);
   }
 </style>

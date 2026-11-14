@@ -56,7 +56,7 @@ export default defineConfig({
   plugins: [svelte(), labPluginFrames()],
   clearScreen: false,
   // Records the initial import graph separately from lazy workspace/history chunks.
-  build: { manifest: true },
+  build: { manifest: true, minify: 'terser' },
   server: {
     host: host ?? '127.0.0.1',
     port: 1420,

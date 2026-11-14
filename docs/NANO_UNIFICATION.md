@@ -898,16 +898,7 @@ executor on returning Home; prepared server image reuse does not yet include
 the vendored kernel input in its compatible-ancestor guards. No server image
 reuse or production deployment is performed or claimed by this Desktop release.
 
-## Hosted CI corrections before final packaging, 2026-11-14
-
-The merged branch passed 1392 frontend units, bridge and contract checks, and
-Rust formatting, clippy and workspace tests on Windows and Ubuntu. Full hosted
-checks then exposed an initial-asset budget failure and three editor scenarios.
-The closed model/executor pickers now defer their Command-list JavaScript while
-retaining their state, triggers, account timing and styles. The original budget
-is unchanged: final assets measure 549566 raw / 163353 gzip bytes against
-573440 / 163840. Real cold-open, close/reopen, focus, favorites and retry checks
-preserve the draft and keyboard behavior.
+## Hosted CI corrections before final packaging, 2026-11-15
 
 Svelte Flow invokes its selection callback from a tracked effect. Reads of the
 editor's selection inside that callback could restore an old inspector after a
@@ -915,20 +906,39 @@ new Script was selected or Output settings were closed. Untracking the complete
 callback removes that feedback while retaining native selection behavior. The
 original Script and repeated Output drag assertions pass without alteration.
 
-Four independent GPT-6.1 Sol/max read-only reviews examined the same frozen
-correction. All identified the production CSS retry problem: Vite remembers a
-failed dynamic stylesheet and skips it on retry. The accepted remediation keeps
-both picker and reasoning styles in the initial graph, with list code deferred.
-Three production-CSP checks verify the full stylesheet dependency closures and
-real failed JavaScript loads followed by keyboard Retry, computed styling,
-search focus and preserved drafts for both pickers. All three pass.
+The earlier 03be candidate deferred picker panels to meet the initial-asset
+budget. Edge checks passed, but the exact CI Chromium build exposed persistent
+failed module imports and lost focus after reopening. That candidate is
+superseded: model and executor pickers use their original eager implementation,
+including existing keyboard, favorites, account and draft behavior. The added
+picker loader and tests specific to its removed loading contract are removed.
 
-Evidence includes Svelte 0 errors/0 warnings, E2E types, 21 focused units,
-17 editor/lazy-picker/output Lab cases, five favorites cases and two existing
-production-CSP cases. After the stylesheet remediation, shared graph 4/4 and
-conversation 13/13 browser cases pass. Both embedded bundles were regenerated;
-all 200 normalized source hashes and five imported artifacts match. Final source
-fingerprints are graph `bb22c717ae0635a85102514e7f65ace5ae8f9820500d7774bda10d7443af3667`
-and conversation `9f270c7bb3b089fd9fe13ad0da751d96d39ec81bd4fbd50350e031112912c437`.
-Platform packages must be rebuilt from this final source; prior c16 packages
-and installed-app checks remain explicitly identified baseline evidence.
+The release instead uses pinned Terser 5.51.2 with default safe minification and
+defers the three closed shell confirmations until one is needed. Their trust,
+delete and unsaved-navigation owners and authorization callbacks remain in the
+shell. While loading, Cancel and Escape preserve the operation's previous state.
+If the module cannot load, the pending confirmation is cancelled and an error is
+shown; no trust, deletion or discard is authorized and no same-page Retry is
+advertised for Chromium's cached failure. Loaded dialogs keep their previous
+controls and keyboard behavior. The loading strip stays outside the inert main
+content and drawer scrim; focus belongs to the current pending intent even when
+that intent reuses an in-flight module import.
+
+The unchanged initial-asset gate passes at 566116 raw / 158269 gzip bytes against
+573440 / 163840. This measures asset size, not native startup time or RSS. The
+native theme proof now waits for the committed host preference and samples the
+root theme and visible shell background together. It still requires different
+light/dark colors and the same dark background after reload; product palette
+values and time bounds are unchanged. Native execution evidence is recorded
+separately from syntax and synthetic checks in the release evidence directory.
+
+The shared graph and conversation bundles were regenerated after restoring the
+picker implementations. Browser checks pass: graph 4/4 and conversation 13/13.
+All 194 normalized source hashes and five imported artifacts match. Source
+fingerprints are graph
+`437203357fa07ad9b9395d6d04a40aaf0fb43221a023a8a712dda87192ef1268`
+and conversation
+`95ed561372bf90271c15a1275a928bbce4ac58e4d7c01ec0fcc3e56ceabfa332`.
+Final review, Chromium, package and hosted-CI results are recorded under
+`evidence/nano-unification-release-20261114/`; earlier c16 and 03be package
+checks retain their original commit identity and are not final-source proof.

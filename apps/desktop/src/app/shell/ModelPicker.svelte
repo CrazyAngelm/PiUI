@@ -11,23 +11,30 @@
 </script>
 
 <script lang="ts">
-  import { Popover } from 'bits-ui';
+  import { Command, Popover } from 'bits-ui';
   import { getContext, untrack, type Snippet } from 'svelte';
+  import Brain from '@lucide/svelte/icons/brain';
+  import Heart from '@lucide/svelte/icons/heart';
+  import Lock from '@lucide/svelte/icons/lock';
+  import LogIn from '@lucide/svelte/icons/log-in';
+  import Search from '@lucide/svelte/icons/search';
+  import Sparkles from '@lucide/svelte/icons/sparkles';
+  import Zap from '@lucide/svelte/icons/zap';
   import { NANO_MODEL_PROVIDER } from '../../../../../contracts/nano-account-v1';
   import { NANO_EXTERNAL_PROVIDER_PREFIX } from '../../../../../contracts/nano-providers-v1';
   import { NANO_CHATGPT_PROVIDER_ID } from '../../../../../contracts/nano-chatgpt-v1';
   import { nanoChatGpt } from '../../host-api/nanoProviders';
   import { isNanoConnectorModel } from '../../host-api/harnessModels';
   import { t } from '../../features/locale/language';
-  import { LazyPanel } from '../../lib/ui/lazyPanel.svelte';
-  import LazyPanelStatus from '../../lib/ui/LazyPanelStatus.svelte';
+  import { Segmented, Spinner } from '../../lib/ui';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
+  import { lockCopy } from '../nano/nanoView';
   import type { WorkspaceStore } from '../workspaceStore.svelte';
   import { WORKSPACE_CONTEXT } from './context';
   import { modelFavorites } from './modelFavorites.svelte';
   import { defaultTab, favoriteKey, visibleModels, type ModelTab } from './modelPickerView';
-  import { reasoningSteps } from './reasoningSteps';
   import ReasoningControl from './ReasoningControl.svelte';
+  import { reasoningSteps } from './reasoningSteps';
 
   interface Props {
     models: readonly ModelOption[];
@@ -86,14 +93,6 @@
     onLevel = () => {},
     onFast = () => {},
   }: Props = $props();
-
-  const panel = new LazyPanel(() => import('./ModelPickerPanel.svelte'));
-  $effect(() => { if (open) untrack(() => { void panel.load(); }); });
-
-  async function manageUsage(): Promise<void> {
-    manageUsageError = false;
-    try { await nanoChatGpt({ type: 'manage-usage' }); } catch { manageUsageError = true; }
-  }
 
   const nanoGroup = '\u0000nano';
   const chatGptGroup = '\u0000chatgpt';
@@ -220,20 +219,123 @@
     {/snippet}
   </Popover.Trigger>
   <Popover.Portal>
-    <Popover.Content onOpenAutoFocus={(event) => { if (!panel.component) event.preventDefault(); }} class="piui-models" {align} {side} sideOffset={6} collisionPadding={8} style="width: {width}px">
-      {#if panel.component}
-        {@const Panel = panel.component}
-        <Panel {value} {defaultOption} {loading} {error} bind:search bind:searchInput
-          {shownTab} {tabOptions} emptyList={listed.length === 0} {groups} {favoriteSet}
-          {signInRow} {lockedModes}
-          {listKey} {changeTab} {toggleFavorite} {heading} {choose} {openAccount}>
-          {#snippet footer()}
-<div class="piui-models__tune">
+    <Popover.Content class="piui-models" {align} {side} sideOffset={6} collisionPadding={8} style="width: {width}px">
+      <span class="piui-models__streak" aria-hidden="true"></span>
+      <Command.Root label={$t('Model')} loop onkeydown={listKey}>
+        <div class="piui-models__search">
+          <Search size={14} />
+          <Command.Input class="piui-models__input" placeholder={$t('Search models')} aria-label={$t('Search models')} bind:value={search} bind:ref={searchInput} />
+          {#if loading}<Spinner size={12} />{/if}
+        </div>
+        <div class="piui-models__tabs">
+          <Segmented size="sm" label={$t('Models shown')} value={shownTab} options={tabOptions} onValueChange={changeTab} />
+        </div>
+        <Command.List class="piui-models__list">
+          <Command.Viewport>
+            <Command.Empty class="piui-models__empty">
+              {error ? $t('Could not load models') : loading ? $t('Loading models…') : shownTab === 'favorites' ? $t('No favorites yet') : $t('No models found')}
+            </Command.Empty>
+            {#if shownTab === 'favorites' && defaultOption && listed.length === 0 && !loading && !error}
+              <div class="piui-models__empty">{$t('No favorites yet')}</div>
+            {/if}
+            {#if defaultOption}
+              <Command.Item
+                class="piui-models__item"
+                value={'\u0000default'}
+                keywords={[$t('Harness default')]}
+                data-current={value === '' ? '' : undefined}
+                onSelect={() => choose('', undefined)}
+              >
+                <span class="piui-models__mark" aria-hidden="true"><Sparkles size={13} /></span>
+                <span class="piui-models__main">
+                  <span class="piui-models__name">{$t('Harness default')}</span>
+                  <span class="piui-models__id piui-models__id--plain">{$t('Use the model configured in the harness')}</span>
+                </span>
+              </Command.Item>
+            {/if}
+            {#each groups as [group, items] (group)}
+              {@const title = heading(group)}
+              <Command.Group>
+                {#if title}<Command.GroupHeading class="piui-models__heading"><span>{title}</span></Command.GroupHeading>{/if}
+                <Command.GroupItems>
+                  {#each items as model (model.key)}
+                    {@const fav = favoriteSet.has(favoriteKey(model))}
+                    <Command.Item
+                      class="piui-models__item"
+                      value={`${group}\u0000${model.key}`}
+                      keywords={[model.name, model.id]}
+                      data-current={model.key === value ? '' : undefined}
+                      data-fav={favoriteKey(model)}
+                      aria-keyshortcuts="Shift+Enter"
+                      onSelect={() => choose(model.key, model)}
+                    >
+                      <span class="piui-models__mark" aria-hidden="true"></span>
+                      <span class="piui-models__main">
+                        <span class="piui-models__name">{model.name}</span>
+                        <span class="piui-models__id">{model.id}</span>
+                      </span>
+                      <span class="piui-models__caps">
+                        {#if model.reasoning}
+                          <span class="piui-models__cap" title={$t('Supports reasoning levels')}>
+                            <Brain size={12} aria-label={$t('reasoning')} />
+                          </span>
+                        {/if}
+                        {#if model.fast}
+                          <span class="piui-models__cap piui-models__cap--fast" title={$t('Supports fast mode')}>
+                            <Zap size={12} aria-label={$t('fast')} />
+                          </span>
+                        {/if}
+                      </span>
+                      {#if fav}<span class="visually-hidden">, {$t('favorite')}</span>{/if}
+                      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (Presentational inside an option, which cannot hold a button; the keyboard path is Shift+Enter on the row.) -->
+                      <span
+                        class="piui-models__fav"
+                        class:piui-models__fav--on={fav}
+                        aria-hidden="true"
+                        title={fav ? $t('Remove from favorites (Shift+Enter)') : $t('Add to favorites (Shift+Enter)')}
+                        onmousedown={(event) => event.preventDefault()}
+                        onclick={(event) => {
+                          event.stopPropagation();
+                          toggleFavorite(model);
+                        }}
+                      >
+                        <Heart size={14} fill={fav ? 'currentColor' : 'none'} />
+                      </span>
+                    </Command.Item>
+                  {/each}
+                </Command.GroupItems>
+              </Command.Group>
+            {/each}
+            {#if signInRow}
+              <Command.Item class="piui-models__item" value={'\u0000nano-sign-in'} keywords={[$t('Sign in to use Nano'), 'nano', 'account']} onSelect={openAccount}>
+                <span class="piui-models__mark" aria-hidden="true"><LogIn size={13} /></span>
+                <span class="piui-models__main">
+                  <span class="piui-models__name">{$t('Sign in to use Nano')}</span>
+                </span>
+              </Command.Item>
+            {/if}
+            {#each lockedModes as mode (mode.id)}
+              <Command.Item class="piui-models__item" value={`nano-locked\u0000${mode.id}`} keywords={[mode.name, mode.id]} disabled>
+                <span class="piui-models__mark" aria-hidden="true"><Lock size={12} /></span>
+                <span class="piui-models__main">
+                  <span class="piui-models__name">{mode.name}</span>
+                  <span class="piui-models__id piui-models__id--plain">{$t(lockCopy(mode) ?? 'Disabled')}</span>
+                </span>
+              </Command.Item>
+            {/each}
+          </Command.Viewport>
+        </Command.List>
+      </Command.Root>
+
+      <div class="piui-models__tune">
         <ReasoningControl {levels} {level} {levelDefault} {fastAvailable} {fast} {busy} {onLevel} {onFast} />
         {#if usesChatGpt}
           <div class="piui-models__row">
             <span class="piui-models__label">{$t('Using ChatGPT plan')}</span>
-            <button type="button" class="manage-usage" onclick={manageUsage}>{$t('Manage usage')}</button>
+            <button type="button" class="manage-usage" onclick={async () => {
+              manageUsageError = false;
+              try { await nanoChatGpt({ type: 'manage-usage' }); } catch { manageUsageError = true; }
+            }}>{$t('Manage usage')}</button>
           </div>
           {#if manageUsageError}<p class="piui-models__error" role="alert">{$t('Could not open ChatGPT in your browser.')}</p>{/if}
         {:else if !tuning}
@@ -241,17 +343,12 @@
         {/if}
         {#if error}<p class="piui-models__error" role="alert">{error}</p>{/if}
       </div>
-          {/snippet}
-        </Panel>
-      {:else}
-        <LazyPanelStatus failed={panel.failed} label={$t('Model')} retry={() => void panel.load()} />
-      {/if}
     </Popover.Content>
   </Popover.Portal>
 </Popover.Root>
 
-
 <style>
+  .manage-usage { color: var(--piui-text-muted); background: transparent; border: 0; text-decoration: underline; }
   :global(.piui-models) {
     position: relative;
     z-index: var(--piui-z-dropdown);
@@ -270,12 +367,7 @@
     outline: none;
     animation: piui-pop-in var(--piui-duration-fast) var(--piui-ease-out);
   }
-  /* Keep panel styles eager: Vite does not retry failed dynamic CSS links. */
-  :global {
-
-  .piui-models .manage-usage { color: var(--piui-text-muted); background: transparent; border: 0; text-decoration: underline; }
-
-  .piui-models [data-command-root] {
+  :global(.piui-models [data-command-root]) {
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -298,7 +390,7 @@
     border-bottom: 1px solid var(--piui-border-subtle);
     color: var(--piui-text-muted);
   }
-  .piui-models__input {
+  :global(.piui-models__input) {
     flex: 1;
     min-width: 0;
     height: 38px;
@@ -308,25 +400,25 @@
     color: var(--piui-text);
   }
   /* The search always holds focus while open; the global ring would be clipped. */
-  .piui-models__input:focus-visible {
+  :global(.piui-models__input:focus-visible) {
     outline: none;
   }
-  .piui-models__input::placeholder {
+  :global(.piui-models__input::placeholder) {
     color: var(--piui-text-disabled);
   }
-  .piui-models__list {
+  :global(.piui-models__list) {
     /* Keep a few rows visible when a short window squeezes the popover. */
     min-height: 124px;
     padding: 4px;
     overflow-y: auto;
     scrollbar-width: thin;
   }
-  .piui-models__empty {
+  :global(.piui-models__empty) {
     padding: var(--piui-space-4);
     color: var(--piui-text-muted);
     text-align: center;
   }
-  .piui-models__heading {
+  :global(.piui-models__heading) {
     display: flex;
     align-items: center;
     gap: var(--piui-space-2);
@@ -337,13 +429,13 @@
     letter-spacing: 0.14em;
     text-transform: uppercase;
   }
-  .piui-models__heading::after {
+  :global(.piui-models__heading)::after {
     content: '';
     flex: 1;
     height: 1px;
     background: linear-gradient(90deg, color-mix(in srgb, var(--piui-decoration-primary) 45%, transparent), transparent);
   }
-  .piui-models__item {
+  :global(.piui-models__item) {
     position: relative;
     display: flex;
     align-items: center;
@@ -355,17 +447,17 @@
     outline: none;
     user-select: none;
   }
-  .piui-models__item[data-selected] {
+  :global(.piui-models__item[data-selected]) {
     background: var(--piui-hover);
   }
   /* Locked Nano modes stay visible but cannot be picked. */
-  .piui-models__item[data-disabled] {
+  :global(.piui-models__item[data-disabled]) {
     opacity: 0.6;
   }
-  .piui-models__item[data-current] {
+  :global(.piui-models__item[data-current]) {
     background: var(--piui-decoration-wash);
   }
-  .piui-models__item[data-current][data-selected] {
+  :global(.piui-models__item[data-current][data-selected]) {
     background: var(--piui-decoration-wash), var(--piui-hover);
   }
   /* The current model gets a slanted crimson blade instead of a checkmark. */
@@ -378,10 +470,10 @@
     height: 22px;
     color: var(--piui-text-muted);
   }
-  .piui-models__item[data-current] .piui-models__mark {
+  :global(.piui-models__item[data-current]) .piui-models__mark {
     color: var(--piui-decoration-primary);
   }
-  .piui-models__item[data-current] .piui-models__mark:empty {
+  :global(.piui-models__item[data-current]) .piui-models__mark:empty {
     width: 5px;
     margin: 0 5px 0 4px;
     background: linear-gradient(180deg, var(--piui-decoration-secondary), var(--piui-decoration-primary));
@@ -403,7 +495,7 @@
   .piui-models__name {
     font-weight: var(--piui-weight-medium, 500);
   }
-  .piui-models__item[data-current] .piui-models__name {
+  :global(.piui-models__item[data-current]) .piui-models__name {
     color: var(--piui-text);
     font-weight: var(--piui-weight-semibold);
   }
@@ -438,11 +530,11 @@
   .piui-models__tabs {
     padding: var(--piui-space-2) var(--piui-space-2) 0;
   }
-  .piui-models__tabs .piui-seg {
+  .piui-models__tabs :global(.piui-seg) {
     display: flex;
     width: 100%;
   }
-  .piui-models__tabs .piui-seg__item {
+  .piui-models__tabs :global(.piui-seg__item) {
     flex: 1;
   }
   /* The active heart follows the selected visual style. */
@@ -464,7 +556,7 @@
   .piui-models__fav--on {
     color: var(--piui-decoration-primary);
   }
-  .piui-models__fav--on svg {
+  .piui-models__fav--on :global(svg) {
     stroke: var(--piui-decoration-secondary);
   }
   .piui-models__tune {
@@ -497,7 +589,5 @@
   }
   .piui-models__error {
     color: var(--piui-danger);
-  }
-
   }
 </style>
