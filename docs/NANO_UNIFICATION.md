@@ -33,6 +33,29 @@ is not a prerequisite for the first useful releases.
 
 ## Key stages and proof
 
+Completion authorization, 2026-11-14: the requester explicitly requires the
+entire remaining unification to be finished, not a stop after another milestone.
+The current work continues from PIUI `2688f2e4` and server `43a7156c` in the same
+worktrees. Completion means shared conversation and composer presentation used
+by default with every existing user path preserved through explicit owners:
+personal/new/temporary/guest/support, group and voice; rich media/widgets,
+document preview/version access, complete-history search/paging and print;
+native controls/plugins/trust and subscription-free usefulness; declarative
+plugin visual styles as well as the built-in Nano/Chaos styles.
+
+The remaining implementation gates are rich presentation plus style extension,
+then composer/context integration and default activation. Each gate gets the
+requested four independent Sol/max read-only reviews, necessary corrections,
+focused real-owner checks and commits. Passing the first gate does not end this
+task. Platform execution, permission, document/voice services and native plugin
+frames remain owner-specific; they are not replaced by a second implementation.
+Release/merge/deployment remain outside the existing worktree authorization.
+
+Opus 5.5/max consultation was attempted through the installed subscription-only
+Claude CLI on this continuation. Subscription auth status failed before model
+invocation; no Opus recommendation is claimed. Implementation proceeds from
+current source and the coordinated owner inventories.
+
 | Stage | Deliverable | Necessary proof |
 |---|---|---|
 | Visual foundation | Nano default, selectable Chaos, persistent independent appearance, compatible plugin themes and a shared token boundary | Unit checks, keyboard and label checks in the browser/native WebView, light/dark/system and safe-mode paths, no signed-out Nano network |
@@ -571,3 +594,88 @@ Stage evidence, reviewer summaries and checksums are preserved outside build
 caches in `evidence/nano-unification-20261113/stage6/`. The shared transcript
 remains opt-in. Inline media/files, composer parity and the other migration
 boundaries above remain later work; the installed application is unchanged.
+
+### Stage 7 — rich shared presentation and declarative plugin styles
+
+The shared surface now has owner-bound image/audio/video preview, file open and
+explicit download, upload/unavailable feedback, older-page admission and complete
+history search. Current messages may be decorated by trusted owner code for safe
+links, formulas and assistant widgets. Decorations retain owner/source identity,
+state and focus, and dispose when retired. Off-window search is text-only.
+The web owner continues to own authorized attachment resolution, OfficeView and
+document versions, widget commands and history pagination. No second history or
+execution model is introduced. Markdown keeps its readable generic fallback.
+
+Plugin manifest v3 adds finite corners, ornament and font presets alongside
+existing palettes. It accepts no arbitrary CSS, script or resource URL. Existing
+v1/v2 manifests remain valid. A separate read-only plugin_style_v1 host command
+keeps plugins_v1 compatible and binds the active style to its registry revision.
+Safe mode, disabled/removed themes and appearance changes restore built-in style.
+
+Candidate checks: 40 focused TypeScript tests and 23 plugin Rust tests pass;
+Desktop/conversation Svelte checks have zero errors/warnings; E2E TypeScript,
+10 shared conversation and 4 shared graph browser scenarios pass. The native
+style test needs a rebuilt fixture with the existing startup verification step.
+Actual Blazor rich scenarios, native style proof and four read-only Sol/max
+reviews remain required before this stage is committed. Default activation and
+composer/context migration remain Stage 8, in the same authorized task.
+
+Four independent read-only gpt-6.1-sol/max reviewers completed against the same
+frozen trees: PIUI 6451702a738fc3f719abf652d8b720d11af9708c and server
+e62cd1cd82e81244aa7339b977da43ab240d2500. Reviewers: stage7_review_1 (Kuhn),
+stage7_review_2 (Newton), stage7_review_3 (Curie), stage7_review_4 (Carver).
+No source changes were made until all four final reports arrived.
+
+Confirmed corrections include exclusive legacy/shared widget ownership and
+readable undecorated fallback; exact-source/live-mount clipboard admission;
+immediate retirement of scoped widgets; source-keyed code/formula DOM; stable
+widget ordinal and canonical body across closing fences/final prose cleanup;
+owner-compatible fence grammar, rich math before emphasis and balanced links;
+verbatim user text; existing URL-only image recognition; truthful same-origin
+download capability; guarded destination navigation after widget app actions.
+The existing changed-JSON partial-to-complete widget runtime rebuild is unchanged
+in the baseline and was rejected as a separate runtime rewrite for this stage.
+
+Additional proof after review: parser/controller 26/26; Desktop and conversation
+Svelte 0 errors / 0 warnings; remediated published conversation browser 10/10.
+The parser's existing 250 ms malformed-stream budget also covers 131,072 characters
+of unfinished rich math (19 ms observation, not a new performance target).
+Final shared JS is 215.93 kB gzip, against Stage 6's 211.88 kB; no startup benchmark
+is inferred. Its source fingerprint is
+1a298bc97ea8421366d754b2b41c771c5b787513e996c0f525749b882ddfb80a.
+Graph source hashes do not include the remediated Markdown files; its current
+4/4 browser checks and imported artifact remain valid without another rebuild.
+
+Native plugin-style proof passes in actual Tauri/WebView2 157.0.0.0. Separate
+normal and safe starts verified installed-package hash/schema, real selection
+and revision-bound read, Paper/Terminal CSS, disable/base/enable restoration,
+absent safe-mode selector/style and SAFE_MODE refusal. Jobs were empty before
+owned fixture removal. This seeds installed fixture state and does not claim an
+OS package-picker test or provider turn. Root inspected the Terminal capture;
+full normal/safe reports and checksums are under
+`evidence/nano-unification-20261113/stage7-plugin-style-native/`.
+
+Corrected native host style test 1/1 and focused release clippy for piui-plugins
+and piui-desktop all-targets with -D warnings pass. The declared-style UI Lab
+keyboard/appearance/disable-enable flow passes. Automatic approval rejected
+removal of two duplicate generated evidence directories with "blocked by policy";
+they were retained without bypass; preserved evidence is outside the cache.
+Final remediated Blazor build passes with zero errors and the existing unused-field
+warning; focused server tests pass 59/59 without skips. Actual compiled Home and
+the unchanged published shared bundle pass nine rich scenario groups: decoded
+image/audio/video, exact-byte download, existing OfficeView versions, full-history
+failure/retry/paging, asynchronously resolved widget media, stable widget state and
+focus through fence completion and final prose cleanup, exact Choice preserving
+the draft, late app-action refusal after selection change, and immediate disposal
+when a widget becomes ordinary code. There are no page/fixture errors. Root
+inspected both final captures. A fixture loopback proxy supplies synthetic API,
+SSE and media bytes while forwarding compiled app/assets unchanged; clipboard is
+controlled. This does not claim provider turns, microphone or OS clipboard proof.
+Owned browser, proxy and app processes are stopped. First mount measured 298 ms
+in this fixture, not a performance target. All 188 normalized source hashes and
+five artifact hashes match. Reports, reviewer summaries and checksums are under
+`evidence/nano-unification-20261113/stage7/` outside build caches.
+
+Stage 7 is complete. Stage 8 remains active under the same authorization: common
+composer, every existing conversation owner, full print, automatic fallback and
+default activation. Completion of this milestone does not end the task.

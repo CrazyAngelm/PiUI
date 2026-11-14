@@ -61,4 +61,43 @@ describe('safe chat Markdown projection', () => {
     expect(parseMarkdown('a | b\nc | d').map((block) => block.kind)).toEqual(['paragraph']);
     expect(parseMarkdown('| a | b |\n|---|').map((block) => block.kind)).toEqual(['paragraph']);
   });
+
+  it('keeps the web owner widget body stable across supported fences and closing deltas', () => {
+    const body = '{"title":"Choice","body":[]}';
+    for (const opening of ['```hermes-ui', '   ```HERMES-UI', '\t```hermes-ui options']) {
+      const open = parseMarkdown(`${opening}\n${body}\n`, true);
+      const closed = parseMarkdown([opening, body, '   ````', 'After'].join('\n'), true);
+      expect(open).toEqual([{ kind: 'code', language: 'hermes-ui', text: body }]);
+      expect(closed[0]).toEqual(open[0]);
+      expect(closed[1]).toEqual({ kind: 'paragraph', inline: [{ kind: 'text', text: 'After' }] });
+    }
+  });
+
+  it('recognizes rich math before emphasis while keeping code and ordinary owners literal', () => {
+    expect(parseInline('$a * b * c$ and \\(x_y\\)', true)).toEqual([
+      { kind: 'math', text: '\\(a * b * c\\)', display: false },
+      { kind: 'text', text: ' and ' },
+      { kind: 'math', text: '\\(x_y\\)', display: false },
+    ]);
+    expect(parseInline('$$a*b$$', true)).toEqual([{ kind: 'math', text: '\\[a*b\\]', display: true }]);
+    expect(parseInline('`$x$`', true)).toEqual([{ kind: 'code', text: '$x$' }]);
+    expect(parseInline('$x$')).toEqual([{ kind: 'text', text: '$x$' }]);
+    expect(parseInline('\\$5 and $20', true)).toEqual([{ kind: 'text', text: '\\$5 and $20' }]);
+  });
+
+  it('retains balanced and escaped parentheses in an inert link destination', () => {
+    expect(parseInline('[Paper](https://example.invalid/Function_(math))')).toEqual([
+      { kind: 'link', label: [{ kind: 'text', text: 'Paper' }], href: 'https://example.invalid/Function_(math)' },
+    ]);
+    expect(parseInline('[Paper](https://example.invalid/a\\)b)')).toEqual([
+      { kind: 'link', label: [{ kind: 'text', text: 'Paper' }], href: 'https://example.invalid/a)b' },
+    ]);
+  });
+
+  it('keeps unfinished rich math within the existing malformed-stream render budget', () => {
+    const source = '\\('.repeat(64 * 1_024);
+    const started = performance.now();
+    expect(parseInline(source, true)).toEqual([{ kind: 'text', text: source }]);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
 });

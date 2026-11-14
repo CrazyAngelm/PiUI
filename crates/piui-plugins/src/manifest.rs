@@ -1,6 +1,6 @@
-//! `piui-plugin.json` v1 and v2: parsing and every rule the host applies
+//! `piui-plugin.json` v1, v2 and v3: parsing and every rule the host applies
 //! before a package can be reviewed. The JSON Schema of the declared version
-//! (`contracts/piui-plugin-v1.schema.json`, `piui-plugin-v2.schema.json`)
+//! (`contracts/piui-plugin-v{1,2,3}.schema.json`)
 //! checks the shape; the semantic pass checks what a schema cannot:
 //! permissions each contribution needs, unique ids, the commands status items
 //! and keybindings name, field declarations, theme colors and contrast, ACP
@@ -22,7 +22,7 @@ use crate::theme::{CONTRAST_PAIRS, contrast_ratio, parse_color};
 
 pub const MANIFEST_FILE: &str = "piui-plugin.json";
 /// The newest manifest schema version; every earlier version stays valid.
-pub const SCHEMA_VERSION: u64 = 2;
+pub const SCHEMA_VERSION: u64 = 3;
 pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 /// Default and bounds of a node type's timeout, in seconds.
 pub const DEFAULT_NODE_TIMEOUT_SECONDS: u32 = 60;
@@ -235,6 +235,39 @@ pub struct ThemeContribution {
     pub label: String,
     pub appearance: Appearance,
     pub tokens: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<VisualStyle>,
+}
+
+/// Declarative choices from the existing UI tokens. No CSS strings are accepted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StyleCorners {
+    Square,
+    Soft,
+    Round,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StyleOrnaments {
+    Plain,
+    Slanted,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StyleFont {
+    System,
+    Mono,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VisualStyle {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corners: Option<StyleCorners>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ornaments: Option<StyleOrnaments>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<StyleFont>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -497,6 +530,7 @@ pub struct ValidatedManifest {
 fn schema_validator(version: u64) -> Option<&'static jsonschema::Validator> {
     static V1: OnceLock<Option<jsonschema::Validator>> = OnceLock::new();
     static V2: OnceLock<Option<jsonschema::Validator>> = OnceLock::new();
+    static V3: OnceLock<Option<jsonschema::Validator>> = OnceLock::new();
     let (cell, text) = match version {
         1 => (
             &V1,
@@ -505,6 +539,10 @@ fn schema_validator(version: u64) -> Option<&'static jsonschema::Validator> {
         2 => (
             &V2,
             include_str!("../../../contracts/piui-plugin-v2.schema.json"),
+        ),
+        3 => (
+            &V3,
+            include_str!("../../../contracts/piui-plugin-v3.schema.json"),
         ),
         _ => return None,
     };
@@ -591,7 +629,7 @@ pub fn parse_manifest(bytes: &[u8], piui_version: &str) -> Result<ValidatedManif
         Some(_) => {
             return Err(vec![Problem::new(
                 ProblemCode::SchemaVersion,
-                "Only plugin manifest schema versions 1 and 2 are supported.",
+                "Only plugin manifest schema versions 1, 2 and 3 are supported.",
             )]);
         }
         None => {

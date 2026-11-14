@@ -27,6 +27,10 @@
     "invalid-semantic-renderer-ui.json": "ui-missing",
     "invalid-semantic-duplicate-keybinding.json": "duplicate-contribution",
     "invalid-semantic-mcp-permission.json": "permission-missing",
-    "invalid-v2-mcp-entry.json": "shape"
+    "invalid-v2-mcp-entry.json": "shape",
+    "invalid-v3-style-css.json": "shape",
+    "invalid-v3-style-field.json": "shape",
+    "invalid-v3-style-in-v2.json": "shape",
+    "invalid-v3-style-empty.json": "shape"
   }
 }

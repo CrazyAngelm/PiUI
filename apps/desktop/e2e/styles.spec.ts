@@ -96,4 +96,39 @@ test.describe('built-in styles', () => {
     await expect(page.locator('html')).toHaveAttribute('data-style', 'nano');
     expect(nanoRequests).toEqual([]);
   });
+
+  test('applies a declared plugin style and restores built-ins when its owner is disabled', async ({ lab, page }) => {
+    await lab.open();
+    await lab.openSettings();
+    const theme = page.getByLabel('Plugin theme', { exact: true });
+    await theme.focus();
+    await theme.selectOption(JSON.stringify(['example.paper-style', 'paper']));
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    await expect(page.locator('html')).toHaveAttribute('data-plugin-style', 'true');
+    const presentation = () => page.evaluate(() => {
+      const css = getComputedStyle(document.documentElement);
+      return ['radius-md', 'decoration-marker-shape', 'font-ui'].map((token) => css.getPropertyValue(`--piui-${token}`).trim());
+    });
+    await expect.poll(presentation).toEqual(['16px', 'none', '"Segoe UI Variable", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif']);
+    await theme.selectOption(JSON.stringify(['example.paper-style', 'terminal']));
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await expect.poll(async () => (await presentation()).slice(0, 2)).toEqual(['0px', 'polygon(40% 0, 100% 0, 60% 100%, 0 100%)']);
+    await expect.poll(async () => (await presentation())[2]).toContain('Cascadia Code');
+    const appearance = page.getByRole('group', { name: 'Theme', exact: true });
+    await appearance.getByRole('radio', { name: 'Light', exact: true }).press('Enter');
+    await expect(page.locator('html')).not.toHaveAttribute('data-plugin-style');
+    await expect.poll(async () => (await presentation()).slice(0, 2)).toEqual(['10px', 'none']);
+    await appearance.getByRole('radio', { name: 'Dark', exact: true }).press('Enter');
+    await expect(page.locator('html')).toHaveAttribute('data-plugin-style', 'true');
+    await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Plugins' }).click();
+    const toggle = page.getByRole('article', { name: 'Paper style', exact: true }).getByRole('switch', { name: 'Enable Paper style' });
+    await toggle.focus();
+    await page.keyboard.press('Space');
+    await expect(toggle).not.toBeChecked();
+    await expect(page.locator('html')).not.toHaveAttribute('data-plugin-style');
+    await expect.poll(async () => (await presentation()).slice(0, 2)).toEqual(['10px', 'none']);
+    await page.keyboard.press('Space');
+    await expect(toggle).toBeChecked();
+    await expect(page.locator('html')).toHaveAttribute('data-plugin-style', 'true');
+  });
 });

@@ -182,8 +182,8 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Reload panel': 'Перезагрузить панель',
   '{0} (plugin panel)': '{0} (панель плагина)',
   'Plugin theme': 'Тема плагина',
-  'Colors from an installed plugin. They apply while Nano Desktop shows their appearance.':
-    'Цвета из установленного плагина. Они действуют, пока Nano Desktop использует их вариант оформления (светлый или тёмный).',
+  'Colors and visual style from an installed plugin. They apply while Nano Desktop shows their appearance.':
+    'Цвета и визуальный стиль из установленного плагина. Они действуют, пока Nano Desktop использует их вариант оформления (светлый или тёмный).',
   'The theme did not change': 'Тема не изменилась',
   'The template could not be opened': 'Не удалось открыть шаблон',
 
@@ -242,7 +242,7 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'The default of field “{0}” is not an allowed value.': 'Значение по умолчанию поля «{0}» недопустимо.',
   'The manifest is larger than 64 KiB.': 'Манифест больше 64 КиБ.',
   'piui-plugin.json is not valid JSON.': 'piui-plugin.json — некорректный JSON.',
-  'Only plugin manifest schema versions 1 and 2 are supported.': 'Поддерживаются только версии 1 и 2 схемы манифеста плагина.',
+  'Only plugin manifest schema versions 1, 2 and 3 are supported.': 'Поддерживаются только версии 1, 2 и 3 схемы манифеста плагина.',
   '“{0}” names a command the plugin does not contribute.': '«{0}» указывает на команду, которой нет в плагине.',
   'Two keybindings use “{0}”.': 'Два сочетания клавиш используют «{0}».',
   'The plugin contributes renderers but has no ui.entry page.': 'Плагин добавляет отображения, но у него нет страницы ui.entry.',

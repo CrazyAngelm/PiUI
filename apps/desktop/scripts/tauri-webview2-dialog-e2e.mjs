@@ -12,6 +12,7 @@ import { startComposerProvider } from './composer-provider.mjs';
 import { runShellWebview2Proof } from './shell-webview2-e2e.mjs';
 import { runAvatarWebview2Proof } from './avatar-webview2-e2e.mjs';
 import { runConversationWebview2Proof } from './conversation-webview2-e2e.mjs';
+import { runPluginStyleWebview2Proof, seedPluginStyleFixture } from './plugin-style-webview2-e2e.mjs';
 
 // Default: the new shell proof. `--agent-api` runs the agent API proof with
 // the native workspace fixture instead.
@@ -20,6 +21,8 @@ const SHELL_SCENARIO = !AGENT_API_SCENARIO;
 const SAFE_ONLY = process.argv.includes('--safe-only');
 const AVATAR_SCENARIO = process.argv.includes('--avatar');
 const CONVERSATION_SCENARIO = process.argv.includes('--conversation');
+const PLUGIN_STYLE_SCENARIO = process.argv.includes('--plugin-style');
+if (PLUGIN_STYLE_SCENARIO && (CONVERSATION_SCENARIO || AVATAR_SCENARIO || AGENT_API_SCENARIO)) throw new Error('--plugin-style is an independent normal or safe-start proof.');
 if (CONVERSATION_SCENARIO && (AVATAR_SCENARIO || AGENT_API_SCENARIO || SAFE_ONLY)) throw new Error('--conversation is an independent normal-start proof.');
 if (SAFE_ONLY && AGENT_API_SCENARIO) throw new Error('Choose either --safe-only or --agent-api.');
 if (AVATAR_SCENARIO && AGENT_API_SCENARIO) throw new Error('Choose either --avatar or --agent-api.');
@@ -895,6 +898,7 @@ async function runIsolatedHarness() {
       commandBoundMs: COMMAND_BOUND_MS,
     });
     const fixture = createIsolatedFixture(fixtureRoot);
+    if (PLUGIN_STYLE_SCENARIO) seedPluginStyleFixture(fixture, REPOSITORY_ROOT);
     if (AGENT_API_SCENARIO) composerProvider = await startComposerProvider();
     // Cargo writes only to the controller's canonical cargo target. The
     // fixture stays a run directory below <repo>/target/piui-e2e.
@@ -1063,12 +1067,13 @@ wire_api = "responses"
       normalResult = AGENT_API_SCENARIO ? { checks: [], cleanup: {workspaceId: apiWorkspace} }
         : AVATAR_SCENARIO ? await runAvatarWebview2Proof({ automation, safe: false })
         : CONVERSATION_SCENARIO ? await runConversationWebview2Proof({ automation, captureScreenshot: workspaceCallbacks.captureScreenshot, screenshotPath: join(fixtureRoot, 'workspace-screenshots', 'shared-conversation.png') })
+        : PLUGIN_STYLE_SCENARIO ? await runPluginStyleWebview2Proof({ automation, safe: false, fixture, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot })
         : await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
             harness: { fixture, ownedChild: app }, mode: 'normal',
             commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot });
       if (AGENT_API_SCENARIO) normalResult.checks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, automation, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
 
-      if (!AVATAR_SCENARIO && !CONVERSATION_SCENARIO) {
+      if (!AVATAR_SCENARIO && !CONVERSATION_SCENARIO && !PLUGIN_STYLE_SCENARIO) {
       // A separate contained process proves that safe mode prevents the same
       // project from exposing a live runtime surface.
       await terminateContained(app, 'Tauri WebView2');
@@ -1092,6 +1097,7 @@ wire_api = "responses"
     }
     const normalChecks = normalResult.checks;
     const safeResult = AGENT_API_SCENARIO || CONVERSATION_SCENARIO ? {checks: []}
+      : PLUGIN_STYLE_SCENARIO ? (SAFE_ONLY ? await runPluginStyleWebview2Proof({ automation, safe: true, fixture, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot }) : { checks: [] })
       : AVATAR_SCENARIO ? (SAFE_ONLY ? await runAvatarWebview2Proof({ automation, safe: true }) : { checks: [] })
       : await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
           harness: { fixture, ownedChild: app }, mode: 'safe', freshSafe: SAFE_ONLY,
@@ -1102,7 +1108,7 @@ wire_api = "responses"
     passReport = {
       status: 'pass',
       target: 'isolated Tauri WebView2 dev harness',
-      scenario: CONVERSATION_SCENARIO ? 'shared-conversation-native-and-cloud-presentation' : AVATAR_SCENARIO ? (SAFE_ONLY ? 'avatar-safe-clean-start' : 'avatar-signed-out-and-synthetic-renderer') : SAFE_ONLY ? 'shell-safe-clean-start' : AGENT_API_SCENARIO ? 'agent-api-v1' : 'shell-default-view',
+      scenario: PLUGIN_STYLE_SCENARIO ? (SAFE_ONLY ? 'plugin-style-safe-clean-start' : 'plugin-style-native-owner') : CONVERSATION_SCENARIO ? 'shared-conversation-native-and-cloud-presentation' : AVATAR_SCENARIO ? (SAFE_ONLY ? 'avatar-safe-clean-start' : 'avatar-signed-out-and-synthetic-renderer') : SAFE_ONLY ? 'shell-safe-clean-start' : AGENT_API_SCENARIO ? 'agent-api-v1' : 'shell-default-view',
       native: normalResult.native,
       timings: { normal: normalResult.timings, safe: safeResult.timings },
       ownedWindowMeasurements,

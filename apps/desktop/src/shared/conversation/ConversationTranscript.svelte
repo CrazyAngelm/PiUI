@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, tick, type Snippet } from 'svelte';
+  import { onDestroy, tick, untrack, type Snippet } from 'svelte';
   import Route from '@lucide/svelte/icons/route';
   import ArrowDown from '@lucide/svelte/icons/arrow-down';
   import Copy from '@lucide/svelte/icons/copy';
@@ -13,8 +13,9 @@
   import ImageIcon from '@lucide/svelte/icons/image';
   import { useTranslation } from '../../features/locale/context';
   import { useConversationPresentation } from './context';
-  import type { ConversationAttachment, ConversationMessageControls, ConversationMessageAction } from '../../../../../contracts/conversation-presentation-v1';
+  import type { ConversationAttachment, ConversationMessageControls, ConversationMessageAction, ConversationMedia, ConversationMessagePresentation, ConversationOwner } from '../../../../../contracts/conversation-presentation-v1';
   import MessageControls from './MessageControls.svelte';
+  import AttachmentCard from './AttachmentCard.svelte';
   const t = useTranslation();
   const presentation = useConversationPresentation();
   import { splitImageMarkers } from '../../app/chat/composer/mentions';
@@ -42,6 +43,10 @@
     language?: 'en' | 'ru';
     attachments?: readonly ConversationAttachment[];
     onOpenAttachment?: (id: string) => Promise<void>;
+    onDownloadAttachment?: (id: string) => Promise<void>;
+    resolveAttachment?: (id: string) => Promise<ConversationMedia>;
+    messagePresentation?: readonly ConversationMessagePresentation[];
+    decorateMessage?: ConversationOwner['decorateMessage'];
     messageControls?: readonly ConversationMessageControls[];
     onMessageAction?: (id: string, action: ConversationMessageAction) => Promise<void>;
     busyMessageActions?: Readonly<Record<string, boolean>>;
@@ -67,6 +72,10 @@
     language = 'en',
     attachments = [],
     onOpenAttachment,
+    onDownloadAttachment,
+    resolveAttachment,
+    messagePresentation = [],
+    decorateMessage,
     messageControls,
     onMessageAction,
     busyMessageActions = {},
@@ -104,6 +113,13 @@
   const groupBlocks = createTimelineGrouper();
   const items = $derived(groupBlocks(blocks));
   const controlsByBlock = $derived(new Map(messageControls?.map(item => [item.blockId, item])));
+  const appearanceByBlock = $derived(new Map(messagePresentation.map(item => [item.blockId, item])));
+  const decorator = untrack(() => decorateMessage);
+  function decorate(node: HTMLElement, block: TimelineBlock) {
+    const controller = new AbortController();
+    const mounted = decorator?.(node, block, controller.signal);
+    return { update(next: TimelineBlock) { mounted?.update(next); }, destroy() { controller.abort(); mounted?.dispose(); } };
+  }
   const attachmentsByBlock = $derived.by(() => {
     const grouped = new Map<string, ConversationAttachment[]>();
     for (const attachment of attachments) {
@@ -117,7 +133,16 @@
   const visible = $derived(hidden > 0 ? items.slice(hidden) : items);
   // A window-only owner keeps publishing streaming/paged snapshots. Search those
   // current blocks; only an explicit full-history read has its own snapshot.
-  const searchSource = $derived(readHistory ? searchBlocks : blocks);
+  const searchSource = $derived.by(() => {
+    if (!readHistory) return blocks;
+    const history = new Map(searchBlocks.map(block => [block.id, block]));
+    for (const block of blocks) {
+      // Keep saved full text when the native live projection is truncated, but
+      // follow complete/live messages as the owner publishes their newer value.
+      if (!block.truncated || !history.has(block.id)) history.set(block.id, block);
+    }
+    return [...history.values()];
+  });
   const matches = $derived(
     query.trim()
       ? searchSource.filter((block) => `${block.text ?? ''} ${block.safeSummary ?? ''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
@@ -338,11 +363,6 @@
     }
   }
 
-  async function openAttachment(id: string): Promise<void> {
-    try { await onOpenAttachment?.(id); }
-    catch { if (!disposed) presentation.notify('error', $t('Could not open attachment.')); }
-  }
-
   function time(value: string | undefined): string {
     return value ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
   }
@@ -352,7 +372,7 @@
   {#if files.length}
     <ul class="attachments" aria-label={$t('Attachments')}>
       {#each files as attachment (attachment.id)}
-        <li>{#if onOpenAttachment}<Button size="sm" variant="ghost" onclick={() => void openAttachment(attachment.id)}>{attachment.label}</Button>{:else}<span>{attachment.label}</span>{/if}</li>
+        <li><AttachmentCard {attachment} open={onOpenAttachment} download={onDownloadAttachment} resolve={resolveAttachment} /></li>
       {/each}
     </ul>
   {/if}
@@ -392,6 +412,7 @@
       </span>
       <IconButton size="sm" label={$t('Previous match')} disabled={!matches.length} onclick={() => (match = (currentMatch - 1 + matches.length) % matches.length)}><ChevronUp /></IconButton>
       <IconButton size="sm" label={$t('Next match')} disabled={!matches.length} onclick={() => (match = (currentMatch + 1) % matches.length)}><ChevronDown /></IconButton>
+      {#if readHistory}<Button size="sm" variant="ghost" disabled={searchBusy} onclick={() => void refreshSearch()}>{$t('Refresh search')}</Button>{/if}
       <IconButton size="sm" label={$t('Close search')} onclick={closeSearch}><X /></IconButton>
     </div>
     {#if searchError}<p class="search__error" role="alert">{$t(searchError)}</p>{/if}
@@ -431,8 +452,10 @@
           </div>
         {:else}
           {@const block = item.block}
+          {@const appearance = appearanceByBlock.get(block.id)}
           <div class="item" class:item--controls={controlsByBlock.has(block.id)} data-timeline-block={block.id}>
-            {@render attachmentList(attachmentsByBlock.get(block.id) ?? [])}
+            {#if appearance?.author}<div class="message-author">{appearance.author}</div>{/if}
+            {#if appearance?.note}<p class="message-note">{appearance.note}</p>{/if}
             {#if block.kind === 'user'}
               <!-- Bridges list a message's images as trailing `[image]` lines; bytes never reach the transcript. -->
               {@const rawText = block.text ?? block.safeSummary ?? ''}
@@ -445,7 +468,11 @@
                 </details>
               {/each}
               <div class="user">
-                {#if user.text || !user.images}<MarkdownContent source={user.text} />{/if}
+                {#if user.text || !user.images}
+                  <div class="message-markdown" use:decorate={block}>
+                    {#if appearance?.literal}<p class="literal">{user.text}</p>{:else}<MarkdownContent source={user.text} rich={!!decorator} />{/if}
+                  </div>
+                {/if}
                 {#if user.images}
                   <ul class="user__images" aria-label={$t('Attached images')}>
                     {#each Array.from({ length: user.images }, (_, index) => index) as index (index)}
@@ -457,7 +484,9 @@
             {:else if block.kind === 'assistant'}
               <article class="assistant" class:assistant--end={turnEnds.has(block.id)} class:assistant--failed={block.status === 'failed'} class:assistant--stopped={block.status === 'interrupted'}>
                 {#if block.text}
-                  <MarkdownContent source={fullAnswers[block.id] ?? block.text} />
+                  <div class="message-markdown" use:decorate={block}>
+                    {#if appearance?.literal}<p class="literal">{block.text}</p>{:else}<MarkdownContent source={fullAnswers[block.id] ?? block.text} rich={!!decorator} />{/if}
+                  </div>
                 {:else if block.safeSummary}
                   <p class="muted">{block.safeSummary}</p>
                 {/if}
@@ -499,6 +528,7 @@
                 {#if block.text}<MarkdownContent source={block.text} compact={true} />{:else}<p class="muted">{block.safeSummary ?? $t('This session event is not supported by a richer renderer yet.')}</p>{/if}
               </details>
             {/if}
+            {@render attachmentList(attachmentsByBlock.get(block.id) ?? [])}
             {@render messageFooter(block)}
           </div>
         {/if}
@@ -513,6 +543,9 @@
 </div>
 
 <style>
+  .literal { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+  .message-author { color: var(--piui-text-muted); font-size: var(--piui-text-sm); font-weight: 600; margin-bottom: var(--piui-space-2); }
+  .message-note { color: var(--piui-text-muted); font-size: var(--piui-text-xs); }
   .message-footer { margin-bottom: var(--piui-space-3); }
   .message-footer--user { display: flex; flex-direction: column; align-items: flex-end; }
   .item--controls > .user, .item--controls > .assistant { margin-bottom: var(--piui-space-1); }

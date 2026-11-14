@@ -128,6 +128,33 @@ fn version_two_adds_status_items_keybindings_and_renderers() {
 }
 
 #[test]
+fn version_three_roundtrips_styles_and_preserves_earlier_manifests() {
+    use crate::manifest::{StyleCorners, StyleFont, StyleOrnaments};
+    for name in [
+        "valid-minimal.json",
+        "valid-full.json",
+        "valid-v2.json",
+        "valid-v3.json",
+    ] {
+        let parsed = parse_manifest(&fixture(name), PIUI).expect(name);
+        let encoded = serde_json::to_vec(&parsed.manifest).expect("serialize");
+        let decoded = parse_manifest(&encoded, PIUI).expect("round trip");
+        assert_eq!(
+            serde_json::to_value(parsed.manifest).expect("value"),
+            serde_json::to_value(decoded.manifest).expect("value")
+        );
+    }
+    let v3 = parse_manifest(&fixture("valid-v3.json"), PIUI).expect("v3");
+    let style = v3.manifest.contributes.themes[0]
+        .style
+        .as_ref()
+        .expect("style");
+    assert_eq!(style.corners, Some(StyleCorners::Round));
+    assert_eq!(style.ornaments, Some(StyleOrnaments::Plain));
+    assert_eq!(style.font, Some(StyleFont::System));
+}
+
+#[test]
 fn invalid_fixtures_fail_with_the_shared_first_code() {
     let expected: Value =
         serde_json::from_slice(&fixture("expected.json")).expect("expected codes");

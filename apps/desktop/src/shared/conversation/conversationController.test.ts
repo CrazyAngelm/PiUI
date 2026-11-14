@@ -103,6 +103,61 @@ describe('explicit conversation owner boundary', () => {
     expect(() => new ConversationController({ identity }, unknownBlock)).toThrow('Message controls');
   });
 
+  it('binds media and download authority to the displayed owner and current resource', async () => {
+    const media = deferred<{ src: string }>();
+    const downloadAttachment = vi.fn(async () => {});
+    const view = snapshot(); view.attachments[0] = { ...view.attachments[0]!, downloadable: true };
+    const controller = new ConversationController({ identity, resolveAttachment: () => media.promise, downloadAttachment }, view);
+    const ports = controller.bindAttachments();
+    await ports.download('file');
+    expect(downloadAttachment).toHaveBeenCalledOnce();
+    const resolution = expect(ports.resolve('file')).rejects.toMatchObject({ name: 'AbortError' });
+    controller.setOwner({ identity, downloadAttachment }, view);
+    await resolution;
+    await expect(ports.download('file')).rejects.toMatchObject({ name: 'AbortError' });
+    media.resolve({ src: 'https://example.invalid/old.png' });
+    expect(downloadAttachment).toHaveBeenCalledOnce();
+    const fresh = controller.bindAttachments();
+    controller.update(identity, { ...view, attachments: [{ ...view.attachments[0]!, openable: false }] });
+    await expect(fresh.open('file')).rejects.toThrow('cannot be opened yet');
+    controller.update(identity, { ...view, attachments: [] });
+    await expect(fresh.resolve('file')).rejects.toThrow('no longer available');
+  });
+
+  it('shares pending paging admission and refuses an old rendered pager after ABA', async () => {
+    const page = deferred<void>();
+    const loadOlder = vi.fn(() => page.promise);
+    const view = { ...snapshot(), olderAvailable: true };
+    const controller = new ConversationController({ identity, loadOlder }, view);
+    const old = controller.bindLoadOlder();
+    const first = old(); await old();
+    expect(loadOlder).toHaveBeenCalledOnce();
+    controller.setOwner({ identity, loadOlder }, view);
+    await first; await old();
+    expect(loadOlder).toHaveBeenCalledOnce();
+    page.resolve();
+    await controller.bindLoadOlder()();
+    expect(loadOlder).toHaveBeenCalledTimes(2);
+  });
+
+  it('disposes trusted message decorations immediately on owner retirement', () => {
+    const dispose = vi.fn(); const update = vi.fn();
+    const decorateMessage = vi.fn(() => ({ dispose, update }));
+    const view = snapshot();
+    const controller = new ConversationController({ identity, decorateMessage }, view);
+    const port = controller.bindMessageDecoration();
+    const abort = new AbortController();
+    const decoration = port({} as HTMLElement, view.blocks[1]!, abort.signal);
+    decoration?.update({ ...view.blocks[1]!, text: 'new stream' });
+    expect(update).toHaveBeenCalledOnce();
+    controller.setOwner({ identity, decorateMessage }, view);
+    expect(dispose).toHaveBeenCalledOnce();
+    decoration?.update(view.blocks[1]!); decoration?.dispose();
+    port({} as HTMLElement, view.blocks[1]!, abort.signal);
+    expect(update).toHaveBeenCalledOnce(); expect(dispose).toHaveBeenCalledOnce();
+    expect(decorateMessage).toHaveBeenCalledOnce();
+  });
+
   it.each(['native', 'cloud'] as const)('routes history, attachments and approvals only to its %s owner', async location => {
     const view = snapshot();
     const owner: ConversationOwner = { identity: { ...identity, location }, readHistory: vi.fn(async () => view.blocks), openAttachment: vi.fn(async () => {}), respond: vi.fn(async () => {}) };

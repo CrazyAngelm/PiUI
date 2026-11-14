@@ -348,6 +348,24 @@ the authority; `apps/desktop/src/host-api/pluginManifest.ts` and
 `invalid-semantic-*` only the semantic rules, with the host's first problem
 code in `expected.json`).
 
+Manifest v3 (`piui-plugin-v3.schema.json`, generated validator and TypeScript
+types) retains v1/v2 imports unchanged and adds optional `themes[].style`.
+It is a nonempty, unknown-field-rejecting object of enumerated corners
+(`square/soft/round`), ornaments (`plain/slanted`) and font (`system/mono`).
+The renderer maps these to existing tokens; the manifest supplies no CSS or
+numeric values. Shared v3 and invalid-style fixtures exercise both Rust and
+TypeScript; all three accepted versions round-trip in the host.
+
+`plugin-style-v1.ts` defines the separate read-only
+`plugin_style_v1({request:{}})` command. Its protocol, registry revision,
+optional active theme identity and optional declarative style come from one
+host snapshot. Safe mode and inactive/missing plugins return neither theme
+nor style; active v1/v2 palettes return the identity without a style. The
+request refuses unknown fields. Selection still uses `plugins_v1.setTheme`,
+so existing registry/event payloads and stored palette selections do not
+change. The UI applies a response only to its matching revision/identity and
+removes overrides on owner or appearance changes.
+
 `plugins-v1.ts` is the host protocol of Settings → Plugins and every surface
 plugins contribute to: `plugins_v1` (list, pick — the host opens the native
 picker, the WebView never sends a path —, install the reviewed staging id and

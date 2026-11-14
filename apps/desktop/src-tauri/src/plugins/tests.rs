@@ -450,6 +450,91 @@ fn disable_and_remove_stop_contributions_and_delete_only_piui_copies() {
 }
 
 #[test]
+fn visual_style_read_tracks_selection_revision_reload_safe_mode_and_removal() {
+    use super::api::{PluginStyleRequest, style_view};
+    let fixture = Fixture::new("visual-style", false);
+    let id = fixture.install(ReviewSource::Folder, &example("paper-style"));
+    fixture
+        .plugins
+        .set_theme(
+            fixture.plugins.revision(),
+            Some((id.clone(), "paper".into())),
+        )
+        .expect("select style");
+    let selected = style_view(&fixture.plugins).expect("style");
+    assert_eq!(selected.revision, fixture.plugins.revision());
+    assert_eq!(selected.theme.as_ref().expect("theme").theme_id, "paper");
+    assert_eq!(
+        serde_json::to_value(selected.style).expect("style"),
+        json!({"corners":"round", "ornaments":"plain", "font":"system"})
+    );
+    assert!(
+        serde_json::to_value(fixture.entry(&id)).expect("entry")["contributes"]["themes"][0]
+            .get("style")
+            .is_none()
+    );
+    let reopened =
+        PluginsState::open(&fixture.root.join("app-data"), false, PIUI).expect("reload host");
+    let acp = crate::acp_agents::AcpAgents::open(&fixture.root.join("acp")).expect("acp");
+    assert!(
+        style_view(&reopened)
+            .expect("unverified style")
+            .style
+            .is_none()
+    );
+    reopened.verify(&acp);
+    assert!(style_view(&reopened).expect("reload style").style.is_some());
+    reopened.begin_shutdown();
+    let safe = PluginsState::open(&fixture.root.join("app-data"), true, PIUI).expect("safe host");
+    safe.verify(&acp);
+    let hidden = style_view(&safe).expect("safe style");
+    assert!(hidden.theme.is_none() && hidden.style.is_none());
+    safe.begin_shutdown();
+    fixture
+        .plugins
+        .set_enabled(fixture.plugins.revision(), &id, false)
+        .expect("disable");
+    assert!(
+        style_view(&fixture.plugins)
+            .expect("disabled style")
+            .style
+            .is_none()
+    );
+    fixture
+        .plugins
+        .set_enabled(fixture.plugins.revision(), &id, true)
+        .expect("enable");
+    assert!(
+        style_view(&fixture.plugins)
+            .expect("enabled style")
+            .style
+            .is_some()
+    );
+    fixture
+        .plugins
+        .remove(fixture.plugins.revision(), &id)
+        .expect("remove");
+    assert!(
+        style_view(&fixture.plugins)
+            .expect("removed style")
+            .style
+            .is_none()
+    );
+    let palette = fixture.install(ReviewSource::Folder, &example("midnight-theme"));
+    fixture
+        .plugins
+        .set_theme(
+            fixture.plugins.revision(),
+            Some((palette, "midnight".into())),
+        )
+        .expect("palette");
+    let legacy = style_view(&fixture.plugins).expect("legacy");
+    assert!(legacy.theme.is_some() && legacy.style.is_none());
+    assert!(serde_json::from_value::<PluginStyleRequest>(json!({"css":"body{}"})).is_err());
+    assert!(serde_json::from_value::<PluginStyleRequest>(json!({})).is_ok());
+}
+
+#[test]
 fn development_plugins_run_in_place_and_permission_changes_need_a_review() {
     let fixture = Fixture::new("development", false);
     let folder = fixture.copy("hello-command");

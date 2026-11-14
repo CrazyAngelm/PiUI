@@ -3,11 +3,17 @@
   const t = useTranslation();
   import { parseMarkdown, type InlineNode } from './markdown';
 
-  export let source: string;
-  export let compact = false;
+  let { source, compact = false, rich = false }: { source: string; compact?: boolean; rich?: boolean } = $props();
 
-  let copiedCode: string | undefined;
-  $: parsed = parseMarkdown(source);
+  let copiedCode = $state<string | undefined>();
+  const parsed = $derived.by(() => {
+    let widget = 0;
+    return parseMarkdown(source, rich).map((block, index) => ({ block,
+      // Final owner cleanup can remove prose before an unchanged widget. Its
+      // DOM (and focused controls) belongs to its widget ordinal, not that prose.
+      key: rich && block.kind === 'code' && block.language === 'hermes-ui' ? `widget:${widget++}` : `block:${index}`,
+    }));
+  });
 
   async function copyCode(value: string): Promise<void> {
     try {
@@ -36,8 +42,10 @@
       <del>{@render inline(node.children)}</del>
     {:else if node.kind === 'code'}
       <code class="inline-code">{node.text}</code>
+    {:else if node.kind === 'math'}
+      {#key node.text}<span class="math" class:math--display={node.display}>{node.text}</span>{/key}
     {:else if node.kind === 'link'}
-      <span class="safe-link" title={node.href}>{@render inline(node.label)}</span>
+      <span class="safe-link" title={node.href} data-link-url={rich ? node.href : undefined}>{@render inline(node.label)}</span>
     {:else}
       {node.text}
     {/if}
@@ -45,7 +53,7 @@
 {/snippet}
 
 <div class:compact class="markdown-content">
-  {#each parsed as block}
+  {#each parsed as { block, key } (key)}
     {#if block.kind === 'heading'}
       {#if block.depth === 1}<h1>{@render inline(block.inline)}</h1>
       {:else if block.depth === 2}<h2>{@render inline(block.inline)}</h2>
@@ -56,8 +64,17 @@
     {:else if block.kind === 'code'}
       <figure class="code-block">
         <figcaption><span>{languageLabel(block.language)}</span><button type="button" onclick={() => void copyCode(block.text)} aria-label={$t("Copy {0} code", [languageLabel(block.language)])}>{copiedCode === block.text ? $t('Copied') : $t('Copy')}</button></figcaption>
-        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-        <pre tabindex="0" role="region" aria-label={`${languageLabel(block.language)} code`}><code>{block.text}</code></pre>
+        {#if rich && block.language === 'hermes-ui'}
+          <!-- Widgets append their own container but do not replace this source node. -->
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <pre tabindex="0" role="region" aria-label={`${languageLabel(block.language)} code`}><code class="language-hermes-ui">{block.text}</code></pre>
+        {:else}
+          {#key rich ? `${block.language ?? ''}:${block.text}` : block.language}
+            <!-- A highlighter may replace the code's children. Changed source owns a fresh node. -->
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <pre tabindex="0" role="region" aria-label={`${languageLabel(block.language)} code`}><code class={rich && block.language ? `language-${block.language}` : undefined}>{block.text}</code></pre>
+          {/key}
+        {/if}
       </figure>
     {:else if block.kind === 'quote'}
       <blockquote><p>{@render inline(block.inline)}</p></blockquote>

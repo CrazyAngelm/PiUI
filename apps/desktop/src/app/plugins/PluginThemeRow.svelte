@@ -51,7 +51,7 @@
   <div class="row">
     <div>
       <strong><label for="plugin-theme">{$t('Plugin theme')}</label></strong>
-      <small>{$t('Colors from an installed plugin. They apply while Nano Desktop shows their appearance.')}</small>
+      <small>{$t('Colors and visual style from an installed plugin. They apply while Nano Desktop shows their appearance.')}</small>
     </div>
     <select id="plugin-theme" class="select" value={selected} disabled={busy} onchange={(event) => void choose(event.currentTarget.value)}>
       <option value="">{$t('None')}</option>

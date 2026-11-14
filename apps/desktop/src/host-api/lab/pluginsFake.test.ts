@@ -48,6 +48,7 @@ describe('UI Lab plugin host', () => {
     expect(registry.plugins.map((plugin) => [plugin.id, plugin.active])).toEqual([
       ['example.hello-command', true],
       ['example.midnight-theme', true],
+      ['example.paper-style', true],
       ['example.pipeline-pack', true],
       ['example.status-tools', true],
       ['example.tool-cards', true],
@@ -129,6 +130,29 @@ describe('UI Lab plugin host', () => {
     expect(entry(reloaded.registry, 'lab.dev-notes').log.at(-1)?.event).toBe('reloaded');
     // Installed plugins are not reloaded from a folder.
     expect(await rejection(plugins(host, { type: 'reload', expectedRevision: reloaded.registry.revision, id: 'lab.word-count' }))).toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('reads the selected style through its versioned command and removes inactive contributions', async () => {
+    const host = labHost();
+    const read = () => host.invoke('plugin_style_v1', { request: {} });
+    let { registry } = await plugins(host);
+    expect(await read()).toEqual({ protocol: 1, revision: registry.revision });
+    const theme = { pluginId: 'example.paper-style', themeId: 'paper' };
+    registry = (await plugins(host, { type: 'setTheme', expectedRevision: registry.revision, theme })).registry;
+    expect(await read()).toEqual({ protocol: 1, revision: registry.revision, theme, style: { corners: 'round', ornaments: 'plain', font: 'system' } });
+    // The existing registry wire shape remains palettes-only.
+    expect(entry(registry, theme.pluginId).contributes.themes[0]).not.toHaveProperty('style');
+    registry = (await plugins(host, { type: 'setEnabled', expectedRevision: registry.revision, id: theme.pluginId, enabled: false })).registry;
+    expect(await read()).toEqual({ protocol: 1, revision: registry.revision });
+    registry = (await plugins(host, { type: 'setEnabled', expectedRevision: registry.revision, id: theme.pluginId, enabled: true })).registry;
+    expect(await read()).toMatchObject({ theme, style: { corners: 'round' } });
+    registry = (await plugins(host, { type: 'remove', expectedRevision: registry.revision, id: theme.pluginId })).registry;
+    expect(await read()).toEqual({ protocol: 1, revision: registry.revision });
+    registry = (await plugins(host, { type: 'setTheme', expectedRevision: registry.revision, theme: { pluginId: 'example.midnight-theme', themeId: 'midnight' } })).registry;
+    expect(await read()).toEqual({ protocol: 1, revision: registry.revision, theme: registry.activeTheme });
+    const safe = labHost('safe');
+    expect(await safe.invoke('plugin_style_v1', { request: {} })).not.toHaveProperty('style');
+    expect(await rejection(host.invoke('plugin_style_v1', { request: { css: 'body{}' } }))).toBeDefined();
   });
 
   it('checks settings, keeps panels to their permissions and switches plugins off and on', async () => {

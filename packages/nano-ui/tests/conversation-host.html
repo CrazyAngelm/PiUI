@@ -50,6 +50,30 @@
       if (!fullHistory) delete current.readHistory;
       handle = mountConversation(document.getElementById('conversation'), { contractVersion: 1, language: 'en', appearance: 'light', agentLabel: 'Agent', owner: current, snapshot: view });
     },
+    async mountRich() {
+      await handle?.dispose(); log.length = 0; held.clear(); waits.clear(); failures.clear();
+      current = owner('cloud', 'rich');
+      current.resolveAttachment = (id, signal) => operation('media', current.identity, signal, id,
+        {src:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j4FcAAAAASUVORK5CYII='});
+      current.downloadAttachment = (id, signal) => operation('download', current.identity, signal, id);
+      current.loadOlder = async signal => {
+        await operation('older', current.identity, signal);
+        view = {...view, olderAvailable:false, blocks:[{id:'earlier',kind:'assistant',text:'Earlier history',status:'complete'},...view.blocks]};
+        handle.update(current.identity,view);
+      };
+      current.decorateMessage = (root, block, signal) => {
+        if(block.id !== 'answer') return;
+        const input=document.createElement('input');input.setAttribute('aria-label','Owner widget');root.append(input);
+        log.push({name:'decorated',...current.identity});
+        signal.addEventListener('abort',()=>log.push({name:'decoration-abort'}),{once:true});
+        return {update(){log.push({name:'decoration-update'});},dispose(){input.remove();log.push({name:'decoration-dispose'});}};
+      };
+      view={...snapshot('rich'),approvals:[],olderAvailable:true,
+        presentation:[{blockId:'user',literal:true},{blockId:'answer',author:'Cloud author'}],
+        attachments:[{id:'picture',blockId:'answer',label:'Picture',presentation:'image',downloadable:true},
+          {id:'missing',blockId:'answer',label:'Unavailable file',unavailable:true,detail:'Upload interrupted',progress:25}]};
+      handle=mountConversation(document.getElementById('conversation'),{contractVersion:1,language:'en',agentLabel:'Agent',owner:current,snapshot:view});
+    },
     stream() { view = { ...view, blocks: view.blocks.map(block => block.id === 'answer' ? { ...block, text: 'Streamed final answer', status: 'complete' } : block) }; handle.update(current.identity, view); },
     loadOlder() { view = { ...view, blocks: [{ id: 'older', kind: 'assistant', text: 'Older final answer', status: 'complete' }, ...view.blocks] }; handle.update(current.identity, view); },
     replaceWindow() { view = { ...view, blocks: [{ id: 'replacement', kind: 'assistant', text: 'Replacement final answer', status: 'complete' }], attachments: [] }; handle.update(current.identity, view); },

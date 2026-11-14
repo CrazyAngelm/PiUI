@@ -1,5 +1,6 @@
 import type { AcpAgentDescriptorV1, CommandLineV1 } from '../../../../../contracts/harness-registry-v1';
-import type { PluginManifest, PluginPermission, PluginValue } from '../../../../../contracts/piui-plugin-v2';
+import type { PluginManifest, PluginPermission, PluginValue } from '../../../../../contracts/piui-plugin-v3';
+import type { PluginStyleSnapshotV1 } from '../../../../../contracts/plugin-style-v1';
 import {
   PLUGINS_EVENT_V1,
   type PluginBackendState,
@@ -19,6 +20,7 @@ import {
 } from '../../../../../contracts/plugins-v1';
 import helloManifest from '../../../../../examples/plugins/hello-command/piui-plugin.json';
 import themeManifest from '../../../../../examples/plugins/midnight-theme/piui-plugin.json';
+import styleManifest from '../../../../../examples/plugins/paper-style/piui-plugin.json';
 import packManifest from '../../../../../examples/plugins/pipeline-pack/piui-plugin.json';
 import acpManifest from '../../../../../examples/plugins/acp-agent/piui-plugin.json';
 import statusManifest from '../../../../../examples/plugins/status-tools/piui-plugin.json';
@@ -103,6 +105,7 @@ const THEMES = manifest({
   },
 });
 const PACK = manifest(packManifest);
+const STYLES = manifest(styleManifest);
 const ACP = manifest(acpManifest);
 const STATUS = manifest(statusManifest);
 const TOOL_CARDS = manifest(toolCardsManifest);
@@ -238,6 +241,7 @@ export class LabPluginHost {
         });
       add(HELLO);
       add(THEMES);
+      add(STYLES);
       add(PACK);
       add(STATUS);
       add(TOOL_CARDS);
@@ -263,6 +267,18 @@ export class LabPluginHost {
 
   private isActive(plugin: LabPlugin): boolean {
     return plugin.enabled && !this.safeMode && plugin.problems.length === 0;
+  }
+
+  style(): PluginStyleSnapshotV1 {
+    const snapshot: PluginStyleSnapshotV1 = { protocol: 1, revision: this.revision };
+    const selected = this.activeTheme;
+    if (!selected) return snapshot;
+    const plugin = this.find(selected.pluginId);
+    if (!plugin || !this.isActive(plugin)) return snapshot;
+    const theme = plugin.manifest.contributes.themes?.find((item) => item.id === selected.themeId);
+    if (!theme) return snapshot;
+    const style = plugin.manifest.schemaVersion === 3 ? plugin.manifest.contributes.themes?.find((item) => item.id === selected.themeId)?.style : undefined;
+    return { ...snapshot, theme: { ...selected }, ...(style ? { style: structuredClone(style) } : {}) };
   }
 
   private settingsOf(plugin: LabPlugin): Record<string, PluginValue> {
@@ -745,6 +761,10 @@ export function pluginHandlers(runtime: LabSessions, bus: LabEventBus): LabHandl
     },
     plugin_command_v1: (args) => host.runCommand(decodeArgument<PluginCommandRequestV1>(args, 'request', commandRequestSchema)),
     plugin_template_v1: (args) => host.template(decodeArgument<PluginTemplateRequestV1>(args, 'request', templateRequestSchema)),
+    plugin_style_v1: (args) => {
+      decodeArgument(args, 'request', object({}));
+      return host.style();
+    },
     list_piui_contributions: () => (runtime.state.safeMode || runtime.state.scenario === 'empty' ? { commands: [], composerActions: [] } : structuredClone(PI_CONTRIBUTIONS)),
   };
 }

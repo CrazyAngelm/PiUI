@@ -1,5 +1,6 @@
 import validateSchemaV1 from '../../../../contracts/piui-plugin-v1-validator.mjs';
 import validateSchemaV2 from '../../../../contracts/piui-plugin-v2-validator.mjs';
+import validateSchemaV3 from '../../../../contracts/piui-plugin-v3-validator.mjs';
 import type { PluginProblemV1 } from '../../../../contracts/plugins-v1';
 import type {
   PluginFieldV1,
@@ -8,13 +9,13 @@ import type {
   PluginPermission,
   PluginProblemCode,
   PluginValue,
-} from '../../../../contracts/piui-plugin-v2';
+} from '../../../../contracts/piui-plugin-v3';
 import { PLUGIN_LIMITS, PLUGIN_RESERVED_SHORTCUTS } from '../../../../contracts/piui-plugin-v2';
 import { ACP_DESCRIPTOR_PROBLEMS, checkAcpDescriptor } from './acpDescriptor';
 import { parseColor, type Rgba } from './pluginColor';
 
 /**
- * Plugin package format rules (manifest versions 1 and 2) mirrored from the host
+ * Plugin package format rules (manifest versions 1, 2 and 3) mirrored from the host
  * (`crates/piui-plugins`), so the UI Lab host rejects what the desktop host
  * rejects, the settings and node forms check values exactly like the host,
  * and `pnpm plugin:check` explains problems before a package is loaded. The
@@ -247,7 +248,7 @@ export function resolvePluginValues(fields: readonly PluginFieldV1[], values: Re
 export const MANIFEST_MESSAGES = {
   tooLarge: 'The manifest is larger than 64 KiB.',
   malformed: 'piui-plugin.json is not valid JSON.',
-  schemaVersion: 'Only plugin manifest schema versions 1 and 2 are supported.',
+  schemaVersion: 'Only plugin manifest schema versions 1, 2 and 3 are supported.',
   shape: 'The manifest does not match the plugin schema at {0}.',
   engineRange: 'The Nano Desktop version range “{0}” is not valid.',
   permissionMissing: 'The plugin contributes {0} but does not ask for the matching permission.',
@@ -282,7 +283,7 @@ export type ManifestCheck =
 
 /** The v2 contributions of any manifest (empty for version 1). */
 export function v2Contributions(manifest: PluginManifest): Required<Pick<PluginManifestV2['contributes'], 'statusItems' | 'keybindings' | 'renderers' | 'mcpServers'>> {
-  if (manifest.schemaVersion !== 2) return { statusItems: [], keybindings: [], renderers: [], mcpServers: [] };
+  if (manifest.schemaVersion === 1) return { statusItems: [], keybindings: [], renderers: [], mcpServers: [] };
   const contributes = manifest.contributes;
   return {
     statusItems: contributes.statusItems ?? [],
@@ -321,8 +322,8 @@ function dedupe(problems: PluginProblem[]): PluginProblem[] {
 export function checkPluginManifest(value: unknown, piuiVersion: string): ManifestCheck {
   const record = typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
   if (record === undefined || !('schemaVersion' in record)) return { ok: false, problems: [problem('shape', MANIFEST_MESSAGES.shape, '/schemaVersion')] };
-  if (record.schemaVersion !== 1 && record.schemaVersion !== 2) return { ok: false, problems: [problem('schema-version', MANIFEST_MESSAGES.schemaVersion)] };
-  const validateSchema = record.schemaVersion === 1 ? validateSchemaV1 : validateSchemaV2;
+  if (record.schemaVersion !== 1 && record.schemaVersion !== 2 && record.schemaVersion !== 3) return { ok: false, problems: [problem('schema-version', MANIFEST_MESSAGES.schemaVersion)] };
+  const validateSchema = record.schemaVersion === 1 ? validateSchemaV1 : record.schemaVersion === 2 ? validateSchemaV2 : validateSchemaV3;
   if (!validateSchema(value)) {
     const shape = (validateSchema.errors ?? []).slice(0, 20).map((error) => problem('shape', MANIFEST_MESSAGES.shape, error.instancePath || '/'));
     return { ok: false, problems: dedupe(shape) };

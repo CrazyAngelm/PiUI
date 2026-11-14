@@ -1,5 +1,5 @@
 import type {
-  ConversationIdentity, ConversationOwner, ConversationSnapshot, ConversationMessageAction,
+  ConversationIdentity, ConversationOwner, ConversationSnapshot, ConversationMessageAction, ConversationBlock, ConversationDecoration,
 } from '../../../../../contracts/conversation-presentation-v1';
 import type { ApprovalDecision } from '../../../../../contracts/workspace-v15';
 
@@ -17,6 +17,11 @@ function validate(owner: ConversationOwner, snapshot: ConversationSnapshot): voi
   if (new Set(snapshot.approvals.map(approval => approval.id)).size !== snapshot.approvals.length) throw new Error('Conversation approval IDs must be unique.');
   if (new Set(snapshot.attachments.map(attachment => attachment.id)).size !== snapshot.attachments.length || snapshot.attachments.some(attachment => !blocks.has(attachment.blockId))) throw new Error('Attachments must identify a displayed message.');
   if (!['connected', 'reconnecting', 'disconnected'].includes(snapshot.connection)) throw new Error('Unsupported conversation connection state.');
+  if (snapshot.attachments.some(file => file.presentation !== undefined && !['image', 'audio', 'video', 'file'].includes(file.presentation)
+    || file.progress !== undefined && (!Number.isFinite(file.progress) || file.progress < 0 || file.progress > 100)))
+    throw new Error('Unsupported attachment presentation.');
+  if (snapshot.presentation && (new Set(snapshot.presentation.map(item => item.blockId)).size !== snapshot.presentation.length
+    || snapshot.presentation.some(item => !blocks.has(item.blockId)))) throw new Error('Message presentation must identify displayed blocks.');
   if (snapshot.messageControls !== undefined) {
     const controls = snapshot.messageControls;
     if (!Array.isArray(controls) || new Set(controls.map(item => item.id)).size !== controls.length
@@ -45,6 +50,7 @@ export class ConversationController {
   busyMessageActions = $state<Record<string, boolean>>({});
   messageActionErrors = $state<Record<string, string>>({});
   retired = $state(false);
+  olderLoading = $state(false);
   private pending = new Set<AbortController>();
   private revision = 0;
 
@@ -73,6 +79,7 @@ export class ConversationController {
     this.error = '';
     this.busyMessageActions = {};
     this.messageActionErrors = {};
+    this.olderLoading = false;
   }
 
   update(identity: ConversationIdentity, snapshot: ConversationSnapshot): void {
@@ -115,6 +122,87 @@ export class ConversationController {
       return owner.openAttachment(id, signal);
     });
   };
+
+  bindAttachments() {
+    const generation = this.generation;
+    const current = (id: string) => {
+      if (generation !== this.generation || this.retired) throw stale();
+      const attachment = this.snapshot?.attachments.find(item => item.id === id);
+      if (!attachment || attachment.unavailable) throw new Error('Attachment is no longer available.');
+      return attachment;
+    };
+    return {
+      open: async (id: string) => {
+        if (current(id).openable === false) throw new Error('Attachment cannot be opened yet.');
+        await this.openAttachment(id);
+      },
+      download: async (id: string) => {
+        if (!current(id).downloadable) throw new Error('Download is not available.');
+        await this.request((owner, signal) => {
+          if (!owner.downloadAttachment) throw new Error('Download is not available.');
+          return owner.downloadAttachment(id, signal);
+        });
+      },
+      resolve: async (id: string) => {
+        current(id);
+        const media = await this.request((owner, signal) => {
+          if (!owner.resolveAttachment) throw new Error('Media is not available.');
+          return owner.resolveAttachment(id, signal);
+        });
+        current(id);
+        return media;
+      },
+    };
+  }
+
+  bindLoadOlder(): () => Promise<void> {
+    const generation = this.generation;
+    return async () => {
+      if (generation !== this.generation || this.retired || this.olderLoading || this.snapshot?.olderLoading || !this.snapshot?.olderAvailable) return;
+      this.olderLoading = true;
+      this.error = '';
+      try {
+        await this.request((owner, signal) => {
+          if (!owner.loadOlder) throw new Error('History paging is not available.');
+          return owner.loadOlder(signal);
+        });
+      } catch {
+        if (generation === this.generation && !this.retired) this.error = 'Could not load history. Try again.';
+      } finally { if (generation === this.generation && !this.retired) this.olderLoading = false; }
+    };
+  }
+
+  bindMessageDecoration(): NonNullable<ConversationOwner['decorateMessage']> {
+    const generation = this.generation;
+    const owner = this.active();
+    return (element, block, parentSignal) => {
+      if (parentSignal.aborted || this.retired || generation !== this.generation || !this.snapshot?.blocks.some(item => item.id === block.id)) return;
+      const controller = new AbortController();
+      this.pending.add(controller);
+      let decoration: ConversationDecoration | void;
+      let disposed = false;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        this.pending.delete(controller);
+        parentSignal.removeEventListener('abort', dispose);
+        controller.abort();
+        try { decoration?.dispose(); } catch { /* Keep the generic message readable. */ }
+      };
+      controller.signal.addEventListener('abort', dispose, { once: true });
+      parentSignal.addEventListener('abort', dispose, { once: true });
+      try { decoration = owner.decorateMessage?.(element, block, controller.signal); }
+      catch { dispose(); return; }
+      if (disposed || parentSignal.aborted) { decoration?.dispose(); dispose(); return; }
+      return {
+        update: (next: ConversationBlock) => {
+          if (disposed || generation !== this.generation || next.id !== block.id) return;
+          try { decoration?.update(next); } catch { dispose(); }
+        },
+        dispose,
+      };
+    };
+  }
 
   /** A rendered control keeps its originating owner even before the DOM flushes. */
   bindMessageActions(): (id: string, action: ConversationMessageAction) => Promise<void> {

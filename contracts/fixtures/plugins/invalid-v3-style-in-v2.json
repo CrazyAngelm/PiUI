@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 2,
+  "id": "example.paper-style",
+  "name": "Paper style",
+  "version": "1.0.0",
+  "publisher": "Nano Desktop examples",
+  "description": "A declarative visual style: rounded controls, plain ornaments and the system font.",
+  "engines": {
+    "piui": ">=0.1.0"
+  },
+  "permissions": [],
+  "contributes": {
+    "themes": [
+      {
+        "id": "paper",
+        "label": "Paper",
+        "appearance": "light",
+        "tokens": {
+          "text": "#202020",
+          "bg": "#fafafa",
+          "surface-1": "#ffffff",
+          "text-muted": "#545454",
+          "action": "#245b45",
+          "action-ink": "#ffffff",
+          "accent": "#245b45",
+          "accent-ink": "#ffffff"
+        },
+        "style": {
+          "corners": "round",
+          "ornaments": "plain",
+          "font": "system"
+        }
+      },
+      {
+        "id": "terminal",
+        "label": "Terminal",
+        "appearance": "dark",
+        "tokens": {
+          "text": "#eef2f0",
+          "bg": "#111916",
+          "surface-1": "#1b2722",
+          "text-muted": "#b8c8c0",
+          "action": "#285a44",
+          "action-ink": "#ffffff",
+          "accent": "#8ed1ad",
+          "accent-ink": "#14231c"
+        },
+        "style": {
+          "corners": "square",
+          "ornaments": "slanted",
+          "font": "mono"
+        }
+      }
+    ]
+  }
+}

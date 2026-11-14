@@ -8,6 +8,7 @@ import { PLUGIN_PERMISSIONS as PLUGIN_PERMISSIONS_V1 } from '../../../../contrac
 import { PLUGIN_PERMISSIONS, PLUGIN_THEME_TOKENS, type PluginFieldV1 } from '../../../../contracts/piui-plugin-v2';
 import validateSchemaV1 from '../../../../contracts/piui-plugin-v1-validator.mjs';
 import validateSchemaV2 from '../../../../contracts/piui-plugin-v2-validator.mjs';
+import validateSchemaV3 from '../../../../contracts/piui-plugin-v3-validator.mjs';
 import {
   checkPluginManifest,
   checkPluginManifestText,
@@ -22,16 +23,16 @@ import {
 
 /** The schema of the version a fixture declares (the host picks it the same way). */
 const validateSchema = (value: unknown): boolean =>
-  (value as { schemaVersion?: unknown }).schemaVersion === 2 ? validateSchemaV2(value) : validateSchemaV1(value);
+  (value as { schemaVersion?: unknown }).schemaVersion === 3 ? validateSchemaV3(value) : (value as { schemaVersion?: unknown }).schemaVersion === 2 ? validateSchemaV2(value) : validateSchemaV1(value);
 
 const repository = new URL('../../../../', import.meta.url);
 const fixtures = new URL('contracts/fixtures/plugins/', repository);
 const read = (url: URL): string => readFileSync(url, 'utf8');
 const PIUI = '0.1.1';
 
-describe('plugin manifest v1 and v2 fixtures (shared with crates/piui-plugins)', () => {
+describe('plugin manifest v1, v2 and v3 fixtures (shared with crates/piui-plugins)', () => {
   it('accepts the valid fixtures', () => {
-    for (const name of ['valid-minimal.json', 'valid-full.json', 'valid-v2.json']) {
+    for (const name of ['valid-minimal.json', 'valid-full.json', 'valid-v2.json', 'valid-v3.json']) {
       const checked = checkPluginManifestText(read(new URL(name, fixtures)), PIUI);
       expect(checked.ok, name).toBe(true);
       if (checked.ok) expect(checked.compatible).toBe(true);

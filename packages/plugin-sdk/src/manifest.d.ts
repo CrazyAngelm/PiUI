@@ -1,7 +1,6 @@
 /**
- * `piui-plugin.json` types for schema versions 1 and 2; the normative
- * schemas are contracts/piui-plugin-v1.schema.json and
- * contracts/piui-plugin-v2.schema.json. New plugins use version 2.
+ * `piui-plugin.json` types for schema versions 1, 2 and 3; the normative
+ * schemas are contracts/piui-plugin-v{1,2,3}.schema.json. Visual styles require v3.
  */
 export type {
   PluginCommandContributionV1,
@@ -10,6 +9,7 @@ export type {
   PluginManifest,
   PluginManifestV1,
   PluginManifestV2,
+  PluginManifestV3,
   PluginMcpServerContributionV2,
   PluginNodeTypeContributionV1,
   PluginPanelContributionV1,
@@ -18,9 +18,11 @@ export type {
   PluginStatusItemContributionV2,
   PluginTemplateContributionV1,
   PluginThemeContributionV1,
+  PluginThemeContributionV3,
+  PluginVisualStyleV1,
   PluginThemeToken,
   PluginValue,
-} from '../../../contracts/piui-plugin-v2';
+} from '../../../contracts/piui-plugin-v3';
 export {
   PLUGIN_LIMITS,
   PLUGIN_MANIFEST_FILE,
@@ -29,4 +31,4 @@ export {
   PLUGIN_SCHEMA_VERSIONS,
   PLUGIN_SHORTCUT_PATTERN,
   PLUGIN_THEME_TOKENS,
-} from '../../../contracts/piui-plugin-v2';
+} from '../../../contracts/piui-plugin-v3';

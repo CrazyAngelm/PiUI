@@ -5,6 +5,7 @@ import { test, expect } from './browserFixture';
 interface OwnerCall { name: string; location: 'native' | 'cloud'; sessionId: string; operation?: string; payload?: unknown }
 interface Fixture {
   mount(location?: 'native' | 'cloud', fullHistory?: boolean): Promise<void>;
+  mountRich(): Promise<void>;
   stream(): void; disconnect(): void; switchOwner(): void;
   loadOlder(): void; replaceWindow(): void;
   longApproval(): void;
@@ -14,6 +15,51 @@ interface Fixture {
   calls(): OwnerCall[]; mountSecond(): void; dispose(): Promise<void>;
 }
 declare global { interface Window { nanoConversationFixture: Fixture } }
+
+test('rich owner media, paging and decoration preserve state and retire together', async ({ page }) => {
+  await page.goto('/tests/conversation-host.html');
+  await page.waitForFunction(() => !!window.nanoConversationFixture);
+  await page.evaluate(() => window.nanoConversationFixture.mountRich());
+  const root = page.locator('#conversation');
+  await expect(root.getByRole('img', {name:'Picture'})).toBeVisible();
+  await expect.poll(() => root.getByRole('img',{name:'Picture'}).evaluate((node:HTMLImageElement)=>node.naturalWidth)).toBe(1);
+  await expect(root.getByText('Cloud author',{exact:true})).toBeVisible();
+  await expect(root.getByText('Upload interrupted',{exact:true})).toBeVisible();
+  await expect(root.getByRole('progressbar')).toHaveAttribute('value','25');
+  await root.getByRole('button',{name:'Download attachment'}).focus(); await page.keyboard.press('Enter');
+  await expect.poll(async()=>(await page.evaluate(()=>window.nanoConversationFixture.calls())).filter(call=>call.name==='download').length).toBe(1);
+  const widget=root.getByRole('textbox',{name:'Owner widget'});
+  await widget.fill('Keep this value'); await widget.focus();
+  await page.evaluate(()=>window.nanoConversationFixture.stream());
+  await expect(widget).toHaveValue('Keep this value'); await expect(widget).toBeFocused();
+  await root.getByRole('button',{name:'Load earlier history',exact:true}).click();
+  await expect(root.getByText('Earlier history',{exact:true})).toBeVisible();
+  await expect(root.getByRole('button',{name:'Load earlier history',exact:true})).toHaveCount(0);
+  await page.evaluate(()=>window.nanoConversationFixture.switchOwner());
+  await expect(widget).toHaveCount(0); await expect(root.getByRole('img',{name:'Picture'})).toHaveCount(0);
+  expect((await page.evaluate(()=>window.nanoConversationFixture.calls())).filter(call=>call.name==='decoration-dispose')).toHaveLength(1);
+  await page.evaluate(()=>window.nanoConversationFixture.dispose());
+});
+
+test('full-history search retries failures and follows newer live messages', async ({ page }) => {
+  await page.goto('/tests/conversation-host.html');
+  await page.waitForFunction(() => !!window.nanoConversationFixture);
+  await page.evaluate(async () => { await window.nanoConversationFixture.mount('cloud'); window.nanoConversationFixture.fail('history'); });
+  const root=page.locator('#conversation');
+  await root.getByRole('button',{name:'Search this chat',exact:true}).click();
+  await expect(root.getByRole('alert')).toHaveText('Could not load history. Try again.');
+  await root.getByRole('button',{name:'Refresh search',exact:true}).click();
+  await expect(root.getByRole('alert')).toHaveCount(0);
+  const search=root.getByRole('textbox',{name:'Search this chat',exact:true});
+  await search.fill('Private history');
+  await expect(root.getByText('Private history first',{exact:true})).toBeVisible();
+  await search.fill('Streamed final');
+  await expect(root.locator('.search__count')).toContainText('0 / 0');
+  await page.evaluate(()=>window.nanoConversationFixture.stream());
+  await expect(root.getByText('Streamed final answer',{exact:true})).toBeVisible();
+  await expect(root.locator('.search__count')).toContainText('1 / 1');
+  await page.evaluate(()=>window.nanoConversationFixture.dispose());
+});
 
 test('connected old buttons cannot borrow a new owner or target before the DOM flushes', async ({ page }) => {
   await page.goto('/tests/conversation-host.html');

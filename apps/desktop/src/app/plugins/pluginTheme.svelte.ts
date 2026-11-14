@@ -3,9 +3,11 @@ import type { PluginThemeV1 } from '../../../../../contracts/plugins-v1';
 import { currentAppearance } from '../../host-api/pluginBridge';
 import { parseColor } from '../../host-api/pluginColor';
 import { pluginRegistry } from './pluginRegistry.svelte';
+import { readPluginStyle } from '../../host-api/pluginStyleClient';
+import { followPluginVisualStyle } from './pluginVisualStyle';
 
 /**
- * Plugin themes (ADR-032): validated color tokens applied as `--piui-*`
+ * Plugin themes (ADR-032): validated colors and declarative style presets applied as `--piui-*`
  * custom properties on the root element (CSSOM, allowed by the app CSP).
  * A theme applies only while PiUI shows its appearance, so choosing Light,
  * Dark or System always wins, and safe mode (no active plugin) applies none.
@@ -44,7 +46,10 @@ export function startPluginTheme(): void {
   $effect.root(() => {
     $effect(() => {
       const theme = pluginRegistry.activeTheme();
-      applyPluginTheme(theme !== undefined && theme.appearance === appearance ? theme : undefined, root);
+      const visible = theme !== undefined && theme.appearance === appearance;
+      applyPluginTheme(visible ? theme : undefined, root);
+      const selected = pluginRegistry.registry?.activeTheme;
+      return followPluginVisualStyle(root, visible && selected ? { revision: pluginRegistry.revision, theme: selected } : undefined, readPluginStyle);
     });
   });
   void pluginRegistry.start();

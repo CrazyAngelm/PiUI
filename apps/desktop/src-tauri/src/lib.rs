@@ -981,6 +981,7 @@ pub fn run() -> Result<(), tauri::Error> {
             plugins::api::plugins_v1,
             plugins::api::plugin_command_v1,
             plugins::api::plugin_template_v1,
+            plugins::api::plugin_style_v1,
             api::bootstrap_v10,
             api::update_preferences_v8,
             api::list_extensions_v10,

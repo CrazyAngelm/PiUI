@@ -8,11 +8,13 @@ contracts are in `contracts/`:
 
 | Contract | What it defines |
 |---|---|
-| `piui-plugin-v2.schema.json`, `piui-plugin-v2.ts` | The `piui-plugin.json` manifest, version 2 (current) |
+| `piui-plugin-v3.schema.json`, `piui-plugin-v3.ts` | The current manifest; adds declarative visual styles |
+| `piui-plugin-v2.schema.json`, `piui-plugin-v2.ts` | Manifest version 2, still accepted unchanged |
 | `piui-plugin-v1.schema.json`, `piui-plugin-v1.ts` | Manifest version 1, still accepted unchanged |
 | `plugin-backend-v1.ts` | JSON-RPC between PiUI and a plugin backend |
 | `plugin-panel-v1.ts` | `postMessage` bridge between PiUI and a panel |
 | `plugins-v1.ts` | What Settings → Plugins and the other screens receive from the host |
+| `plugin-style-v1.ts` | Read-only selected style snapshot, bound to registry revision and theme identity |
 
 **A plugin is not a sandbox.** A backend runs on your computer as trusted
 code. PiUI shows every permission before install, starts only the exact
@@ -47,6 +49,7 @@ Examples in `examples/plugins/`:
 - `hello-command` — a backend command, a declared composer action, settings
   and a sandboxed chat panel;
 - `midnight-theme` — two color themes, no code and no permissions;
+- `paper-style` — version 3 Paper and Terminal styles: colors, corners, ornaments and UI font, no code or permissions;
 - `pipeline-pack` — two pipeline templates and a JSON transform node;
 - `acp-agent` — adds Auggie as an ACP agent (OpenCode and six other agents
   are built in, ADR-045);
@@ -103,7 +106,7 @@ every file; the review shows it and PiUI checks it again at every start.
 | `contributes` | `commands`, `settings`, `panels`, `themes`, `templates`, `nodeTypes`, `acpAgents`; version 2 adds `statusItems`, `keybindings`, `renderers`, `mcpServers` |
 
 Unknown fields are errors, never ignored. The `$schema` field may point at
-`piui-plugin-v2.schema.json` (or `piui-plugin-v1.schema.json`) for editor
+`piui-plugin-v3.schema.json` (or the matching v1/v2 schema) for editor
 completion.
 
 ### Permissions
@@ -259,13 +262,46 @@ PiUI stores them and passes them to the backend (`initialize` and
 { "id": "midnight", "label": "Midnight", "appearance": "dark", "tokens": { "bg": "#0f1420", "text": "#e6ecf5" } }
 ```
 
-Only the color tokens listed in `PLUGIN_THEME_TOKENS`
+The color tokens listed in `PLUGIN_THEME_TOKENS`
 (`contracts/piui-plugin-v1.ts`) can be set, with `#rgb`, `#rgba`,
 `#rrggbb`, `#rrggbbaa`, `rgb()` or `rgba()` values. When a theme sets both colors of
 one of the pairs text/bg, text/surface-1, text-muted/bg, action-ink/action
 or accent-ink/accent, they must keep a contrast of at least 4.5:1. A theme
 is chosen in Settings → General and applies only while PiUI shows its
 appearance; Light, Dark and System always win.
+
+Manifest version 3 optionally adds a nonempty `style` object to each theme:
+
+```json
+{
+  "id": "paper", "label": "Paper", "appearance": "light",
+  "tokens": { "bg": "#fafafa", "text": "#202020" },
+  "style": { "corners": "round", "ornaments": "plain", "font": "system" }
+}
+```
+
+These are semantic presets, not CSS. `corners` accepts `square`, `soft` or
+`round`; `ornaments` accepts `plain` or `slanted`; `font` accepts `system` or
+`mono`. Each field is optional, and omitted fields follow the built-in Nano
+or Chaos style. No arbitrary CSS, JavaScript, URL, font download, geometry,
+spacing or numeric size is accepted. The existing color validation still
+applies; v1/v2 palettes are unchanged and cannot declare `style`.
+
+Presets use only the existing `tokens.css` vocabulary: `soft` keeps the
+4/6/10/16px radius scale; `round` uses 6/10/16/16px; `square` uses the existing
+0px decoration radius. Circular controls keep their existing full radius.
+`plain` and `slanted` use Nano and Chaos ornament shapes, respectively.
+Fonts use the existing system and monospace stacks. Chat font preferences
+and editor sizing remain owned by their existing controls.
+
+Install through the normal review, then choose **Settings → General → Plugin
+theme**. The selection persists through the existing plugin registry. The
+read-only `plugin_style_v1` returns only an active selection from one registry
+snapshot. The UI checks its revision and theme identity and discards late
+responses when selection or appearance changes. Disabling/removing the
+plugin, switching to another appearance, a failed read, or safe mode removes
+its geometry and font overrides and restores the selected built-in style.
+No backend starts and no Nano account is needed for declarative styles.
 
 ### Pipeline templates
 

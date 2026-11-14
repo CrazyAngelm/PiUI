@@ -1,5 +1,5 @@
-//! `plugins_v1`, `plugin_command_v1` and `plugin_template_v1`
-//! (`contracts/plugins-v1.ts`). Commands reject unknown fields; every change
+//! `plugins_v1`, `plugin_command_v1`, `plugin_template_v1` and `plugin_style_v1`
+//! (`contracts/plugins-v1.ts`, `plugin-style-v1.ts`). Commands reject unknown fields; every change
 //! names the registry revision; safe mode lists read-only. The WebView never
 //! sends a path: the host opens the native picker.
 
@@ -9,7 +9,7 @@ use piui_plugins::csp::plugin_origin;
 use piui_plugins::fields::resolve_values;
 use piui_plugins::manifest::{
     Appearance, CommandSurface, NodeResultField, PanelLocation, Problem, ProblemCode,
-    StatusAlignment,
+    StatusAlignment, VisualStyle,
 };
 use piui_plugins::{Field, Permission};
 use serde::{Deserialize, Serialize};
@@ -49,6 +49,75 @@ pub enum SettingsOrigin {
 pub struct ThemeRefDto {
     pub plugin_id: String,
     pub theme_id: String,
+}
+
+/// Separate versioned read keeps the existing plugins_v1 theme DTO unchanged.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginStyleRequest {}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginStyleSnapshot {
+    pub protocol: u8,
+    pub revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeRefDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<VisualStyle>,
+}
+
+pub(crate) fn style_view(plugins: &PluginsState) -> Result<PluginStyleSnapshot, PluginsErrorDto> {
+    let snapshot = plugins.snapshot()?;
+    let mut view = PluginStyleSnapshot {
+        protocol: PROTOCOL,
+        revision: snapshot.revision,
+        theme: None,
+        style: None,
+    };
+    if plugins.safe_mode() {
+        return Ok(view);
+    }
+    let Some(selected) = snapshot.active_theme else {
+        return Ok(view);
+    };
+    let Some(plugin) = snapshot
+        .plugins
+        .into_iter()
+        .find(|plugin| plugin.stored.id == selected.plugin_id && plugin.stored.enabled)
+    else {
+        return Ok(view);
+    };
+    let Some((_, Ok(package))) = plugin.loaded else {
+        return Ok(view);
+    };
+    if !package.problems.is_empty() {
+        return Ok(view);
+    }
+    if let Some(theme) = package
+        .manifest
+        .manifest
+        .contributes
+        .themes
+        .iter()
+        .find(|theme| theme.id == selected.theme_id)
+    {
+        view.theme = Some(ThemeRefDto {
+            plugin_id: selected.plugin_id,
+            theme_id: selected.theme_id,
+        });
+        view.style = theme.style.clone();
+    }
+    Ok(view)
+}
+
+#[tauri::command]
+pub fn plugin_style_v1(
+    plugins: State<'_, PluginsState>,
+    request: PluginStyleRequest,
+) -> Result<PluginStyleSnapshot, PluginsErrorDto> {
+    let _ = request;
+    style_view(&plugins)
 }
 
 #[derive(Debug, Deserialize)]

@@ -4,6 +4,7 @@ export type InlineNode =
   | { kind: 'emphasis'; children: InlineNode[] }
   | { kind: 'delete'; children: InlineNode[] }
   | { kind: 'code'; text: string }
+  | { kind: 'math'; text: string; display: boolean }
   | { kind: 'link'; label: InlineNode[]; href: string };
 
 export type MarkdownBlock =
@@ -23,9 +24,12 @@ const TABLE_DELIMITER = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/u;
 /** Tables wider than this are shown as prose rather than a huge grid. */
 const MAX_TABLE_COLUMNS = 24;
 const BACKSLASH = String.fromCharCode(92);
+// Matches the existing web owner's HermesIntelligentUiBlocks grammar.
+const WIDGET_FENCE = /^[ \t]{0,3}```hermes-ui[^\n]*$/iu;
+const WIDGET_CLOSE = /^[ \t]{0,3}`{3,}[ \t]*$/u;
 
 /** A deliberately small, non-HTML Markdown projection for chat prose. */
-export function parseMarkdown(source: string): MarkdownBlock[] {
+export function parseMarkdown(source: string, rich = false): MarkdownBlock[] {
   const lines = source.replace(/\r\n?/gu, '\n').split('\n');
   const blocks: MarkdownBlock[] = [];
   let index = 0;
@@ -37,23 +41,27 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
       continue;
     }
 
-    const fence = line.match(/^```\s*([^`]*)$/u);
+    const widget = rich && WIDGET_FENCE.test(line);
+    const fence = widget ? ['', 'hermes-ui'] : line.match(/^```\s*([^`]*)$/u);
     if (fence) {
       const content: string[] = [];
       index += 1;
-      while (index < lines.length && !/^```\s*$/u.test(lines[index] ?? '')) {
+      while (index < lines.length && !(widget ? WIDGET_CLOSE : /^```\s*$/u).test(lines[index] ?? '')) {
         content.push(lines[index] ?? '');
         index += 1;
       }
       if (index < lines.length) index += 1;
       const language = fence[1]?.trim().split(/\s+/u)[0] || undefined;
-      blocks.push({ kind: 'code', language, text: content.join('\n') });
+      const text = content.join('\n');
+      // The owner's exact-source guard also trims trailing LF. Merely receiving
+      // a closing fence must not change an already complete widget's identity.
+      blocks.push({ kind: 'code', language, text: widget ? text.replace(/\n+$/u, '') : text });
       continue;
     }
 
     const heading = line.match(/^(#{1,4})\s+(.+)$/u);
     if (heading) {
-      blocks.push({ kind: 'heading', depth: heading[1]!.length as 1 | 2 | 3 | 4, inline: parseInline(heading[2] ?? '') });
+      blocks.push({ kind: 'heading', depth: heading[1]!.length as 1 | 2 | 3 | 4, inline: parseInline(heading[2] ?? '', rich) });
       index += 1;
       continue;
     }
@@ -70,11 +78,11 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
         quoted.push((lines[index] ?? '').replace(/^>\s?/u, ''));
         index += 1;
       }
-      blocks.push({ kind: 'quote', inline: parseInline(quoted.join('\n')) });
+      blocks.push({ kind: 'quote', inline: parseInline(quoted.join('\n'), rich) });
       continue;
     }
 
-    const table = tableAt(lines, index);
+    const table = tableAt(lines, index, rich);
     if (table) {
       blocks.push(table.block);
       index = table.end;
@@ -89,7 +97,7 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
       while (index < lines.length) {
         const item = (lines[index] ?? '').match(LIST_ITEM);
         if (!item || /^\d/u.test(item[1] ?? '') !== ordered) break;
-        items.push(parseInline(item[2] ?? ''));
+        items.push(parseInline(item[2] ?? '', rich));
         index += 1;
       }
       blocks.push({ kind: 'list', ordered, start, items });
@@ -100,11 +108,11 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
     index += 1;
     while (index < lines.length) {
       const next = lines[index] ?? '';
-      if (next.trim().length === 0 || BLOCK_START.test(next) || isTableStart(lines, index)) break;
+      if (next.trim().length === 0 || BLOCK_START.test(next) || (rich && WIDGET_FENCE.test(next)) || isTableStart(lines, index)) break;
       paragraph.push(next);
       index += 1;
     }
-    blocks.push({ kind: 'paragraph', inline: parseInline(paragraph.join('\n')) });
+    blocks.push({ kind: 'paragraph', inline: parseInline(paragraph.join('\n'), rich) });
   }
 
   return blocks;
@@ -120,7 +128,7 @@ function isTableStart(lines: string[], index: number): boolean {
 }
 
 /** GitHub-style pipe table: header, delimiter row, then rows until a blank line. */
-function tableAt(lines: string[], index: number): { block: MarkdownBlock; end: number } | undefined {
+function tableAt(lines: string[], index: number, rich: boolean): { block: MarkdownBlock; end: number } | undefined {
   if (!isTableStart(lines, index)) return undefined;
   const head = splitRow(lines[index] ?? '');
   const align = splitRow(lines[index + 1] ?? '').map((cell): TableAlign => {
@@ -137,11 +145,11 @@ function tableAt(lines: string[], index: number): { block: MarkdownBlock; end: n
     const line = lines[cursor] ?? '';
     if (line.trim().length === 0 || !line.includes('|')) break;
     const cells = splitRow(line);
-    rows.push(head.map((_, column) => parseInline(cells[column] ?? '')));
+    rows.push(head.map((_, column) => parseInline(cells[column] ?? '', rich)));
     cursor += 1;
   }
   return {
-    block: { kind: 'table', align, head: head.map((cell) => parseInline(cell)), rows },
+    block: { kind: 'table', align, head: head.map((cell) => parseInline(cell, rich)), rows },
     end: cursor,
   };
 }
@@ -172,12 +180,14 @@ function splitRow(line: string): string[] {
   return cells;
 }
 
-export function parseInline(source: string): InlineNode[] {
+export function parseInline(source: string, rich = false): InlineNode[] {
   const nodes: InlineNode[] = [];
+  // Repeated unfinished math openers must not rescan the entire remaining stream.
+  const mathEnds = rich ? new Map(['\\)', '\\]', '$$', '$'].map(close => [close, source.lastIndexOf(close)])) : undefined;
   let plain = '';
   let cursor = 0;
   while (cursor < source.length) {
-    const match = inlineTokenAt(source, cursor);
+    const match = inlineTokenAt(source, cursor, rich, mathEnds);
     if (match === undefined) {
       plain += source[cursor] ?? '';
       cursor += 1;
@@ -197,14 +207,37 @@ interface InlineMatch {
   node: InlineNode;
 }
 
-function inlineTokenAt(source: string, start: number): InlineMatch | undefined {
-  if (source[start] === '[') return linkAt(source, start);
+function inlineTokenAt(source: string, start: number, rich: boolean, mathEnds: ReadonlyMap<string, number> | undefined): InlineMatch | undefined {
+  const math = mathEnds ? mathAt(source, start, mathEnds) : undefined;
+  if (math) return math;
+  if (source[start] === '[') return linkAt(source, start, rich);
   if (source[start] === '`') return delimitedAt(source, start, '`', (text) => ({ kind: 'code', text }));
-  if (source.startsWith('**', start)) return delimitedAt(source, start, '**', (text) => ({ kind: 'strong', children: parseInline(text) }));
-  if (source.startsWith('__', start)) return delimitedAt(source, start, '__', (text) => ({ kind: 'strong', children: parseInline(text) }));
-  if (source.startsWith('~~', start)) return delimitedAt(source, start, '~~', (text) => ({ kind: 'delete', children: parseInline(text) }));
-  if (source[start] === '*') return delimitedAt(source, start, '*', (text) => ({ kind: 'emphasis', children: parseInline(text) }));
+  if (source.startsWith('**', start)) return delimitedAt(source, start, '**', (text) => ({ kind: 'strong', children: parseInline(text, rich) }));
+  if (source.startsWith('__', start)) return delimitedAt(source, start, '__', (text) => ({ kind: 'strong', children: parseInline(text, rich) }));
+  if (source.startsWith('~~', start)) return delimitedAt(source, start, '~~', (text) => ({ kind: 'delete', children: parseInline(text, rich) }));
+  if (source[start] === '*') return delimitedAt(source, start, '*', (text) => ({ kind: 'emphasis', children: parseInline(text, rich) }));
   return undefined;
+}
+
+/** Rich owner formulas are opaque TeX before Markdown emphasis/link parsing. */
+function mathAt(source: string, start: number, ends: ReadonlyMap<string, number>): InlineMatch | undefined {
+  if (source[start - 1] === BACKSLASH) return undefined;
+  let open: string;
+  let close: string;
+  let display: boolean;
+  if (source.startsWith('\\(', start)) { open = '\\('; close = '\\)'; display = false; }
+  else if (source.startsWith('\\[', start)) { open = '\\['; close = '\\]'; display = true; }
+  else if (source.startsWith('$$', start)) { open = close = '$$'; display = true; }
+  else if (source[start] === '$' && !/\d/u.test(source[start - 1] ?? '')) { open = close = '$'; display = false; }
+  else return undefined;
+  const begin = start + open.length;
+  if ((ends.get(close) ?? -1) <= begin) return undefined;
+  let end = source.indexOf(close, begin);
+  while (end >= 0 && source[end - 1] === BACKSLASH) end = source.indexOf(close, end + close.length);
+  if (end <= begin) return undefined;
+  if (open === '$' && (/\d/u.test(source[end + 1] ?? '') || source.slice(begin, end).includes('\n'))) return undefined;
+  const text = source.slice(begin, end);
+  return { end: end + close.length, node: { kind: 'math', text: display ? `\\[${text}\\]` : `\\(${text}\\)`, display } };
 }
 
 function delimitedAt(source: string, start: number, delimiter: string, node: (text: string) => InlineNode): InlineMatch | undefined {
@@ -215,7 +248,7 @@ function delimitedAt(source: string, start: number, delimiter: string, node: (te
   return { end: close + delimiter.length, node: node(source.slice(contentStart, close)) };
 }
 
-function linkAt(source: string, start: number): InlineMatch | undefined {
+function linkAt(source: string, start: number, rich: boolean): InlineMatch | undefined {
   if (source[start + 1] === '[') return undefined;
   // Bound malformed-link probing. Streaming output can contain thousands of
   // unmatched `[` characters; each one must remain constant-work rather than
@@ -226,13 +259,22 @@ function linkAt(source: string, start: number): InlineMatch | undefined {
   if (labelOffset < 0) return undefined;
   const labelEnd = start + 1 + labelOffset;
   const hrefWindowEnd = Math.min(lineEnd < 0 ? source.length : lineEnd, labelEnd + 2_050);
-  const hrefOffset = source.slice(labelEnd + 2, hrefWindowEnd).indexOf(')');
-  if (hrefOffset < 0) return undefined;
-  const hrefEnd = labelEnd + 2 + hrefOffset;
+  let depth = 0;
+  let hrefEnd = labelEnd + 2;
+  for (; hrefEnd < hrefWindowEnd; hrefEnd += 1) {
+    const char = source[hrefEnd];
+    if (char === BACKSLASH) { hrefEnd += 1; continue; }
+    if (char === '(') depth += 1;
+    if (char === ')') {
+      if (depth === 0) break;
+      depth -= 1;
+    }
+  }
+  if (hrefEnd >= hrefWindowEnd) return undefined;
   const label = source.slice(start + 1, labelEnd);
-  const href = source.slice(labelEnd + 2, hrefEnd).trim();
+  const href = source.slice(labelEnd + 2, hrefEnd).trim().replace(/\\([\\()])/gu, '$1');
   if (label.length === 0 || href.length === 0) return undefined;
-  return { end: hrefEnd + 1, node: { kind: 'link', label: parseInline(label), href } };
+  return { end: hrefEnd + 1, node: { kind: 'link', label: parseInline(label, rich), href } };
 }
 
 function pushText(nodes: InlineNode[], text: string): void {

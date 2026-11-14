@@ -19,6 +19,7 @@
   $effect(() => { controller.generation; notice = ''; searchOpen = false; });
   const owner = $derived(controller.owner!);
   const snapshot = $derived(controller.snapshot!);
+  const attachmentPorts = $derived(controller.bindAttachments());
 </script>
 
 {#if !controller.retired}
@@ -33,7 +34,10 @@
   </header>
   {#if controller.error}<p role="alert">{$t(controller.error)}</p>{/if}
   {#key controller.generation}
-    <ConversationTranscript blocks={snapshot.blocks} loading={snapshot.loading} sessionKey={conversationKey(owner.identity)} nativeMarkers={owner.identity.location === 'native'} {agentLabel} {language} bind:searchOpen readHistory={owner.readHistory ? controller.readHistory : undefined} attachments={snapshot.attachments} onOpenAttachment={owner.openAttachment ? controller.openAttachment : undefined}
+    <ConversationTranscript blocks={snapshot.blocks} loading={snapshot.loading} sessionKey={conversationKey(owner.identity)} nativeMarkers={owner.identity.location === 'native'} {agentLabel} {language} bind:searchOpen readHistory={owner.readHistory ? controller.readHistory : undefined} attachments={snapshot.attachments} onOpenAttachment={owner.openAttachment ? attachmentPorts.open : undefined}
+      resolveAttachment={owner.resolveAttachment ? attachmentPorts.resolve : undefined} onDownloadAttachment={owner.downloadAttachment ? attachmentPorts.download : undefined}
+      messagePresentation={snapshot.presentation} decorateMessage={owner.decorateMessage ? controller.bindMessageDecoration() : undefined}
+      olderAvailable={snapshot.olderAvailable} olderLoading={snapshot.olderLoading || controller.olderLoading} onLoadOlder={owner.loadOlder ? controller.bindLoadOlder() : undefined}
       messageControls={snapshot.messageControls} onMessageAction={owner.actOnMessage ? controller.bindMessageActions() : undefined}
       busyMessageActions={controller.busyMessageActions} messageActionErrors={controller.messageActionErrors} />
     <!-- svelte-ignore a11y_no_noninteractive_tabindex (Long approvals have their own keyboard-scrollable region.) -->
