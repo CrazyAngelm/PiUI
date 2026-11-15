@@ -104,7 +104,11 @@ export type WorkspaceNoticeCode =
   | 'unsupported-board-tool-resume'
   /** Additive (ADR-043): the Fusion lead's `sidekick` tool is missing. */
   | 'unsupported-sidekick-tool'
-  | 'unsupported-sidekick-tool-resume';
+  | 'unsupported-sidekick-tool-resume'
+  /** Additive: a reopened chat's remembered model, reasoning or speed could not be re-applied (host-decided). */
+  | 'settings-not-restored'
+  /** Additive: the model, reasoning or speed a person just confirmed could not be saved for the next reopen (host-decided). */
+  | 'settings-not-remembered';
 export interface WorkspaceCatalog {
   protocol: 15; safeMode: boolean; workspaces: WorkspaceSummary[];
   sessions: WorkspaceSession[]; harnesses: HarnessSummary[];

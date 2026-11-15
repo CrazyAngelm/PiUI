@@ -1,9 +1,10 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import Brain from '@lucide/svelte/icons/brain';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import Zap from '@lucide/svelte/icons/zap';
   import { t } from '../../features/locale/language';
-  import { runtimeSettings } from '../../host-api/runtimeSettings';
+  import { onRuntimeSettingsSet, runtimeSettings } from '../../host-api/runtimeSettings';
   import { isNanoConnectorModel } from '../../host-api/harnessModels';
   import { NANO_EXTERNAL_PROVIDER_PREFIX } from '../../../../../contracts/nano-providers-v1';
   import type { RuntimeSettings } from '../../../../../contracts/workspace-settings-v16';
@@ -16,9 +17,10 @@
   interface Props {
     session: WorkspaceSession;
     disabled?: boolean;
+    safeMode?: boolean;
     onchange?: () => void;
   }
-  let { session, disabled = false, onchange = () => {} }: Props = $props();
+  let { session, disabled = false, safeMode = false, onchange = () => {} }: Props = $props();
 
   let open = $state(false);
   let busy = $state(false);
@@ -50,18 +52,48 @@
       .map(option),
   ]);
 
+  // Bumped by every load and every confirmed change: a slower, older answer never replaces a newer one.
+  let loads = 0;
+  const live = $derived(!safeMode && (session.status === 'idle' || session.status === 'running'));
+
+  async function load(id: string, visible: boolean): Promise<void> {
+    const token = ++loads;
+    if (visible) {
+      busy = true;
+      error = '';
+    }
+    try {
+      const result = await runtimeSettings({ type: 'get', sessionId: id });
+      if (token === loads && session.id === id) settings = result;
+    } catch (cause) {
+      // A background read stays quiet; the menu reports its own failure.
+      if (visible && token === loads) error = errorMessage(cause);
+    } finally {
+      if (visible) busy = false;
+    }
+  }
+
+  // The chat's own model, reasoning and speed show as soon as it is live, without opening the menu.
+  $effect(() => {
+    const id = session.id;
+    if (!live) return;
+    untrack(() => void load(id, false));
+  });
+
   $effect(() => {
     if (!open) return;
     const id = session.id;
-    busy = true;
-    error = '';
-    runtimeSettings({ type: 'get', sessionId: id })
-      .then((result) => {
-        if (session.id === id) settings = result;
-      })
-      .catch((cause: unknown) => (error = errorMessage(cause)))
-      .finally(() => (busy = false));
+    untrack(() => void load(id, true));
   });
+
+  // Settings confirmed elsewhere (the first message of a new chat) reach the chip at once.
+  $effect(() =>
+    onRuntimeSettingsSet((result) => {
+      if (result.sessionId !== session.id) return;
+      loads += 1;
+      settings = result;
+    }),
+  );
 
   async function apply(next: WorkspaceModel | null | undefined, patch: { thinkingLevel?: string; serviceTier?: 'standard' | 'fast' }): Promise<void> {
     if (!current || !next || busy || disabled) return;

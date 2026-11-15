@@ -712,6 +712,7 @@
           <RuntimeChip
             session={snapshot.session}
             disabled={busy || snapshot.session.status !== 'idle' || !snapshot.capabilities.models.supported}
+            {safeMode}
             onchange={refresh}
           />
         {/if}

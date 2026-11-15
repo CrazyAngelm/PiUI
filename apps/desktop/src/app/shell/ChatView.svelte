@@ -35,6 +35,7 @@
   import { sessionNotices, sidekickToolNotice } from '../../features/workspace/sessionNotices';
   import FusionBadge from '../fusion/FusionBadge.svelte';
   import FusionNotice from '../fusion/FusionNotice.svelte';
+  import SettingsNotice from '../chat/SettingsNotice.svelte';
   import SidekickOfBadge from '../fusion/SidekickOfBadge.svelte';
   import { fusionMembership } from '../fusion/fusionMembership.svelte';
   import NanoPetStatus from '../nano/NanoPetStatus.svelte';
@@ -263,6 +264,7 @@
               <ApprovalCard {approval} session={snapshot.session} />
             {/each}
             <FusionNotice code={sidekickToolNotice(notices)} />
+            <SettingsNotice {notices} />
             {#if boardProject}
               <ChatBoardActivity workspaceId={boardProject} sessionId={snapshot.session.id} blocks={snapshot.blocks} />
             {/if}
