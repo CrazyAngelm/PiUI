@@ -3141,6 +3141,7 @@ name = "piui-orchestration"
 version = "0.3.8"
 dependencies = [
  "piui-contracts",
+ "ryu-js",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
@@ -3735,6 +3736,12 @@ checksum = "69e4ce4a039f42bf25920b95667e4d789e98749ab11bbb8d2c2936f788421bb5"
 dependencies = [
  "twox-hash",
 ]
+
+[[package]]
+name = "ryu-js"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04d056b875a9d2e6cb9a61d127afee9ac5999b9f87bcb32079d1318e505be714"
 
 [[package]]
 name = "same-file"

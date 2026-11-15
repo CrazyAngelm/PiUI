@@ -9,9 +9,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const CRATES = ['piui-contracts', 'piui-orchestration', 'piui-graph-kernel'];
-const CONTRACT_FILES = [
+// Every file a packaged crate's tests include at compile time is listed, so
+// that the source artifact's tests build (package.test.mjs checks this).
+export const CONTRACT_FILES = [
   'contracts/harness-identity-v3.ts', 'contracts/orchestration-v6.ts',
   'contracts/nano-graph-kernel-v1.ts', 'contracts/fixtures/nano-graph-kernel-v1.json',
+  'contracts/nano-graph-kernel-v2.ts', 'contracts/fixtures/unified-shell/graph/compile-vectors-v1.json',
   'docs/NANO_GRAPH_KERNEL.md', 'LICENSE', 'rust-toolchain.toml',
 ];
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');

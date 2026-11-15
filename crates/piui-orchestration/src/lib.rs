@@ -7,6 +7,11 @@
 
 #![forbid(unsafe_code)]
 
+mod compile;
+pub use compile::{
+    COMPILED_SYSTEM_FILE_VERSION, CompileError, CompileIdentity, CompileRefusal,
+    PRESENTATION_ONLY_FIELDS, PipelineName, SYSTEM_FILE_FORMAT, compile_system_document,
+};
 mod coordinator;
 mod executors;
 pub use executors::{
@@ -62,6 +67,8 @@ pub use validation::{
     validate_history_reference, validate_profile_capabilities,
 };
 
+#[cfg(test)]
+mod compile_tests;
 #[cfg(test)]
 mod executor_tests;
 #[cfg(test)]
