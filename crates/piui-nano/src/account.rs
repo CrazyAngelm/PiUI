@@ -38,7 +38,7 @@ use crate::net::{
     API_TIMEOUT, DEVICE_HEADER, SESSION_HEADER, ServerFailure, build_client, json_answer,
 };
 use crate::oauth::{self, TokenFailure, TokenSet};
-use crate::pkce::{PkcePair, random_bytes, random_token};
+use crate::pkce::{PkcePair, random_token};
 use crate::secret::SecretString;
 use crate::status::{
     NanoAccountDeviceV1, NanoAccountProtocolV1, NanoAccountStateV1, NanoAccountStatusV1,
@@ -1309,23 +1309,11 @@ impl NanoAccount {
             (workspace, s.generation)
         };
         let mime = audio_mime(mime).ok_or(NanoError::Invalid)?;
-        let nonce = random_bytes::<12>()?;
-        let boundary: String = format!(
-            "nano-{}",
-            nonce.iter().map(|b| format!("{b:02x}")).collect::<String>()
-        );
-        let mut body = Vec::with_capacity(audio.len() + 256);
-        body.extend_from_slice(
-            format!(
-                "--{boundary}\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"{}\"\r\nContent-Type: {mime}\r\n\r\n",
-                audio_file_name(mime)
-            )
-            .as_bytes(),
-        );
-        body.extend_from_slice(&audio);
-        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-        let body = Bytes::from(body);
-        let content_type = format!("multipart/form-data; boundary={boundary}");
+        // The raw `audio/*` body of the contract, not its multipart form: the
+        // production server's model binding reads a form body before the
+        // endpoint does, which then finds no part and refuses the clip.
+        let body = Bytes::from(audio);
+        let content_type = mime.to_owned();
         let url = self
             .inner
             .config
@@ -1400,22 +1388,6 @@ fn audio_mime(mime: &str) -> Option<&str> {
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b"+-.".contains(&c));
     token.then_some(essence)
-}
-
-/// The part's file name. The server forwards it to a transcription gateway
-/// that infers the container from the extension and refuses a name without
-/// one, so the name always carries the extension of `mime` (an `audio_mime`
-/// essence).
-fn audio_file_name(mime: &str) -> &'static str {
-    let subtype = mime.strip_prefix("audio/").unwrap_or_default();
-    match subtype.to_ascii_lowercase().as_str() {
-        "ogg" | "opus" => "dictation.ogg",
-        "wav" | "x-wav" | "wave" | "vnd.wave" => "dictation.wav",
-        "mpeg" | "mp3" => "dictation.mp3",
-        "mp4" | "m4a" | "x-m4a" | "aac" => "dictation.m4a",
-        "flac" | "x-flac" => "dictation.flac",
-        _ => "dictation.webm",
-    }
 }
 
 #[cfg(test)]

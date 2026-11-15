@@ -540,12 +540,3 @@ fn audio_mime_accepts_audio_only() {
     assert_eq!(audio_mime("audio/"), None);
     assert_eq!(audio_mime("audio/we\r\nbm"), None);
 }
-
-#[test]
-fn audio_file_name_carries_the_container_extension() {
-    assert_eq!(audio_file_name("audio/webm"), "dictation.webm");
-    assert_eq!(audio_file_name("audio/ogg"), "dictation.ogg");
-    assert_eq!(audio_file_name("audio/x-wav"), "dictation.wav");
-    assert_eq!(audio_file_name("audio/mp4"), "dictation.m4a");
-    assert_eq!(audio_file_name("audio/unknown"), "dictation.webm");
-}
