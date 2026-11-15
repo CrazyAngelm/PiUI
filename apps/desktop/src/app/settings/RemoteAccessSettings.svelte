@@ -78,7 +78,7 @@
           <small>
             {reason !== undefined
               ? $t(UNAVAILABLE_COPY[reason])
-              : $t('Browsers you approve on this computer can open your chats here, send messages and answer approvals. While one is connected, the chats it opens travel through Nano\'s server to it and are not stored there.')}
+              : $t('Browsers you approve on this computer can open your chats here, send messages and answer approvals. While one is connected, your chat list and the content of all open chats pass through Nano\'s server to it and are not stored there.')}
           </small>
         </div>
         <Switch

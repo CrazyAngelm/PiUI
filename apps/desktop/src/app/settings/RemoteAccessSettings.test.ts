@@ -34,6 +34,8 @@ describe('Settings → remote access', () => {
     expect(body).toContain('aria-label="Allow remote access from Nano Web"');
     expect(body).toContain('role="switch"');
     expect(body).toContain('aria-checked="false"');
+    // The disclosure names all open chats, not only the ones the browser opens.
+    expect(body).toContain('the content of all open chats pass through');
     expect(body).toContain('server to it and are not stored there.');
     expect(body).not.toContain('Waiting for connections');
     expect(body).not.toContain('Connected now');
@@ -93,7 +95,7 @@ describe('Settings → remote access', () => {
     const unsupported = html(await started('unsupported'));
     expect(unsupported).toContain('This Nano server does not support remote access yet.');
     expect(unsupported).toMatch(/<button[^>]*role="switch"[^>]*disabled|<button[^>]*disabled[^>]*role="switch"/);
-    expect(unsupported).not.toContain('travel through');
+    expect(unsupported).not.toContain('pass through');
 
     const signedOut = html(await started('off', 'signed-out'));
     expect(signedOut).toContain('Sign in to use remote access.');

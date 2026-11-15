@@ -275,9 +275,10 @@ The privacy model of ADR-047, as a list:
 3. Audio that the user dictates (one request per recording).
 4. Devices: the server learns a device name, platform and app version at
    sign-in.
-5. While remote access is on and a paired browser is connected, the chat lists
-   and the chats it opens, including tool output shown in them, pass through
-   the Nano server to that browser and are not stored there (section 15).
+5. While remote access is on and a paired browser is connected, the chat list
+   and the content of all open chats, including tool output shown in them (not
+   only the chats that browser opens), pass through the Nano server to that
+   browser and are not stored there (section 15).
 
 What does not leave: local Nano histories (never uploaded or synced), other
 harnesses' traffic, credentials of other products, telemetry (there is none).
@@ -414,7 +415,7 @@ otherwise.
 | Script in the WebView (model output, plugin panel) | No token in the WebView; CSP blocks network; typed commands; guard allowlist | UI spoofing inside the app |
 | Cost exhaustion (unattended schedules, farming) | The server's plan limits: credit balance, locked modes, per-device limits. The relay's own limits are the entitled-mode check, request size, concurrency, an upload deadline and the account generation | The relay has no spending budget per session or per schedule. Spending is bounded only by the account's plan limits on the server, and a scheduled Nano step spends unattended |
 | A stolen Nano account, password or web cookie used from another browser (remote access) | Off by default; the desktop verifies a per-browser key; an unknown key needs approval at the computer with a code both screens show; three refusals in ten minutes lock unknown keys for ten minutes | An attacker can make a prompt appear while the owner is at the computer; a code that differs and the browser label are the defence |
-| Script on the Nano Web origin, or a compromised Nano server (remote access) | Allowlist without shell, filesystem, credentials, settings or plugins; a visible indicator and a disconnect button; the toggle closes the channel; the server lever and `minClientVersion` | Such code can drive a paired browser's session: read the chats it opens and send prompts and approvals. Frames are not end-to-end encrypted in version 1 |
+| Script on the Nano Web origin, or a compromised Nano server (remote access) | Allowlist without shell, filesystem, credentials, settings or plugins; a visible indicator and a disconnect button; the toggle closes the channel; the server lever and `minClientVersion` | Such code can drive a paired browser's session: read the content of all open chats and send prompts and approvals. Frames are not end-to-end encrypted in version 1 |
 | The server relays a browser to the wrong account (remote access) | The desktop refuses any browser without a valid signature bound to its own device id and the browser's relay session | None practical for an unpaired browser |
 | Revoked device, sign-out or expiry while remote access is on | The link closes on any account generation change; the server closes it within a request of a revocation | A running agent keeps running locally |
 | Flooding and oversized frames (remote access) | 256 KiB frames, two browsers per device, eight requests in flight per browser, a 64 MiB result cap, 600 messages a minute on the server | A paired browser can still spend the account's credits by prompting, as at the keyboard |
@@ -522,8 +523,10 @@ refused above 64 MiB), two browsers per device, eight requests in flight per
 browser, 75 s of silence ends the link, one pairing prompt at a time.
 
 **Disclosure.** The Nano server relays the frames in memory and keeps none; it
-does see the chats a browser opens, in transit, over TLS on both legs. Frames
-are not end-to-end encrypted in version 1.
+does see the chat list and the content of all open chats, in transit, over TLS
+on both legs: the shell loads the snapshots of every open session and the host
+forwards the events of every session to each connected browser, not only the
+chats that browser opens. Frames are not end-to-end encrypted in version 1.
 
 **Development.** `tools/nano-dev-server` implements the relay (README, "Remote
 access") and can host the remote shell with `--remote-ui`. Its evidence is

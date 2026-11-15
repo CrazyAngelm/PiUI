@@ -86,8 +86,8 @@ export const nanoRu: Readonly<Record<string, string>> = {
   'No speech was recognized. Try again.': 'Речь не распознана. Попробуйте ещё раз.',
   // Remote access from Nano Web: Settings → Nano account, the pairing prompt and the sidebar indicator
   'Allow remote access from Nano Web': 'Разрешить удалённый доступ из Nano Web',
-  "Browsers you approve on this computer can open your chats here, send messages and answer approvals. While one is connected, the chats it opens travel through Nano's server to it and are not stored there.":
-    'Браузеры, которые вы разрешите на этом компьютере, смогут открывать ваши чаты здесь, отправлять сообщения и отвечать на запросы подтверждения. Пока браузер подключён, открытые в нём чаты передаются через сервер Nano и там не сохраняются.',
+  "Browsers you approve on this computer can open your chats here, send messages and answer approvals. While one is connected, your chat list and the content of all open chats pass through Nano's server to it and are not stored there.":
+    'Браузеры, которые вы разрешите на этом компьютере, смогут открывать ваши чаты здесь, отправлять сообщения и отвечать на запросы подтверждения. Пока браузер подключён, список чатов и содержимое всех открытых чатов передаются через сервер Nano и там не сохраняются.',
   'Not available in safe mode.': 'Недоступно в безопасном режиме.',
   'Sign in to use remote access.': 'Войдите в аккаунт, чтобы включить удалённый доступ.',
   'This Nano server does not support remote access yet.': 'Этот сервер Nano пока не поддерживает удалённый доступ.',

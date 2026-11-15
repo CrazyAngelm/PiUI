@@ -73,9 +73,12 @@ Nano server and has exactly one listener, the loopback relay (ADR-048).
 
 ## Consequences
 
-- The Nano server sees the chats a paired browser opens, in transit, over TLS on
-  both legs. They are not stored there. This is a disclosure in
-  `docs/NANO_DESKTOP.md` section 6.
+- The Nano server sees the chat list and the content of all open chats while a
+  paired browser is connected, in transit, over TLS on both legs: the remote
+  shell loads the snapshots of every open session and the host forwards the
+  events of every session to each connected browser, not only the chats that
+  browser opens. They are not stored there. This is a disclosure in
+  `docs/NANO_DESKTOP.md` section 6 and in the Settings text.
 - A paired browser can do in chats what the keyboard can, including approving a
   tool call. This is remote control of agents that run as the user, not a
   sandbox, and no document describes it as one.
