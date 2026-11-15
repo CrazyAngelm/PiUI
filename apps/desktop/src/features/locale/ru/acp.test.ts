@@ -16,7 +16,7 @@ function sourceKeys(): string[] {
   ];
   const keys = new Set<string>();
   for (const file of files) {
-    for (const match of readFileSync(file, 'utf8').matchAll(/\$t\('((?:[^'\\]|\\.)+)'/g)) keys.add(match[1] ?? '');
+    for (const match of readFileSync(file, 'utf8').matchAll(/\$t\('((?:[^'\\]|\\.)+)'/g)) keys.add((match[1] ?? '').replace(/\\'/g, "'"));
   }
   return [...keys];
 }
