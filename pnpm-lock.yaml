@@ -123,6 +123,9 @@ importers:
       vite:
         specifier: 6.3.5
         version: 6.3.5(@types/node@22.15.21)(terser@5.51.2)
+      vitest:
+        specifier: 3.2.4
+        version: 3.2.4(@types/node@22.15.21)(terser@5.51.2)
 
   packages/plugin-sdk: {}
 

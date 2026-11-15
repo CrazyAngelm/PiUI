@@ -1,0 +1,115 @@
+/* The screen shown before and after the shell in the Nano Web remote bundle. Desktop tokens only. */
+.gate {
+  display: grid;
+  place-items: center;
+  height: 100dvh;
+  min-width: 0;
+  overflow: auto;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  background: var(--piui-bg);
+  color: var(--piui-text);
+}
+
+.gate__card {
+  display: grid;
+  gap: var(--piui-space-4);
+  justify-items: center;
+  width: min(100%, 26rem);
+  padding: var(--piui-space-8) var(--piui-space-6);
+  border: 1px solid var(--piui-border-subtle);
+  border-radius: var(--piui-radius-lg);
+  background: var(--piui-surface-1);
+  text-align: center;
+}
+
+.gate__state {
+  display: grid;
+  gap: var(--piui-space-2);
+  justify-items: center;
+  min-width: 0;
+}
+
+.gate__title {
+  margin: 0;
+  font-size: var(--piui-text-2xl);
+  font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.gate__device,
+.gate__detail,
+.gate__note {
+  margin: 0;
+  color: var(--piui-text-muted);
+  font-size: var(--piui-text-lg);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.gate__device {
+  color: var(--piui-text);
+  font-weight: 500;
+}
+
+.gate__note {
+  font-size: var(--piui-text-md);
+}
+
+.gate__code {
+  margin: 0;
+  font-family: var(--piui-font-mono);
+  font-size: clamp(2rem, 14vw, 3rem);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+}
+
+.gate__button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 var(--piui-space-6);
+  border-radius: var(--piui-radius-full);
+  background: var(--piui-action);
+  color: var(--piui-action-ink);
+  font-weight: 600;
+}
+
+.gate__button:hover {
+  background: var(--piui-action-hover);
+}
+
+.gate__button:active {
+  background: var(--piui-action-pressed);
+}
+
+.gate__spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--piui-border-strong);
+  border-top-color: var(--piui-accent);
+  border-radius: 50%;
+  animation: gate-spin 0.9s linear infinite;
+}
+
+@keyframes gate-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gate__spinner {
+    animation: none;
+  }
+}
+
+:root[data-reduced-motion="reduce"] .gate__spinner {
+  animation: none;
+}
+
+@media (max-width: 360px) {
+  .gate__card {
+    padding: var(--piui-space-6) var(--piui-space-4);
+  }
+}

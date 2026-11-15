@@ -52,3 +52,36 @@ first revision is known. Render IDs never reserve portable agent identifiers.
 module bytes through a static server, without Vite transforms or a Node global
 shim. The persistent browser verifies concurrent locales, keyboard editing,
 conflicts, uncertain saves, invalid import and host/CSS/portal isolation.
+
+## Remote shell
+
+`pnpm --filter @piui/nano-ui build:remote` builds the desktop workbench
+(`apps/desktop/src/app/shell/AppShell.svelte`) as a page for Nano Web: the
+person's browser shows the shell of a computer running Nano Desktop. The same
+Svelte code is compiled; only `host-api/transport.ts` is replaced at build time
+by `src/remote/transport.ts`, which sends the allowlisted host commands and
+receives the allowlisted events over the nano-remote v1 WebSocket
+(`contracts/nano-remote-v1.ts`, ADR-062). The build fails if Tauri APIs, the UI
+Lab host or the original transport reach the bundle.
+
+The bundle holds no token. The host page supplies one thing, in the URL
+fragment of a same-origin iframe: `#device=<device id>&lang=ru|en&theme=light|dark|system`.
+The page connects to `/api/hermes/remote/devices/<id>/socket` on its own
+origin with the browser's session cookie and talks to nothing else (the page's
+CSP allows only `'self'`). The browser keeps a non-extractable ECDSA P-256 key
+(WebCrypto in IndexedDB), proves it on every connection and shows a six-digit
+pairing code that the desktop shows too. The shell mounts only when the
+desktop's contract numbers equal the ones compiled in.
+
+Install the bundle as one artifact: copy the whole `dist-remote/` directory to
+`NanoAgentProject.HermesWebApp/wwwroot/vendor/nano-remote/` (replace the
+directory, never merge it) and check the hashes in `remote-manifest.json`
+against the files. The Blazor "Devices" page reads that manifest to build the
+iframe address and refuses a bundle whose manifest is missing or wrong.
+
+- `pnpm --filter @piui/nano-ui test:remote:unit` runs the connection,
+  transport, pairing-code and key tests in Node.
+- `pnpm --filter @piui/nano-ui test:remote` builds the bundle and runs the
+  browser test with the persistent test profile. Its relay and desktop are
+  scripted in `tests/remote-harness.ts` (the desktop is answered by the UI Lab
+  host), so its evidence is synthetic, not a real server, desktop or provider.
