@@ -4,7 +4,7 @@
   import Zap from '@lucide/svelte/icons/zap';
   import { t } from '../../features/locale/language';
   import { Switch } from '../../lib/ui';
-  import { nearestStop, railPosition, railStops, reasoningSteps, stepForKey, type ReasoningStep } from './reasoningSteps';
+  import { nearestStop, railPosition, railStops, RailGesture, reasoningSteps, stepForKey, type ReasoningStep } from './reasoningSteps';
 
   interface Props {
     /** Reasoning levels of the selected model, lowest first. */
@@ -42,8 +42,8 @@
   const activeSlot = $derived(slotOf(active));
   const peekSlot = $derived(peek === active ? -1 : slotOf(peek));
   let group = $state<HTMLDivElement | null>(null);
-  // The step a press began on; -1 outside a press. Only the pointer handlers read it.
-  let pressed = -1;
+  // The pointer press in progress. Plain state: only the handlers below read it.
+  const gesture = new RailGesture();
 
   function slotOf(index: number): number {
     const step: ReasoningStep | undefined = steps[index];
@@ -78,7 +78,7 @@
   }
 
   function settle(index: number): void {
-    if (pressed < 0 && peek === index) peek = -1;
+    if (!gesture.active && peek === index) peek = -1;
   }
 
   /** The step whose centre is nearest to a pointer position. */
@@ -93,42 +93,57 @@
   }
 
   function scrub(event: PointerEvent): void {
+    if (!gesture.owns(event.pointerId)) return;
     const next = stopAt(event.clientX);
     if (next >= 0) peek = next;
   }
 
   function endPress(): void {
-    pressed = -1;
+    gesture.end();
     window.removeEventListener('pointermove', scrub);
     window.removeEventListener('pointerup', release);
     window.removeEventListener('pointercancel', cancel);
   }
 
   function release(event: PointerEvent): void {
-    const from = pressed;
-    const next = stopAt(event.clientX);
-    endPress();
+    if (!gesture.owns(event.pointerId)) return;
     // A release on the stop the press began on is a click, which picks it.
-    if (next < 0 || next === from) return;
+    const next = gesture.release(event.pointerId, stopAt(event.clientX));
+    endPress();
+    if (next < 0) return;
     peek = -1;
     pick(next);
     radios()[next]?.focus();
   }
 
-  function cancel(): void {
+  function cancel(event: PointerEvent): void {
+    if (!gesture.owns(event.pointerId)) return;
     endPress();
     peek = -1;
   }
 
-  // A press may slide along the rail: the release picks the stop under the pointer.
+  // A touch pointer is captured by the stop it lands on, which would send its release, and the click after it, there.
+  function releaseCapture(event: PointerEvent): void {
+    const target = event.currentTarget;
+    if (target instanceof Element && target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId);
+  }
+
+  // A press may slide along the rail: the release picks the stop under the pointer. Only that pointer steers it.
   function press(event: PointerEvent, index: number): void {
     if (busy || !event.isPrimary || event.button !== 0) return;
     endPress();
-    pressed = index;
+    releaseCapture(event);
+    gesture.begin(event.pointerId, index);
     peek = index;
     window.addEventListener('pointermove', scrub);
     window.addEventListener('pointerup', release);
     window.addEventListener('pointercancel', cancel);
+  }
+
+  // The click that trails a slide must not pick the stop the press began on and undo the slide.
+  function click(event: MouseEvent, index: number): void {
+    if (gesture.swallowsClick(event.detail)) return;
+    pick(index);
   }
 
   // The popover can close in the middle of a press and take the control with it.
@@ -172,7 +187,7 @@
             tabindex={index === (active >= 0 ? active : 0) ? 0 : -1}
             title={label}
             style:--pos={step.slot >= 0 ? railPosition(step.slot, stops) : undefined}
-            onclick={() => pick(index)}
+            onclick={(event) => click(event, index)}
             onkeydown={(event) => key(event, index)}
             onpointerdown={(event) => press(event, index)}
             onpointerenter={() => preview(index)}

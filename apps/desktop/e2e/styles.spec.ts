@@ -65,8 +65,40 @@ test.describe('built-in styles', () => {
       await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 4 });
       await page.mouse.up();
       await expect(xhigh).toBeChecked();
+      // A slide leaves no click behind on a stop, and Enter still picks the focused one.
+      await low.press('Enter');
+      await expect(low).toBeChecked();
 
+      // Synthetic pointers: a second finger neither steers nor ends the first one's slide,
+      // and the click a touch slide leaves on its starting stop does not undo it.
+      const medium = gauge.getByRole('radio', { name: 'medium', exact: true });
       const high = gauge.getByRole('radio', { name: 'high', exact: true });
+      const centre = async (stop: typeof low): Promise<number> => {
+        const box = await stop.boundingBox();
+        if (!box) throw new Error('Missing reasoning stop');
+        return box.x + box.width / 2;
+      };
+      const send = (type: string, pointerId: number, clientX: number, target: typeof low | null): Promise<void> => {
+        const init = { pointerId, pointerType: 'touch', isPrimary: true, button: 0, clientX, clientY: 0, bubbles: true, cancelable: true };
+        return target
+          ? target.evaluate((element, event) => void element.dispatchEvent(new PointerEvent(event.type, event.init)), { type, init })
+          : page.evaluate((event) => void window.dispatchEvent(new PointerEvent(event.type, event.init)), { type, init });
+      };
+      await send('pointerdown', 11, await centre(low), low);
+      await send('pointermove', 12, await centre(medium), null);
+      await send('pointerup', 12, await centre(medium), null);
+      await send('pointerup', 11, await centre(high), null);
+      await expect(high).toBeChecked();
+
+      await send('pointerdown', 13, await centre(low), low);
+      await send('pointerup', 13, await centre(xhigh), null);
+      await low.evaluate((element) => void element.dispatchEvent(new MouseEvent('click', { detail: 1, bubbles: true, cancelable: true })));
+      await expect(xhigh).toBeChecked();
+      // Let the lab apply a wrong second pick, if there were one, before the negative check.
+      await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+      await expect(xhigh).toBeChecked();
+      await expect(low).not.toBeChecked();
+
       await high.click();
       await expect(high).toBeChecked();
       await high.press('Home');

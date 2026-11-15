@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nearestStop, railPosition, railStops, reasoningSteps, stepForKey } from './reasoningSteps';
+import { nearestStop, railPosition, railStops, RailGesture, reasoningSteps, stepForKey } from './reasoningSteps';
 
 const CODEX = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 
@@ -102,5 +102,70 @@ describe('stepForKey', () => {
   it('leaves every other key alone', () => {
     for (const key of ['Enter', ' ', 'Tab', 'Escape', 'a', 'PageDown']) expect(stepForKey(key, 2, 7)).toBe(-1);
     expect(stepForKey('End', 0, 0)).toBe(-1);
+  });
+});
+
+describe('RailGesture', () => {
+  it('belongs to the pointer that pressed, so a second finger neither steers nor ends it', () => {
+    const gesture = new RailGesture();
+    expect(gesture.active).toBe(false);
+    expect(gesture.owns(7)).toBe(false);
+    gesture.begin(7, 2);
+    expect(gesture.active).toBe(true);
+    expect([gesture.owns(7), gesture.owns(8)]).toEqual([true, false]);
+    // The other pointer's release picks nothing and leaves the press running.
+    expect(gesture.release(8, 5)).toBe(-1);
+    expect(gesture.active).toBe(true);
+    expect(gesture.owns(7)).toBe(true);
+    expect(gesture.release(7, 5)).toBe(5);
+    expect(gesture.active).toBe(false);
+    expect(gesture.owns(7)).toBe(false);
+  });
+
+  it('picks nothing for a release on the stop the press began on, or over no stop', () => {
+    const gesture = new RailGesture();
+    gesture.begin(1, 3);
+    expect(gesture.release(1, 3)).toBe(-1);
+    expect(gesture.active).toBe(false);
+    gesture.begin(1, 3);
+    expect(gesture.release(1, -1)).toBe(-1);
+    // Neither was a slide, so the plain click that follows is not swallowed.
+    expect(gesture.swallowsClick(1)).toBe(false);
+  });
+
+  it('swallows the pointer click that trails a handled slide, once', () => {
+    const gesture = new RailGesture();
+    gesture.begin(1, 1);
+    expect(gesture.release(1, 4)).toBe(4);
+    expect(gesture.swallowsClick(1)).toBe(true);
+    expect(gesture.swallowsClick(1)).toBe(false);
+  });
+
+  it('never swallows a keyboard click, and a stale slide does not outlive it', () => {
+    const gesture = new RailGesture();
+    gesture.begin(1, 1);
+    expect(gesture.release(1, 4)).toBe(4);
+    // Enter and Space click with detail 0.
+    expect(gesture.swallowsClick(0)).toBe(false);
+    expect(gesture.swallowsClick(1)).toBe(false);
+  });
+
+  it('forgets a slide when the next press begins', () => {
+    const gesture = new RailGesture();
+    gesture.begin(1, 1);
+    gesture.release(1, 4);
+    gesture.begin(1, 2);
+    expect(gesture.swallowsClick(1)).toBe(false);
+  });
+
+  it('ends a press without picking and lets a later pointer press', () => {
+    const gesture = new RailGesture();
+    gesture.begin(5, 0);
+    gesture.end();
+    expect(gesture.active).toBe(false);
+    expect(gesture.owns(5)).toBe(false);
+    expect(gesture.release(5, 2)).toBe(-1);
+    gesture.begin(6, 1);
+    expect([gesture.owns(5), gesture.owns(6)]).toEqual([false, true]);
   });
 });

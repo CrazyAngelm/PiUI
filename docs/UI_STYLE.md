@@ -73,7 +73,8 @@ does not prove that a setting reaches the harness.
 - A press can slide along the rail: an outlined ghost thumb and the readout
   preview the stop under the pointer and the release picks it. Hover and
   keyboard focus preview the same way. The thumb itself moves only when the
-  level changes.
+  level changes. Only the pointer that pressed steers or ends a slide, and the
+  click that trails a slide is ignored so it cannot undo the pick.
 - Nano and plain plugin ornaments draw a capsule thumb, a round Auto button and
   upright ticks. Chaos and slanted plugin ornaments lean the rail, the ticks,
   the thumb and the Auto button by the existing 12 degrees and square them.
