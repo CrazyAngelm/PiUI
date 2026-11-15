@@ -8,19 +8,22 @@ import { NANO_REMOTE_CHANNELS, NANO_REMOTE_COMMANDS } from '../../../../../contr
  */
 const seen = vi.hoisted(() => ({ commands: [] as string[], channels: [] as string[] }));
 
-vi.mock('../../host-api/transport', async () => {
-  const { createLabHost } = await import('../../host-api/lab/labHost');
-  const host = createLabHost({ scenario: 'demo', ambient: false });
+vi.mock('../../host-api/transport', () => {
+  // The Lab host imports the typed clients, which import this very module: it
+  // is loaded on the first call, never while the mock is being created.
+  type LabHost = import('../../host-api/transport').HostTransport;
+  let host: Promise<LabHost> | undefined;
+  const lab = (): Promise<LabHost> => (host ??= import('../../host-api/lab/labHost').then(({ createLabHost }) => createLabHost({ scenario: 'demo', ambient: false })));
   return {
     desktopAvailable: false,
     hostRemote: true,
-    hostInvoke: (command: string, args?: Record<string, unknown>) => {
+    hostInvoke: async (command: string, args?: Record<string, unknown>) => {
       seen.commands.push(command);
-      return host.invoke(command, args);
+      return (await lab()).invoke(command, args);
     },
-    hostListen: (channel: string, handler: (payload: never) => void) => {
+    hostListen: async (channel: string, handler: (payload: never) => void) => {
       seen.channels.push(channel);
-      return host.listen(channel, handler);
+      return (await lab()).listen(channel, handler);
     },
   };
 });
