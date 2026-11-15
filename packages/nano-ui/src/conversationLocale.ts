@@ -24,6 +24,14 @@ const russian: Readonly<Record<string, string>> = {
   'Repeat request': 'Повторить запрос',
   'Refresh conversation': 'Обновить диалог',
   'Could not complete the message action.': 'Не удалось выполнить действие с сообщением.',
+  'Thought': 'Размышлял',
+  'Thought for {0}s': 'Размышлял {0} с',
+  'Thought for {0}m {1}s': 'Размышлял {0} мин {1} с',
+  '{0} failed': 'С ошибкой: {0}',
+  'Work plan': 'План работы',
+  'Thinking…': 'Думает…',
+  'Stopped': 'Остановлено',
+  'working…': 'работает…',
 };
 
 export function createConversationTranslation(language: Language) {

@@ -6,7 +6,7 @@
   import type { TimelineActivityGroup } from '../../../features/sessions/timelineView';
   import { Spinner } from '../../../lib/ui';
   import ToolRow from './ToolRow.svelte';
-  import { activityDiffTotals, activitySummary } from './toolKinds';
+  import { activityDiffTotals, activityState, activitySummary } from './toolKinds';
 
   interface Props {
     group: TimelineActivityGroup;
@@ -19,16 +19,16 @@
 
   const summary = $derived(activitySummary(group.blocks, language));
   const diffStats = $derived(activityDiffTotals(group.blocks));
-  const live = $derived(group.status === 'streaming');
-  const problem = $derived(group.status === 'failed' || group.status === 'interrupted');
+  const activity = $derived(activityState(group.blocks));
+  const calls = $derived(group.blocks.filter((block) => block.kind === 'tool').length);
   const groupOpen = $derived(openState[group.id] ?? false);
 
   function rowOpen(id: string, failed: boolean): boolean {
-    return openState[id] ?? (group.blocks.length === 1 || failed);
+    return openState[id] ?? (calls === 1 || failed);
   }
 </script>
 
-<div class="group" class:group--problem={problem}>
+<div class="group">
   <button type="button" class="group__head" aria-expanded={groupOpen} onclick={() => onOpenChange(group.id, !groupOpen)}>
     <span class="group__summary">{summary}</span>
     {#if diffStats}
@@ -37,8 +37,14 @@
         <span class="diff-stats__removed">−{diffStats.removed}</span>
       </span>
     {/if}
-    {#if live}<span class="group__status group__status--live"><Spinner size={12} /><span class="visually-hidden">{$t('working…')}</span></span>
-    {:else if problem}<span class="group__status group__status--problem" aria-hidden="true"><CircleAlert size={14} /></span>{/if}
+    {#if activity.live}
+      <span class="group__status group__status--live"><Spinner size={12} /><span class="visually-hidden">{$t('working…')}</span></span>
+      {#if activity.current}<span class="group__current">{activity.current}</span>{/if}
+    {/if}
+    {#if activity.failed > 0}
+      <span class="group__status group__status--failed"><span class="group__icon" aria-hidden="true"><CircleAlert size={13} /></span>{$t('{0} failed', [activity.failed])}</span>
+    {/if}
+    {#if activity.stopped && !activity.live}<span class="group__status group__status--stopped">{$t('Stopped')}</span>{/if}
     <span class="chevron" class:chevron--open={groupOpen}><ChevronRight size={12} /></span>
   </button>
   {#if groupOpen}
@@ -79,14 +85,34 @@
   }
   .group__status {
     display: inline-flex;
-    justify-content: center;
+    align-items: center;
+    gap: 4px;
     flex: none;
   }
   .group__status--live {
     color: var(--piui-accent);
   }
-  .group__status--problem {
+  .group__status--failed {
     color: var(--piui-danger);
+    font-size: var(--piui-text-xs);
+  }
+  .group__status--stopped {
+    color: var(--piui-text-disabled);
+    font-size: var(--piui-text-xs);
+  }
+  .group__icon {
+    display: inline-flex;
+  }
+  .group__current {
+    flex: 0 10 auto;
+    min-width: 0;
+    max-width: 48ch;
+    overflow: hidden;
+    color: var(--piui-text-disabled);
+    font-family: var(--piui-font-mono);
+    font-size: var(--piui-text-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .group__summary {
     min-width: 0;

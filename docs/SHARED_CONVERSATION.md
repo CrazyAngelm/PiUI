@@ -7,8 +7,9 @@ runtime ownership or the existing isolated Cloud window.
 `app/chat/transcript/Transcript.svelte` remains the native entry point used by
 chat, history and run inspection. It supplies native history reads, the trusted
 plugin registry and the existing sandboxed plugin frame. The display is
-`shared/conversation/ConversationTranscript.svelte`; activity grouping, tool
-rows, Markdown, diffs and Fusion brief cards remain the existing components.
+`shared/conversation/ConversationTranscript.svelte`; activity grouping, reasoning
+rows, tool rows, Markdown, diffs and Fusion brief cards remain the existing
+components.
 `ApprovalCard.svelte` similarly keeps workspace-store dispatch and native
 run/Fusion restrictions while rendering the shared `ApprovalRequest.svelte`.
 

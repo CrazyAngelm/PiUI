@@ -117,3 +117,36 @@ export function activityDiffTotals(blocks: readonly TimelineBlock[]): { added: n
   );
   return totals.added === 0 && totals.removed === 0 ? undefined : totals;
 }
+
+export interface ActivityState {
+  /** A call is still running. Outranks every other state. */
+  live: boolean;
+  /** Tool calls that ended in an error. Reasoning never counts. */
+  failed: number;
+  /** A call was stopped or declined before it finished. */
+  stopped: boolean;
+  /** One line describing the running call. */
+  current?: string;
+}
+
+/** One line for a tool call: its title, else the command its text starts with, else its name. */
+export function activityLine(block: TimelineBlock): string {
+  const first = (block.text ?? '').split('\n', 1)[0] ?? '';
+  const line = block.title
+    ?? (first.startsWith('Command: ') ? first.slice('Command: '.length) : first.startsWith('$ ') ? first.slice(2) : undefined);
+  return (line?.trim() || block.label || block.toolName || 'Tool').slice(0, 160);
+}
+
+/** State of a group of tool calls, from the calls themselves. */
+export function activityState(blocks: readonly TimelineBlock[]): ActivityState {
+  let failed = 0;
+  let stopped = false;
+  let running: TimelineBlock | undefined;
+  for (const block of blocks) {
+    if (block.kind !== 'tool') continue;
+    if (block.status === 'streaming') running = block;
+    else if (block.status === 'failed') failed += 1;
+    else if (block.status === 'interrupted') stopped = true;
+  }
+  return { live: running !== undefined, failed, stopped, ...(running ? { current: activityLine(running) } : {}) };
+}

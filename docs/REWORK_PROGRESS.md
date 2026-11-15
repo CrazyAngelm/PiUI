@@ -777,6 +777,32 @@ four read-only GPT 6.1 Sol passes.
   fixed. The native sign-in terminal (`CreateProcessW`) was not launched for
   real.
 
+## 2026-11-15 — chat activity: visible reasoning, honest status, smaller groups
+
+- Only tool calls collapse into an activity group now. Assistant prose and
+  reasoning with text are rows of their own between groups (`groupTranscriptBlocks`
+  in `features/sessions/timelineView.ts`); a finished reasoning block without
+  text stays inside the neighbouring group so empty reasoning items do not cut
+  every command into its own row. Block order and the chat format are unchanged.
+- New `ReasoningView`: open with the streamed text while it streams, closes by
+  itself to "Thought for 12s" / "Thought" (a manual toggle wins), "Work plan"
+  for a Codex plan. A small `reasoningClock` times blocks seen streaming;
+  histories carry no duration.
+- The group row reads its state from its tool calls only: a spinner and the
+  running call's one-line description, "N failed" with an icon only for calls
+  that really failed, a neutral "Stopped" for stopped or declined calls, nothing
+  on success. This removes the "!" a single failed or stopped call used to put
+  on a 15-22 call group.
+- `piui-index` fix: a persisted Codex `exec_command_end` without an exit code is
+  no longer projected as a failed call.
+- Russian copy added to the desktop and browser-island catalogs; docs updated
+  (02_UX, 06_DATA_AND_SESSIONS, MULTI_HARNESS_UX, SHARED_CONVERSATION).
+- Files: `timelineView.ts`, `toolKinds.ts`, `reasoningClock.ts`,
+  `ReasoningView.svelte`, `ActivityGroupView.svelte`, `ToolRow.svelte`,
+  `ConversationTranscript.svelte`, `workspace_history.rs`, locale catalogs, unit
+  tests and `e2e/chat-activity.spec.ts`.
+- Verification: not run by the implementer; pending the end-of-task run.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

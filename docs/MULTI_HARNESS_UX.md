@@ -179,7 +179,7 @@ Do not silently downgrade a required `read-only` or `workspace-write` request to
 
 ### Conversation surface
 
-Retain the single persisted-plus-live timeline, anchor-preserving history paging, batched streaming and generic AST-based Markdown renderer. Keep completed tools/thinking collapsed unless the user opened them. A failed or active group may surface according to the existing activity policy without undoing an explicit manual collapse.
+Retain the single persisted-plus-live timeline, anchor-preserving history paging, batched streaming and generic AST-based Markdown renderer. Keep completed tool groups and finished reasoning collapsed unless the user opened them; reasoning is open while it streams. A running group shows its current call and a failed call is counted on the group row; neither undoes an explicit manual toggle.
 
 A native session title, harness and capability context must be recoverable without hover. Timestamps and supplementary metadata may appear on focus/hover; important error or truncation information may not. Unknown events retain a display-safe generic disclosure. No raw HTML, arbitrary extension DOM, full RPC object or secret-bearing payload is rendered.
 

@@ -75,7 +75,7 @@
 <div class="row" class:row--failed={block.status === 'failed'} class:row--open={open}>
   <button type="button" class="row__head" aria-expanded={open} onclick={() => onToggle(!open)} disabled={!body}>
     <span class="row__icon">
-      {#if block.status === 'streaming'}<Spinner size={12} />{:else}<Icon size={14} />{/if}
+      {#if block.status === 'streaming'}<Spinner size={12} /><span class="visually-hidden">{$t('working…')}</span>{:else}<Icon size={14} />{/if}
     </span>
     <span class="row__title" class:row__title--mono={kind === 'command'} title={title}>{title}</span>
     {#if sidekickState}<Badge tone={sidekickState.tone}>{$t(sidekickState.label)}</Badge>{/if}
@@ -166,7 +166,7 @@
   }
   .row__state {
     flex: none;
-    color: var(--piui-warning);
+    color: var(--piui-text-disabled);
     font-size: var(--piui-text-xs);
   }
   .row__state--failed {

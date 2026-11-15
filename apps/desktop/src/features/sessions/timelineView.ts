@@ -121,6 +121,48 @@ export function groupTimelineBlocks(blocks: readonly TimelineBlock[]): TimelineV
   return items;
 }
 
+/** A finished reasoning block with nothing to show (no summary from the harness, redacted thinking). */
+export function isSilentReasoning(block: TimelineBlock): boolean {
+  return block.kind === 'thinking' && block.status !== 'streaming' && !(block.text ?? block.safeSummary ?? '').trim();
+}
+
+/**
+ * The chat transcript's grouping. Only tool calls collapse; assistant prose and
+ * reasoning with text stay visible between them, in their native order. Silent
+ * reasoning next to a tool call stays inside that run, so a harness that sends
+ * empty reasoning items does not cut every command into its own row. No block
+ * is dropped, reordered or changed.
+ */
+export function groupTranscriptBlocks(blocks: readonly TimelineBlock[]): TimelineViewItem[] {
+  const items: TimelineViewItem[] = [];
+  let run: TimelineBlock[] = [];
+  let lead: TimelineBlock[] = [];
+
+  const flush = (): void => {
+    if (run.length > 0) items.push(createActivityGroup(run));
+    else for (const block of lead) items.push({ type: 'block', block });
+    run = [];
+    lead = [];
+  };
+
+  for (const block of blocks) {
+    if (block.kind === 'tool') {
+      if (run.length === 0 && lead.length > 0) {
+        run = lead;
+        lead = [];
+      }
+      run.push(block);
+    } else if (isSilentReasoning(block)) {
+      (run.length > 0 ? run : lead).push(block);
+    } else {
+      flush();
+      items.push({ type: 'block', block });
+    }
+  }
+  flush();
+  return items;
+}
+
 function sameItem(known: TimelineViewItem, item: TimelineViewItem): boolean {
   if (known.type === 'block') return item.type === 'block' && known.block === item.block;
   return (
@@ -131,7 +173,7 @@ function sameItem(known: TimelineViewItem, item: TimelineViewItem): boolean {
 }
 
 /**
- * `groupTimelineBlocks` for a live transcript. An item whose blocks are the
+ * `groupTranscriptBlocks` for a live transcript. An item whose blocks are the
  * same objects as on the previous call keeps its identity, so one streamed
  * token does not make every earlier activity group recompute its summary and
  * diff totals.
@@ -140,7 +182,7 @@ export function createTimelineGrouper(): (blocks: readonly TimelineBlock[]) => T
   let previous = new Map<string, TimelineViewItem>();
   return (blocks) => {
     const next = new Map<string, TimelineViewItem>();
-    const items = groupTimelineBlocks(blocks).map((item) => {
+    const items = groupTranscriptBlocks(blocks).map((item) => {
       const key = item.type === 'block' ? `block:${item.block.id}` : item.id;
       const known = previous.get(key);
       const kept = known !== undefined && sameItem(known, item) ? known : item;
