@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import { after, describe, it } from 'node:test';
 
 import { compareSemver, isLoopbackRedirect, parseSemver, startNanoDevServer } from './server.mjs';
+import { FrameReader, MAX_PAYLOAD, acceptKey, connectRaw, encodeClose, encodeText, isClientKey } from './ws.mjs';
 
 const API = '/api/desktop/v1';
 const WS = 'ws_synthetic01';
@@ -108,6 +112,7 @@ describe('discovery', () => {
     assert.equal(meta.apiVersion, 1);
     assert.equal(meta.clientId, 'nano-desktop');
     assert.equal(meta.capabilities.cloudLaunch, true);
+    assert.equal(meta.capabilities.remoteAccess, true);
     assert.ok(meta.links.billing.startsWith(server.origin));
   });
 
@@ -654,5 +659,467 @@ describe('dictation and cloud', () => {
     const reuse = await tokenRequest(server, { grant_type: 'refresh_token', refresh_token: tokens.refresh_token });
     assert.equal(reuse.status, 400);
     assert.equal((await fetch(reused)).status, 400);
+  });
+});
+
+// ------------------------------------------------------------------ remote access (ADR-062)
+
+const LINK_PATH = `${API}/remote/link`;
+const PROTOCOL = 'nano-remote.v1';
+const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Opens the desktop link; `ws` is null when the server refused the upgrade. */
+function openLink(server, accessToken, { client = CLIENT, headers = {}, protocols = [PROTOCOL] } = {}) {
+  const auth = accessToken === null ? {} : { authorization: `Bearer ${accessToken}` };
+  return connectRaw(new URL(LINK_PATH, server.origin).toString(), { ...auth, ...(client === null ? {} : { 'x-nano-client': client }), ...headers }, protocols);
+}
+
+function openViewer(server, deviceId, { headers = {}, protocols = [PROTOCOL] } = {}) {
+  return connectRaw(new URL(`/api/hermes/remote/devices/${deviceId}/socket`, server.origin).toString(), headers, protocols);
+}
+
+async function deviceOf(server, accessToken) {
+  return (await (await api(server, accessToken, '/me')).json()).device.id;
+}
+
+/** A signed-in device whose link is open and has read its `hello`. */
+async function linkedDevice(server, name = 'Laptop') {
+  const { tokens } = await signIn(server, { device_name: name });
+  const deviceId = await deviceOf(server, tokens.access_token);
+  const opened = await openLink(server, tokens.access_token);
+  assert.equal(opened.status, 101);
+  assert.deepEqual(await opened.ws.nextJson(), { t: 'hello', device: deviceId, maxFrame: 262144, maxViewers: 2 });
+  return { tokens, deviceId, link: opened.ws };
+}
+
+/** A browser on the device that has read its `ready`; the link has read `viewer-open`. */
+async function viewerOn(server, device) {
+  const opened = await openViewer(server, device.deviceId);
+  assert.equal(opened.status, 101);
+  const ready = await opened.ws.nextJson();
+  assert.equal(ready.t, 'ready');
+  assert.match(ready.viewer, /^vw_[A-Za-z0-9_-]{22}$/);
+  assert.deepEqual(await device.link.nextJson(), { t: 'viewer-open', viewer: ready.viewer });
+  return { ws: opened.ws, viewer: ready.viewer, ready };
+}
+
+function maskedFrame(fin, opcode, payload) {
+  const mask = Buffer.from([1, 2, 3, 4]);
+  const body = Buffer.from(payload).map((byte, index) => byte ^ mask[index % 4]);
+  return Buffer.concat([Buffer.from([(fin ? 0x80 : 0) | opcode, 0x80 | body.length]), mask, body]);
+}
+
+describe('WebSocket subset', () => {
+  it('computes the RFC 6455 accept key', () => {
+    assert.equal(acceptKey('dGhlIHNhbXBsZSBub25jZQ=='), 's3pPLMBiTxaQ9kYGzzhZRbK+xOo=');
+    assert.equal(isClientKey('dGhlIHNhbXBsZSBub25jZQ=='), true);
+    assert.equal(isClientKey('short'), false);
+  });
+
+  it('reads masked, fragmented and control frames, also split across chunks', () => {
+    const reader = new FrameReader({ expectMasked: true });
+    const bytes = Buffer.concat([maskedFrame(false, 1, 'hel'), maskedFrame(true, 9, 'p'), maskedFrame(true, 0, 'lo'), encodeText('é', true)]);
+    const events = [];
+    for (const byte of bytes) events.push(...reader.push(Buffer.from([byte])));
+    assert.deepEqual(
+      events.map((event) => [event.type, event.text ?? event.data?.toString()]),
+      [['ping', 'p'], ['text', 'hello'], ['text', 'é']],
+    );
+  });
+
+  it('fails on unmasked client frames, invalid UTF-8, reserved bits and oversize payloads', () => {
+    assert.deepEqual(new FrameReader({ expectMasked: true }).push(encodeText('x', false)), [{ type: 'error', code: 1002 }]);
+    assert.deepEqual(new FrameReader({ expectMasked: false }).push(encodeText('x', true)), [{ type: 'error', code: 1002 }]);
+    assert.deepEqual(new FrameReader({ expectMasked: true }).push(maskedFrame(true, 1, [0xff, 0xfe])), [{ type: 'error', code: 1007 }]);
+    const reserved = maskedFrame(true, 1, 'x');
+    reserved[0] |= 0x40;
+    assert.deepEqual(new FrameReader({ expectMasked: true }).push(reserved), [{ type: 'error', code: 1002 }]);
+    assert.deepEqual(new FrameReader({ expectMasked: true, maxPayload: 10 }).push(encodeText('x'.repeat(11), true)), [{ type: 'error', code: 1009 }]);
+    const reader = new FrameReader({ expectMasked: true });
+    assert.equal(reader.push(encodeText('x'.repeat(MAX_PAYLOAD), true))[0].text.length, MAX_PAYLOAD);
+    assert.deepEqual(reader.push(encodeText('x'.repeat(MAX_PAYLOAD + 1), true)), [{ type: 'error', code: 1009 }]);
+    assert.deepEqual(reader.push(encodeText('y', true)), [], 'a failed reader ignores input');
+  });
+
+  it('encodes close frames with their code and reason', () => {
+    const [event] = new FrameReader({ expectMasked: false }).push(encodeClose(4403, 'kicked'));
+    assert.deepEqual(event, { type: 'close', code: 4403, reason: 'kicked' });
+  });
+});
+
+describe('remote link', () => {
+  it('advertises the capability and turns it off in the remote-off scenario', async () => {
+    const on = await start();
+    assert.equal((await (await fetch(new URL(`${API}/meta`, on.origin))).json()).capabilities.remoteAccess, true);
+    const off = await start({ scenario: 'remote-off' });
+    assert.equal((await (await fetch(new URL(`${API}/meta`, off.origin))).json()).capabilities.remoteAccess, false);
+  });
+
+  it('checks the bearer, the client version and the scope before the upgrade', async () => {
+    const server = await start();
+    const anonymous = await openLink(server, null);
+    assert.equal(anonymous.status, 401);
+    assert.equal(anonymous.body.error.code, 'unauthorized');
+    const garbage = await openLink(server, 'x'.repeat(40));
+    assert.equal(garbage.status, 401);
+
+    const { tokens } = await signIn(server);
+    for (const client of ['nano-desktop/0.2.9', 'other/1.0.0', null]) {
+      const old = await openLink(server, tokens.access_token, { client });
+      assert.equal(old.status, 426, String(client));
+      assert.equal(old.body.error.code, 'client_too_old');
+    }
+    const profileOnly = (await signIn(server, { scope: 'profile' })).tokens;
+    const scoped = await openLink(server, profileOnly.access_token);
+    assert.equal(scoped.status, 403);
+    assert.equal(scoped.body.error.code, 'scope_missing');
+  });
+
+  it('requires a well-formed upgrade offering the nano-remote.v1 subprotocol', async () => {
+    const server = await start();
+    const { tokens } = await signIn(server);
+    const without = await openLink(server, tokens.access_token, { protocols: [] });
+    assert.equal(without.status, 400);
+    assert.equal(without.body.error.code, 'invalid_request');
+    assert.equal((await openLink(server, tokens.access_token, { protocols: ['other.v1'] })).status, 400);
+    const opened = await openLink(server, tokens.access_token, { protocols: ['other.v1', PROTOCOL] });
+    assert.equal(opened.status, 101);
+    assert.equal(opened.headers['sec-websocket-protocol'], PROTOCOL);
+    opened.ws.close();
+    const badVersion = await openLink(server, tokens.access_token, { headers: { 'sec-websocket-version': '8' } });
+    assert.equal(badVersion.status, 400);
+  });
+
+  it('answers 403 feature_not_in_plan and 503 for the scenarios that switch it off', async () => {
+    const off = await start({ scenario: 'remote-off' });
+    const { tokens } = await signIn(off);
+    const refused = await openLink(off, tokens.access_token);
+    assert.equal(refused.status, 403);
+    assert.equal(refused.body.error.code, 'feature_not_in_plan');
+    const viewer = await openViewer(off, 'dev_anything');
+    assert.equal(viewer.status, 403);
+    assert.equal((await fetch(new URL('/api/hermes/remote/devices', off.origin))).status, 403);
+
+    const down = await start({ scenario: 'upstream-down' });
+    const second = (await signIn(down)).tokens;
+    const unavailable = await openLink(down, second.access_token);
+    assert.equal(unavailable.status, 503);
+    assert.equal(unavailable.body.error.retryable, true);
+  });
+
+  it('relays both ways, announces viewers and reports a closed browser', async () => {
+    const server = await start();
+    const device = await linkedDevice(server);
+    const first = await viewerOn(server, device);
+    assert.deepEqual(first.ready.device, { id: device.deviceId, name: 'Laptop' });
+
+    first.ws.sendText(JSON.stringify({ t: 'msg', d: { k: 'hello', proto: 1, key: 'a', label: 'Chrome · Android' } }));
+    assert.deepEqual(await device.link.nextJson(), { t: 'msg', viewer: first.viewer, d: { k: 'hello', proto: 1, key: 'a', label: 'Chrome · Android' } });
+    device.link.sendText(JSON.stringify({ t: 'msg', viewer: first.viewer, d: { k: 'challenge', nonce: 'n' } }));
+    assert.deepEqual(await first.ws.nextJson(), { t: 'msg', d: { k: 'challenge', nonce: 'n' } });
+
+    // A message for a viewer that is gone, or for someone else's, goes nowhere and keeps the link.
+    device.link.sendText(JSON.stringify({ t: 'msg', viewer: 'vw_unknown0000000000000000', d: { k: 'x' } }));
+    first.ws.close(1000);
+    assert.deepEqual(await device.link.nextJson(), { t: 'viewer-close', viewer: first.viewer });
+    assert.equal(device.link.open, true);
+  });
+
+  it('closes a browser the device drops with 4403 and the reason, without echoing viewer-close', async () => {
+    const server = await start();
+    const device = await linkedDevice(server);
+    const first = await viewerOn(server, device);
+    device.link.sendText(JSON.stringify({ t: 'drop', viewer: first.viewer, reason: 'kicked' }));
+    assert.deepEqual(await first.ws.closed(), { code: 4403, reason: 'kicked' });
+    const second = await viewerOn(server, device);
+    assert.notEqual(second.viewer, first.viewer);
+    device.link.sendText(JSON.stringify({ t: 'drop', viewer: 'vw_unknown0000000000000000', reason: 'denied' }));
+    device.link.sendText(JSON.stringify({ t: 'drop', viewer: second.viewer, reason: 'protocol' }));
+    assert.deepEqual(await second.ws.closed(), { code: 4403, reason: 'protocol' });
+    assert.equal(device.link.open, true);
+  });
+
+  it('closes a link that drops with an unknown reason, sends invalid JSON, binary or an unknown t', async () => {
+    const server = await start();
+    for (const send of [
+      (ws) => ws.sendText(JSON.stringify({ t: 'drop', viewer: 'vw_x', reason: 'because' })),
+      (ws) => ws.sendText('not json'),
+      (ws) => ws.sendText(JSON.stringify({ t: 'msg', viewer: 'vw_x', d: 'not an object' })),
+      (ws) => ws.sendText(JSON.stringify({ t: 'ping', viewer: 'vw_x' })),
+      (ws) => ws.sendText(JSON.stringify({ t: 'msg', d: {} })),
+      (ws) => ws.sendBinary(Buffer.from([1, 2, 3])),
+    ]) {
+      const device = await linkedDevice(server);
+      send(device.link);
+      assert.deepEqual((await device.link.closed()).code, 4400);
+    }
+  });
+
+  it('closes a browser that sends anything but a msg envelope with 4400', async () => {
+    const server = await start();
+    const device = await linkedDevice(server);
+    for (const send of [(ws) => ws.sendText('nope'), (ws) => ws.sendText(JSON.stringify({ t: 'drop' })), (ws) => ws.sendText(JSON.stringify({ t: 'msg', d: [] })), (ws) => ws.sendBinary(Buffer.alloc(1))]) {
+      const browser = await viewerOn(server, device);
+      send(browser.ws);
+      assert.equal((await browser.ws.closed()).code, 4400);
+      assert.deepEqual(await device.link.nextJson(), { t: 'viewer-close', viewer: browser.viewer });
+    }
+  });
+
+  it('closes a browser of an offline or unknown device with 4404', async () => {
+    const server = await start();
+    const { tokens } = await signIn(server);
+    const deviceId = await deviceOf(server, tokens.access_token);
+    for (const id of [deviceId, 'dev_unknown']) {
+      const browser = await openViewer(server, id);
+      assert.equal(browser.status, 101);
+      assert.deepEqual(await browser.ws.closed(), { code: 4404, reason: 'device-offline' });
+    }
+  });
+
+  it('closes a third browser of a device with 4429 and never tells the device', async () => {
+    const server = await start();
+    const device = await linkedDevice(server);
+    const first = await viewerOn(server, device);
+    await viewerOn(server, device);
+    const third = await openViewer(server, device.deviceId);
+    assert.equal(third.status, 101);
+    assert.deepEqual(await third.ws.closed(), { code: 4429, reason: 'limit' });
+    first.ws.close(1000);
+    assert.deepEqual(await device.link.nextJson(), { t: 'viewer-close', viewer: first.viewer });
+    const again = await viewerOn(server, device);
+    assert.equal(again.ready.t, 'ready');
+  });
+
+  it('allows four browsers per user across devices', async () => {
+    const server = await start();
+    const devices = [await linkedDevice(server, 'A'), await linkedDevice(server, 'B'), await linkedDevice(server, 'C')];
+    await viewerOn(server, devices[0]);
+    await viewerOn(server, devices[0]);
+    await viewerOn(server, devices[1]);
+    await viewerOn(server, devices[1]);
+    const fifth = await openViewer(server, devices[2].deviceId);
+    assert.deepEqual(await fifth.ws.closed(), { code: 4429, reason: 'limit' });
+  });
+
+  it('limits a browser to 600 messages a minute', async () => {
+    const server = await start();
+    const device = await linkedDevice(server);
+    const browser = await viewerOn(server, device);
+    for (let index = 0; index < 601; index += 1) browser.ws.sendText(JSON.stringify({ t: 'msg', d: { n: index } }));
+    assert.deepEqual(await browser.ws.closed(), { code: 4429, reason: 'rate' });
+    let relayed = 0;
+    for (;;) {
+      const frame = await device.link.nextJson(5000);
+      if (frame.t === 'viewer-close') break;
+      assert.equal(frame.t, 'msg');
+      relayed += 1;
+    }
+    assert.equal(relayed, 600);
+  });
+
+  it('closes everything on the device with 4401 when it is signed out', async () => {
+    const server = await start();
+    const keeper = await linkedDevice(server, 'Keeper');
+    const target = await linkedDevice(server, 'Target');
+    const browser = await viewerOn(server, target);
+    const response = await api(server, keeper.tokens.access_token, `/devices/${target.deviceId}`, { method: 'DELETE' });
+    assert.equal(response.status, 204);
+    assert.deepEqual(await target.link.closed(), { code: 4401, reason: 'authorization-ended' });
+    assert.deepEqual(await browser.ws.closed(), { code: 4401, reason: 'authorization-ended' });
+    assert.equal(keeper.link.open, true);
+    const again = await openLink(server, target.tokens.access_token);
+    assert.equal(again.status, 401);
+    assert.equal(again.body.error.code, 'device_revoked');
+  });
+
+  it('closes everything when a reused refresh token revokes the family', async () => {
+    const server = await start();
+    const device = await linkedDevice(server);
+    const browser = await viewerOn(server, device);
+    await tokenRequest(server, { grant_type: 'refresh_token', refresh_token: device.tokens.refresh_token });
+    await tokenRequest(server, { grant_type: 'refresh_token', refresh_token: device.tokens.refresh_token });
+    assert.equal((await device.link.closed()).code, 4401);
+    assert.equal((await browser.ws.closed()).code, 4401);
+  });
+
+  it('replaces an older link of the same device with 4409 and ends its browsers', async () => {
+    const server = await start();
+    const device = await linkedDevice(server);
+    const browser = await viewerOn(server, device);
+    const next = await openLink(server, device.tokens.access_token);
+    assert.equal(next.status, 101);
+    assert.equal((await next.ws.nextJson()).t, 'hello');
+    assert.deepEqual(await device.link.closed(), { code: 4409, reason: 'replaced' });
+    assert.deepEqual(await browser.ws.closed(), { code: 4404, reason: 'device-offline' });
+    const fresh = await openViewer(server, device.deviceId);
+    assert.equal((await fresh.ws.nextJson()).t, 'ready');
+    assert.equal((await next.ws.nextJson()).t, 'viewer-open');
+  });
+
+  it('ends the browsers when the link closes', async () => {
+    const server = await start();
+    const device = await linkedDevice(server);
+    const browser = await viewerOn(server, device);
+    device.link.close(1000);
+    assert.deepEqual(await browser.ws.closed(), { code: 4404, reason: 'device-offline' });
+    const list = await (await fetch(new URL('/api/hermes/remote/devices', server.origin))).json();
+    assert.equal(list.devices.find((entry) => entry.id === device.deviceId).online, false);
+  });
+
+  it('closes frames above 262144 bytes with 1009 on both sides', async () => {
+    const server = await start();
+    const device = await linkedDevice(server);
+    const browser = await viewerOn(server, device);
+    browser.ws.sendText('x'.repeat(MAX_PAYLOAD + 1));
+    assert.equal((await browser.ws.closed()).code, 1009);
+    device.link.sendText('x'.repeat(MAX_PAYLOAD + 1));
+    assert.equal((await device.link.closed()).code, 1009);
+  });
+
+  it('relays a large frame below the cap unchanged', async () => {
+    const server = await start();
+    const device = await linkedDevice(server);
+    const browser = await viewerOn(server, device);
+    const filler = 'a'.repeat(200_000);
+    browser.ws.sendText(JSON.stringify({ t: 'msg', d: { p: filler } }));
+    const relayed = await device.link.nextJson(5000);
+    assert.equal(relayed.viewer, browser.viewer);
+    assert.equal(relayed.d.p, filler);
+  });
+
+  it('pings, closes 4408 when nothing answers, and keeps a link that does', async () => {
+    const server = await start({ pingIntervalMs: 60, pongTimeoutMs: 60 });
+    const alive = await linkedDevice(server, 'Alive');
+    const silent = await linkedDevice(server, 'Silent');
+    silent.link.autoPong = false;
+    assert.deepEqual(await silent.link.closed(3000), { code: 4408, reason: 'keepalive' });
+    await settle(250);
+    assert.equal(alive.link.open, true);
+  });
+
+  it('accepts a browser only from the server origin and not from a cross-site page', async () => {
+    const server = await start();
+    const device = await linkedDevice(server);
+    const foreign = await openViewer(server, device.deviceId, { headers: { origin: 'https://evil.example' } });
+    assert.equal(foreign.status, 403);
+    const crossSite = await openViewer(server, device.deviceId, { headers: { origin: server.origin, 'sec-fetch-site': 'cross-site' } });
+    assert.equal(crossSite.status, 403);
+    const same = await openViewer(server, device.deviceId, { headers: { origin: server.origin, 'sec-fetch-site': 'same-origin' } });
+    assert.equal(same.status, 101);
+    const noSubprotocol = await openViewer(server, device.deviceId, { protocols: [] });
+    assert.equal(noSubprotocol.status, 400);
+    const rebinding = await openViewer(server, device.deviceId, { headers: { host: 'evil.example' } });
+    assert.equal(rebinding.status, 400);
+  });
+
+  it('lists the active devices with their presence and client version', async () => {
+    const server = await start();
+    const online = await linkedDevice(server, 'Online');
+    const idle = (await signIn(server, { device_name: 'Idle' })).tokens;
+    const idleId = await deviceOf(server, idle.access_token);
+    const list = (await (await fetch(new URL('/api/hermes/remote/devices', server.origin))).json()).devices;
+    const byId = Object.fromEntries(list.map((entry) => [entry.id, entry]));
+    assert.deepEqual(Object.keys(byId[online.deviceId]).sort(), ['appVersion', 'id', 'lastSeenAt', 'name', 'online', 'platform']);
+    assert.equal(byId[online.deviceId].online, true);
+    assert.equal(byId[online.deviceId].appVersion, '0.3.0');
+    assert.equal(byId[idleId].online, false);
+    assert.equal(byId[idleId].appVersion, null);
+  });
+
+  it('never prints a frame body or a token in its log', async () => {
+    const lines = [];
+    const server = await start({ log: (line) => lines.push(line) });
+    const device = await linkedDevice(server);
+    const browser = await viewerOn(server, device);
+    browser.ws.sendText(JSON.stringify({ t: 'msg', d: { secret: 'SECRET-CHAT-TEXT' } }));
+    await device.link.nextJson();
+    const text = lines.join('\n');
+    assert.match(text, /UPGRADE \/api\/desktop\/v1\/remote\/link/);
+    assert.doesNotMatch(text, /SECRET-CHAT-TEXT/);
+    assert.doesNotMatch(text, new RegExp(device.tokens.access_token));
+  });
+});
+
+describe('remote UI hosting', () => {
+  const directories = [];
+  const makeUi = () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nano-remote-ui-'));
+    directories.push(root);
+    const ui = path.join(root, 'ui');
+    fs.mkdirSync(path.join(ui, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(ui, 'index.html'), '<!doctype html><title>Remote</title>');
+    fs.writeFileSync(path.join(ui, 'app.js'), 'export const x = 1;');
+    fs.writeFileSync(path.join(ui, 'sub', 'style.css'), 'body{}');
+    fs.writeFileSync(path.join(ui, 'data.bin'), Buffer.from([1, 2, 3]));
+    fs.writeFileSync(path.join(root, 'secret.txt'), 'outside');
+    return ui;
+  };
+  after(() => {
+    for (const directory of directories) fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  /** A raw GET that keeps the path exactly as given (fetch would normalize `..`). */
+  const rawGet = (server, rawPath, method = 'GET') =>
+    new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: server.port, path: rawPath, method }, (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+
+  it('serves the directory read-only with MIME types', async () => {
+    const server = await start({ remoteUiDir: makeUi() });
+    const index = await rawGet(server, '/remote/');
+    assert.equal(index.status, 200);
+    assert.equal(index.headers['content-type'], 'text/html; charset=utf-8');
+    assert.match(index.body, /<title>Remote<\/title>/);
+    assert.equal((await rawGet(server, '/remote/index.html')).status, 200);
+    assert.equal((await rawGet(server, '/remote/app.js')).headers['content-type'], 'text/javascript; charset=utf-8');
+    assert.equal((await rawGet(server, '/remote/sub/style.css')).headers['content-type'], 'text/css; charset=utf-8');
+    assert.equal((await rawGet(server, '/remote/data.bin')).headers['content-type'], 'application/octet-stream');
+    const head = await rawGet(server, '/remote/app.js', 'HEAD');
+    assert.equal(head.status, 200);
+    assert.equal(head.headers['content-length'], '19');
+    assert.equal(head.body, '');
+    assert.equal((await rawGet(server, '/remote')).status, 302);
+    assert.equal((await rawGet(server, '/remote/missing.js')).status, 404);
+    assert.equal((await rawGet(server, '/remote/sub')).status, 404);
+  });
+
+  it('refuses traversal, backslashes and writes', async () => {
+    const server = await start({ remoteUiDir: makeUi() });
+    for (const rawPath of ['/remote/../secret.txt', '/remote/%2e%2e/secret.txt', '/remote/..%2fsecret.txt', '/remote/sub/../../secret.txt', '/remote/..%5csecret.txt', '/remote/%00', '/remote//etc/passwd']) {
+      const response = await rawGet(server, rawPath);
+      assert.notEqual(response.status, 200, rawPath);
+      assert.doesNotMatch(response.body, /outside/, rawPath);
+    }
+    const post = await fetch(new URL('/remote/app.js', server.origin), { method: 'POST', body: 'x' });
+    assert.equal(post.status, 404);
+  });
+
+  it('serves nothing without a directory and lists linked devices on the lab page', async () => {
+    const bare = await start();
+    assert.equal((await rawGet(bare, '/remote/index.html')).status, 404);
+    const lab = await rawGet(bare, '/remote-lab');
+    assert.equal(lab.status, 200);
+    assert.match(lab.body, /Synthetic Nano development server/);
+    assert.match(lab.body, /--remote-ui/);
+    assert.match(lab.body, /No device is linked/);
+
+    const server = await start({ remoteUiDir: makeUi() });
+    const device = await linkedDevice(server, 'Lab <b>Laptop</b>');
+    const page = await rawGet(server, '/remote-lab');
+    assert.match(page.body, new RegExp(`href="/remote/index.html#device=${device.deviceId}&amp;lang=en&amp;theme=system"`));
+    assert.match(page.body, /Lab &lt;b&gt;Laptop&lt;\/b&gt;/);
+    assert.doesNotMatch(page.body, /<b>Laptop/);
+    assert.doesNotMatch(page.body, /No device is linked/);
+  });
+
+  it('refuses a remote UI directory that does not exist', async () => {
+    await assert.rejects(() => startNanoDevServer({ port: 0, remoteUiDir: path.join(os.tmpdir(), 'nano-remote-ui-missing-dir') }), /not a directory/);
   });
 });

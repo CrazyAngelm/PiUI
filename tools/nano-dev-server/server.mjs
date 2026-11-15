@@ -15,6 +15,8 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { MAX_PAYLOAD, WsPeer, acceptKey, isClientKey } from './ws.mjs';
+
 const FIXTURE = JSON.parse(fs.readFileSync(new URL('../../contracts/fixtures/nano-server-v1.json', import.meta.url), 'utf8'));
 
 const CLIENT_ID = 'nano-desktop';
@@ -31,6 +33,37 @@ const TXN_TTL_MS = 10 * 60_000;
 const CLOUD_CODE_TTL_MS = 60_000;
 const REFRESH_TTL_MS = 30 * 24 * 3600_000;
 const FORM_LIMIT = 64 * 1024;
+
+// Remote access (ADR-062, docs/NANO_DESKTOP_API.md section 4.9).
+const REMOTE_SUBPROTOCOL = 'nano-remote.v1';
+const REMOTE_LINK_PATH = `${API}/remote/link`;
+const REMOTE_VIEWER_PATH = /^\/api\/hermes\/remote\/devices\/([A-Za-z0-9_-]{1,64})\/socket$/;
+const MAX_VIEWERS_PER_DEVICE = 2;
+const MAX_VIEWERS_PER_USER = 4;
+const VIEWER_MESSAGES_PER_MINUTE = 600;
+const MAX_OUTBOUND_BYTES = 8 * 1024 * 1024;
+const DROP_REASONS = new Set(['denied', 'kicked', 'disabled', 'protocol']);
+const REMOTE_MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.wasm': 'application/wasm',
+};
+const STATUS_PHRASE = { 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 426: 'Upgrade Required', 500: 'Internal Server Error', 503: 'Service Unavailable' };
+const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 const ERROR_STATUS = {
   invalid_request: 400,
@@ -134,21 +167,47 @@ export function isLoopbackRedirect(value) {
   );
 }
 
+/** The real path of the directory `--remote-ui` serves; fails early when it is not one. */
+function remoteUiRoot(dir) {
+  try {
+    const root = fs.realpathSync(path.resolve(dir));
+    if (!fs.statSync(root).isDirectory()) throw new Error('not a directory');
+    return root;
+  } catch {
+    throw new Error(`--remote-ui ${dir} is not a directory.`);
+  }
+}
+
 function normalizeOptions(options) {
   const plan = options.plan === 'paid' ? 'paid' : 'free';
   const defaultCredits = plan === 'paid' ? FIXTURE.entitlementsPaid.credits.balance : FIXTURE.entitlementsFree.credits.balance;
   const credits = Number.isFinite(options.credits) ? Math.max(0, Math.floor(options.credits)) : defaultCredits;
   const port = Number.isInteger(options.port) && options.port >= 0 && options.port <= 65535 ? options.port : 8787;
   const accessTtlSeconds = Number.isFinite(options.accessTtlSeconds) && options.accessTtlSeconds > 0 ? options.accessTtlSeconds : 600;
-  const scenario = ['default', 'client-too-old', 'upstream-down'].includes(options.scenario) ? options.scenario : 'default';
+  const scenario = ['default', 'client-too-old', 'upstream-down', 'remote-off'].includes(options.scenario) ? options.scenario : 'default';
   const streamDelayMs = Number.isFinite(options.streamDelayMs) && options.streamDelayMs > 0 ? options.streamDelayMs : 0;
-  return { plan, credits, port, accessTtlSeconds, scenario, streamDelayMs, log: typeof options.log === 'function' ? options.log : null };
+  const remoteUiDir = typeof options.remoteUiDir === 'string' && options.remoteUiDir !== '' ? options.remoteUiDir : null;
+  const pingIntervalMs = Number.isFinite(options.pingIntervalMs) && options.pingIntervalMs > 0 ? options.pingIntervalMs : 25_000;
+  const pongTimeoutMs = Number.isFinite(options.pongTimeoutMs) && options.pongTimeoutMs > 0 ? options.pongTimeoutMs : 20_000;
+  return {
+    plan,
+    credits,
+    port,
+    accessTtlSeconds,
+    scenario,
+    streamDelayMs,
+    remoteUiDir,
+    pingIntervalMs,
+    pongTimeoutMs,
+    log: typeof options.log === 'function' ? options.log : null,
+  };
 }
 
 /**
  * Start the synthetic server.
- * @param {{ port?: number, plan?: 'free'|'paid', credits?: number, scenario?: 'default'|'client-too-old'|'upstream-down',
- *           accessTtlSeconds?: number, streamDelayMs?: number, log?: (line: string) => void }} [options]
+ * @param {{ port?: number, plan?: 'free'|'paid', credits?: number, scenario?: 'default'|'client-too-old'|'upstream-down'|'remote-off',
+ *           accessTtlSeconds?: number, streamDelayMs?: number, remoteUiDir?: string, pingIntervalMs?: number,
+ *           pongTimeoutMs?: number, log?: (line: string) => void }} [options]
  */
 export async function startNanoDevServer(options = {}) {
   const cfg = normalizeOptions(options);
@@ -172,6 +231,15 @@ export async function startNanoDevServer(options = {}) {
   const inflight = new Map();
   /** The caller's workspaces (the fixture's, minus those removed by `removeWorkspace`). */
   const workspaces = clone(FIXTURE.me.workspaces);
+  /** deviceId -> { peer, familyId, viewers: Set<viewerId> }: the desktop links. */
+  const links = new Map();
+  /** viewerId -> { peer, deviceId, window }: the synthetic browsers. */
+  const viewers = new Map();
+  /** deviceId -> the `X-Nano-Client` version of its latest link. */
+  const linkVersions = new Map();
+  /** Every upgraded socket, so `close()` can end them (they leave the HTTP server's tracking). */
+  const peers = new Set();
+  const remoteRoot = cfg.remoteUiDir ? remoteUiRoot(cfg.remoteUiDir) : null;
 
   const now = () => Date.now();
   const iso = (ms = now()) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -314,7 +382,11 @@ export async function startNanoDevServer(options = {}) {
 
   function revokeFamily(familyId) {
     const family = families.get(familyId);
-    if (family) family.revoked = true;
+    if (!family) return;
+    family.revoked = true;
+    // A signed-out device loses its remote link and every browser on it at once.
+    const link = links.get(family.deviceId);
+    if (link) endLink(family.deviceId, link, 4401, 'authorization-ended', 4401, 'authorization-ended');
   }
 
   /** `meta.minClientVersion`; the `client-too-old` scenario raises it above every real release. */
@@ -358,6 +430,7 @@ export async function startNanoDevServer(options = {}) {
   function meta() {
     const value = clone(FIXTURE.meta);
     value.capabilities.cloudLaunch = true;
+    value.capabilities.remoteAccess = cfg.scenario !== 'remote-off';
     value.links = { billing: `${origin}/billing`, devices: `${origin}/account/devices`, signup: `${origin}/signup`, cloud: `${origin}/cloud` };
     value.minClientVersion = minClientVersion();
     return value;
@@ -641,6 +714,257 @@ export async function startNanoDevServer(options = {}) {
     });
   }
 
+  // ---------------------------------------------------------------- remote access (ADR-062)
+  //
+  // An in-memory relay of the `nano-remote.v1` envelope (docs/NANO_DESKTOP_API.md
+  // section 4.9). Synthetic: browsers connect without a cookie session and are
+  // not authenticated; the real service authenticates them. `d` is parsed to
+  // check that it is an object and written back as compact JSON.
+
+  function refuseUpgrade(socket, error) {
+    const text = JSON.stringify({ error: { code: error.code, message: error.message, retryable: error.retryable } });
+    socket.end(
+      `HTTP/1.1 ${error.status} ${STATUS_PHRASE[error.status] ?? 'Error'}\r\ncontent-type: application/json; charset=utf-8\r\ncontent-length: ${Buffer.byteLength(text)}\r\ncache-control: no-store\r\nconnection: close\r\n\r\n${text}`,
+    );
+  }
+
+  /** Throws unless the request is a well-formed WebSocket upgrade offering `nano-remote.v1`. */
+  function checkHandshake(req) {
+    const connection = String(req.headers.connection ?? '').toLowerCase().split(',').map((part) => part.trim());
+    if (String(req.headers.upgrade ?? '').toLowerCase() !== 'websocket' || !connection.includes('upgrade')) {
+      throw apiError('invalid_request', 'Expected a WebSocket upgrade.');
+    }
+    if (req.headers['sec-websocket-version'] !== '13' || !isClientKey(req.headers['sec-websocket-key'])) {
+      throw apiError('invalid_request', 'Malformed WebSocket handshake.');
+    }
+    const offered = String(req.headers['sec-websocket-protocol'] ?? '').split(',').map((part) => part.trim());
+    if (!offered.includes(REMOTE_SUBPROTOCOL)) throw apiError('invalid_request', `The ${REMOTE_SUBPROTOCOL} subprotocol is required.`);
+  }
+
+  /** Completes the handshake on the raw socket and returns the server end. */
+  function acceptUpgrade(req, socket, head) {
+    socket.write(
+      `HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\nsec-websocket-accept: ${acceptKey(req.headers['sec-websocket-key'])}\r\nsec-websocket-protocol: ${REMOTE_SUBPROTOCOL}\r\n\r\n`,
+    );
+    const peer = new WsPeer(socket, { role: 'server', head });
+    peers.add(peer);
+    peer.once('close', () => peers.delete(peer));
+    return peer;
+  }
+
+  /** Server ping every `pingIntervalMs`; no pong within `pongTimeoutMs` closes 4408. */
+  function keepalive(peer) {
+    let waiting = null;
+    const timer = setInterval(() => {
+      if (!peer.open) return;
+      clearTimeout(waiting);
+      peer.ping();
+      waiting = setTimeout(() => peer.close(4408, 'keepalive'), cfg.pongTimeoutMs);
+      waiting.unref();
+    }, cfg.pingIntervalMs);
+    timer.unref();
+    peer.on('pong', () => {
+      clearTimeout(waiting);
+      waiting = null;
+    });
+    peer.once('close', () => {
+      clearInterval(timer);
+      clearTimeout(waiting);
+    });
+  }
+
+  /** Writes a frame, closing the socket with 4429 when its outbound queue is over the cap. */
+  function relay(peer, value) {
+    if (peer.buffered > MAX_OUTBOUND_BYTES) {
+      peer.close(4429, 'queue');
+      return;
+    }
+    peer.sendText(JSON.stringify(value));
+  }
+
+  function parseEnvelope(text) {
+    try {
+      const value = JSON.parse(text);
+      return isObject(value) ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Forgets a viewer; `notify` tells its device (the device itself dropped it otherwise). */
+  function removeViewer(viewerId, notify) {
+    const viewer = viewers.get(viewerId);
+    if (!viewer) return;
+    viewers.delete(viewerId);
+    const link = links.get(viewer.deviceId);
+    link?.viewers.delete(viewerId);
+    if (notify && link) relay(link.peer, { t: 'viewer-close', viewer: viewerId });
+  }
+
+  /** Ends a device link and every browser on it. */
+  function endLink(deviceId, link, linkCode, linkReason, viewerCode = 4404, viewerReason = 'device-offline') {
+    if (links.get(deviceId) === link) links.delete(deviceId);
+    link.peer.close(linkCode, linkReason);
+    for (const viewerId of [...link.viewers]) {
+      const viewer = viewers.get(viewerId);
+      viewers.delete(viewerId);
+      viewer?.peer.close(viewerCode, viewerReason);
+    }
+    link.viewers.clear();
+  }
+
+  function onLinkText(deviceId, link, text) {
+    const frame = parseEnvelope(text);
+    if (!frame || typeof frame.viewer !== 'string') return link.peer.close(4400, 'protocol');
+    const viewer = viewers.get(frame.viewer);
+    const mine = viewer && viewer.deviceId === deviceId ? viewer : null;
+    if (frame.t === 'msg') {
+      if (!isObject(frame.d)) return link.peer.close(4400, 'protocol');
+      if (mine) relay(mine.peer, { t: 'msg', d: frame.d });
+      return undefined;
+    }
+    if (frame.t === 'drop') {
+      if (!DROP_REASONS.has(frame.reason)) return link.peer.close(4400, 'protocol');
+      if (mine) {
+        removeViewer(frame.viewer, false);
+        mine.peer.close(4403, frame.reason);
+      }
+      return undefined;
+    }
+    return link.peer.close(4400, 'protocol');
+  }
+
+  function handleLinkUpgrade(req, socket, head) {
+    if (req.method !== 'GET') throw apiError('invalid_request', 'Unknown endpoint.', { status: 404 });
+    const auth = authenticate(req, [DESKTOP_SCOPE]);
+    if (cfg.scenario === 'remote-off') throw apiError('feature_not_in_plan', 'Remote access is not in your plan.');
+    if (cfg.scenario === 'upstream-down') throw apiError('upstream_unavailable', 'The remote relay is unavailable.');
+    checkHandshake(req);
+
+    const deviceId = auth.device.id;
+    const previous = links.get(deviceId);
+    const peer = acceptUpgrade(req, socket, head);
+    const link = { peer, familyId: auth.family.id, viewers: new Set() };
+    links.set(deviceId, link);
+    linkVersions.set(deviceId, String(req.headers['x-nano-client']).slice(CLIENT_ID.length + 1));
+    if (previous) endLink(deviceId, previous, 4409, 'replaced');
+
+    keepalive(peer);
+    peer.on('text', (text) => onLinkText(deviceId, link, text));
+    peer.on('binary', () => peer.close(4400, 'protocol'));
+    peer.once('close', () => endLink(deviceId, link, 1000, ''));
+    relay(peer, { t: 'hello', device: deviceId, maxFrame: MAX_PAYLOAD, maxViewers: MAX_VIEWERS_PER_DEVICE });
+  }
+
+  function handleViewerUpgrade(req, socket, head, deviceId) {
+    if (req.method !== 'GET') throw apiError('invalid_request', 'Unknown endpoint.', { status: 404 });
+    if (req.headers.origin !== undefined && req.headers.origin !== origin) throw apiError('invalid_request', 'Origin not allowed.', { status: 403 });
+    if (String(req.headers['sec-fetch-site'] ?? '').toLowerCase() === 'cross-site') throw apiError('invalid_request', 'Cross-site requests are not allowed.', { status: 403 });
+    if (cfg.scenario === 'remote-off') throw apiError('feature_not_in_plan', 'Remote access is not in your plan.');
+    checkHandshake(req);
+
+    const peer = acceptUpgrade(req, socket, head);
+    const link = links.get(deviceId);
+    const device = devices.get(deviceId);
+    if (!link || !device || families.get(link.familyId)?.revoked) return peer.close(4404, 'device-offline');
+    if (link.viewers.size >= MAX_VIEWERS_PER_DEVICE || viewers.size >= MAX_VIEWERS_PER_USER) return peer.close(4429, 'limit');
+
+    const viewerId = `vw_${token(16)}`;
+    const record = { peer, deviceId, window: { start: now(), count: 0 } };
+    viewers.set(viewerId, record);
+    link.viewers.add(viewerId);
+    keepalive(peer);
+    peer.on('binary', () => peer.close(4400, 'protocol'));
+    peer.on('text', (text) => {
+      const frame = parseEnvelope(text);
+      if (!frame || frame.t !== 'msg' || !isObject(frame.d)) return peer.close(4400, 'protocol');
+      if (!viewers.has(viewerId)) return undefined;
+      const current = now();
+      if (current - record.window.start >= 60_000) record.window = { start: current, count: 0 };
+      record.window.count += 1;
+      if (record.window.count > VIEWER_MESSAGES_PER_MINUTE) {
+        removeViewer(viewerId, true);
+        return peer.close(4429, 'rate');
+      }
+      relay(link.peer, { t: 'msg', viewer: viewerId, d: frame.d });
+      return undefined;
+    });
+    peer.once('close', () => removeViewer(viewerId, true));
+    relay(peer, { t: 'ready', viewer: viewerId, device: { id: deviceId, name: device.name } });
+    relay(link.peer, { t: 'viewer-open', viewer: viewerId });
+    return undefined;
+  }
+
+  function handleRemoteDevices(res) {
+    if (cfg.scenario === 'remote-off') throw apiError('feature_not_in_plan', 'Remote access is not in your plan.');
+    const list = [...families.values()]
+      .filter((family) => !family.revoked)
+      .map((family) => {
+        const device = devices.get(family.deviceId);
+        return {
+          id: device.id,
+          name: device.name,
+          platform: null,
+          appVersion: linkVersions.get(device.id) ?? null,
+          lastSeenAt: device.lastSeenAt,
+          online: links.has(device.id),
+        };
+      });
+    sendJson(res, 200, { devices: list });
+  }
+
+  function handleRemoteLab(res) {
+    const rows = [...families.values()]
+      .filter((family) => !family.revoked && links.has(family.deviceId))
+      .map((family) => {
+        const device = devices.get(family.deviceId);
+        const link = `/remote/index.html#device=${encodeURIComponent(device.id)}&amp;lang=en&amp;theme=system`;
+        return `<li><a href="${link}">${escapeHtml(device.name)}</a> <code>${escapeHtml(device.id)}</code></li>`;
+      })
+      .join('');
+    const hint = remoteRoot ? '' : '<p>No remote UI is served: start the server with <code>--remote-ui &lt;dir&gt;</code>.</p>';
+    sendHtml(
+      res,
+      200,
+      'Remote lab',
+      `<h1>Remote access lab</h1><p>Devices with an open remote link. This page is a development stand-in for the Devices tab of Nano Web.</p>${hint}` +
+        (rows ? `<ul>${rows}</ul>` : '<p>No device is linked. Switch on remote access in Nano Desktop.</p>'),
+    );
+  }
+
+  async function serveRemoteUi(pathname, method, res) {
+    const missing = () => apiError('invalid_request', 'Not found.', { status: 404 });
+    if (!remoteRoot) throw missing();
+    let relative;
+    try {
+      relative = decodeURIComponent(pathname.slice('/remote/'.length));
+    } catch {
+      throw apiError('invalid_request', 'Malformed path.');
+    }
+    if (relative === '' || relative.endsWith('/')) relative += 'index.html';
+    if (relative.includes('\0') || relative.includes('\\')) throw missing();
+    const normalized = path.posix.normalize(relative);
+    if (normalized === '..' || normalized.startsWith('../') || path.posix.isAbsolute(normalized)) throw missing();
+    let real;
+    try {
+      real = await fs.promises.realpath(path.join(remoteRoot, ...normalized.split('/')));
+    } catch {
+      throw missing();
+    }
+    if (real !== remoteRoot && !real.startsWith(remoteRoot + path.sep)) throw missing();
+    const stat = await fs.promises.stat(real);
+    if (!stat.isFile()) throw missing();
+    res.writeHead(200, {
+      'content-type': REMOTE_MIME[path.extname(real).toLowerCase()] ?? 'application/octet-stream',
+      'content-length': stat.size,
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    });
+    if (method === 'HEAD') return res.end();
+    fs.createReadStream(real).on('error', () => res.destroy()).pipe(res);
+    return undefined;
+  }
+
   async function route(req, res) {
     const url = new URL(req.url ?? '/', origin);
     const pathname = url.pathname;
@@ -654,6 +978,10 @@ export async function startNanoDevServer(options = {}) {
     if (pathname === '/connect/token' && method === 'POST') return handleToken(req, res);
     if (pathname === '/connect/revoke' && method === 'POST') return handleRevoke(req, res);
     if (pathname === '/cloud' && method === 'GET') return handleCloudPage(url, res);
+    if (pathname === '/api/hermes/remote/devices' && method === 'GET') return handleRemoteDevices(res);
+    if (pathname === '/remote-lab' && method === 'GET') return handleRemoteLab(res);
+    if (pathname === '/remote' && method === 'GET') return redirect(res, '/remote/');
+    if (pathname.startsWith('/remote/') && (method === 'GET' || method === 'HEAD')) return serveRemoteUi(pathname, method, res);
 
     if (pathname === `${API}/meta` && method === 'GET') return sendJson(res, 200, meta());
     if (!pathname.startsWith(`${API}/`)) throw apiError('invalid_request', 'Unknown endpoint.', { status: 404 });
@@ -717,6 +1045,24 @@ export async function startNanoDevServer(options = {}) {
   });
   server.requestTimeout = 60_000;
 
+  server.on('upgrade', (req, socket, head) => {
+    socket.on('error', () => {});
+    try {
+      if (req.headers.host !== new URL(origin).host) {
+        socket.end('HTTP/1.1 400 Bad Request\r\nconnection: close\r\ncontent-length: 0\r\n\r\n');
+        return;
+      }
+      const pathname = new URL(req.url ?? '/', origin).pathname;
+      if (cfg.log) cfg.log(`UPGRADE ${pathname}`);
+      const viewerMatch = REMOTE_VIEWER_PATH.exec(pathname);
+      if (pathname === REMOTE_LINK_PATH) handleLinkUpgrade(req, socket, head);
+      else if (viewerMatch) handleViewerUpgrade(req, socket, head, viewerMatch[1]);
+      else throw apiError('invalid_request', 'Unknown endpoint.', { status: 404 });
+    } catch (error) {
+      refuseUpgrade(socket, error && error.__nano ? error : apiError('internal', 'Internal error.'));
+    }
+  });
+
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(cfg.port, '127.0.0.1', () => resolve(undefined));
@@ -740,6 +1086,7 @@ export async function startNanoDevServer(options = {}) {
     },
     close: () =>
       new Promise((resolve) => {
+        for (const peer of peers) peer.destroy();
         server.closeAllConnections();
         server.close(() => resolve(undefined));
       }),
@@ -776,8 +1123,12 @@ function parseCli(argv) {
         out.streamDelayMs = Number(value);
         index += 1;
         break;
+      case '--remote-ui':
+        out.remoteUiDir = value;
+        index += 1;
+        break;
       default:
-        throw new Error(`Unknown argument ${flag}. Usage: server.mjs [--port N] [--plan free|paid] [--credits N] [--access-ttl SECONDS] [--scenario default|client-too-old|upstream-down] [--stream-delay MS]`);
+        throw new Error(`Unknown argument ${flag}. Usage: server.mjs [--port N] [--plan free|paid] [--credits N] [--access-ttl SECONDS] [--scenario default|client-too-old|upstream-down|remote-off] [--stream-delay MS] [--remote-ui DIR]`);
     }
   }
   return out;
