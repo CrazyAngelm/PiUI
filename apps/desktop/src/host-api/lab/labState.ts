@@ -7,6 +7,7 @@ import type {
 import type { NanoAccountStatusV1 } from '../../../../../contracts/nano-account-v1';
 import type { NanoExternalProviderV1 } from '../../../../../contracts/nano-providers-v1';
 import type { NanoChatGptResultV1 } from '../../../../../contracts/nano-chatgpt-v1';
+import type { DictationProviderIdV1, DictationSourceV1 } from '../../../../../contracts/dictation-v1';
 import type { LabRun } from './orchestration/runEngine';
 import { apiFailure } from './labErrors';
 import type { LabIdSource } from './labRandom';
@@ -104,6 +105,17 @@ export interface LabBackground {
   trayLabels?: TrayLabelsV1;
 }
 
+/** Dictation sources (ADR-061): the preferences and which providers have a key. A key itself is never stored. */
+export interface LabDictation {
+  source: DictationSourceV1;
+  language: string | null;
+  openaiModel: string;
+  groqModel: string;
+  customBaseUrl: string;
+  customModel: string;
+  keys: DictationProviderIdV1[];
+}
+
 export interface LabState {
   scenario: LabScenarioName;
   safeMode: boolean;
@@ -140,6 +152,7 @@ export interface LabState {
   nanoAccount?: { status(): NanoAccountStatusV1 };
   externalProviders?: NanoExternalProviderV1[];
   chatGpt?: NanoChatGptResultV1['status'];
+  dictation?: LabDictation;
 }
 
 export interface LabFusionLifecycle {

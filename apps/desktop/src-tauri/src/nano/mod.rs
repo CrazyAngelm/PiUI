@@ -12,12 +12,14 @@
 //! and the local sign-out answers `safe-mode`. A signed-out application never
 //! contacts a Nano server either: after first paint the host only reads the
 //! credential store for a stored refresh token (`NanoAccount::restore`).
+//! Dictation through another provider (ADR-061) is refused in safe mode too.
 
 pub(crate) mod avatar;
 pub(crate) mod browser;
 pub(crate) mod catalog;
 pub(crate) mod cloud_window;
 pub(crate) mod commands;
+pub(crate) mod dictation_commands;
 pub(crate) mod launch;
 pub(crate) mod provider_commands;
 mod provider_prompt;
@@ -26,6 +28,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use piui_nano::dictation_sources::DictationSources;
 use piui_nano::external_providers::ExternalProviderRegistry;
 use piui_nano::status::{
     NanoAccountProtocolV1, NanoAccountStateV1, NanoAccountStatusV1, NanoServerInfoV1,
@@ -57,6 +60,8 @@ pub(crate) struct NanoHost {
     relay: tokio::sync::OnceCell<Relay>,
     external_providers: Arc<ExternalProviderRegistry>,
     external_provider_prompt: tokio::sync::Mutex<()>,
+    /// Dictation sources other than the account (ADR-061).
+    dictation: Arc<DictationSources>,
     /// Fingerprint of the agent directory's current content.
     prepared: tokio::sync::Mutex<Option<String>>,
 }
@@ -86,6 +91,12 @@ impl NanoHost {
         } else {
             ExternalProviderRegistry::new(provider_path)
         };
+        let dictation_path = app_data_dir.join("dictation-v1.json");
+        let dictation = if memory_store_only {
+            DictationSources::with_memory(dictation_path)
+        } else {
+            DictationSources::new(dictation_path)
+        };
         Self {
             safe_mode,
             account,
@@ -94,6 +105,7 @@ impl NanoHost {
             relay: tokio::sync::OnceCell::new(),
             external_providers: Arc::new(external_providers),
             external_provider_prompt: tokio::sync::Mutex::new(()),
+            dictation: Arc::new(dictation),
             prepared: tokio::sync::Mutex::new(None),
         }
     }
@@ -207,6 +219,9 @@ impl NanoHost {
                 app_data_dir.join("nano-external-providers-v1.json"),
             )),
             external_provider_prompt: tokio::sync::Mutex::new(()),
+            dictation: Arc::new(DictationSources::with_memory(
+                app_data_dir.join("dictation-v1.json"),
+            )),
             prepared: tokio::sync::Mutex::new(None),
         }
     }

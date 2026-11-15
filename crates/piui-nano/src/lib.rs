@@ -25,6 +25,7 @@
 pub mod account;
 pub mod agent_dir;
 pub mod config;
+pub mod dictation_sources;
 pub mod discovery;
 pub mod error;
 pub mod external_providers;

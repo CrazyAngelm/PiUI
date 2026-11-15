@@ -124,7 +124,7 @@ class FakeRecorder implements RecorderLike {
   }
 }
 
-function rig(options: { available?: boolean; denied?: unknown; supported?: string[] } = {}) {
+function rig(options: { available?: boolean; denied?: unknown; supported?: string[]; errorCopy?: (cause: unknown) => string } = {}) {
   const recorder = new FakeRecorder();
   const track = { stop: vi.fn() };
   let clock = 1_000_000;
@@ -159,7 +159,7 @@ function rig(options: { available?: boolean; denied?: unknown; supported?: strin
   let maxBytes: number | undefined;
   const session = new Dictation(
     { dictate: (request) => answer(request) },
-    { maxBytes: () => maxBytes, onText: (text) => texts.push(text) },
+    { maxBytes: () => maxBytes, onText: (text) => texts.push(text), ...(options.errorCopy ? { errorCopy: options.errorCopy } : {}) },
     environment,
   );
   return {
@@ -337,6 +337,20 @@ describe('dictation session', () => {
     expect(test.session.error).toBe('You are out of Nano credits.');
     test.session.clearError();
     expect(test.session.error).toBeUndefined();
+  });
+
+  it('reports a provider failure with the given copy', async () => {
+    const copy = 'The speech service refused the API key. Check it in Settings.';
+    const test = rig({ errorCopy: (cause) => (typeof cause === 'object' && cause !== null && 'code' in cause && cause.code === 'invalid-key' ? copy : 'other') });
+    test.setAnswer(async () => {
+      throw { code: 'invalid-key' };
+    });
+    await test.session.start();
+    await test.session.toggle();
+    await settle();
+    expect(test.session.phase).toBe('idle');
+    expect(test.session.error).toBe(copy);
+    expect(test.texts).toEqual([]);
   });
 
   it('ignores a second start while busy and can record again afterwards', async () => {

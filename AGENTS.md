@@ -296,4 +296,12 @@ Design and behaviour: `docs/NANO_DESKTOP.md`; server contract:
   command guard stays an allowlist (main window, app origin). Its navigation is
   limited to Nano origins; other links open in the system browser.
 - Dictation audio is held in memory only and goes through the host; the WebView
-  never makes a Nano request, so the CSP stays unchanged.
+  never makes a network request for it, so the CSP stays unchanged. The source
+  is the Nano account or a provider set in Settings (ADR-061,
+  `contracts/dictation-v1.ts`). A provider API key is typed only in the host's
+  native dialog and lives only in the OS credential store, bound to the exact
+  transcription address; it never reaches the WebView, an IPC payload, a log,
+  a file or an exported system. A transcription request from the WebView
+  carries audio and a MIME type only: never an address, model or key. The host
+  uses `https` (or `http` to a loopback host), follows no redirect, and sends
+  no audio to any provider in safe mode. A provider source makes no Nano call.

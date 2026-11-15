@@ -33,6 +33,7 @@
   import { useWorkspace } from './context';
   import { fusionMembership } from '../fusion/fusionMembership.svelte';
   import { chatTree } from './chatTree';
+  import { dictationSource } from '../nano/dictationSource.svelte';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
   import WorkLocation from '../nano/WorkLocation.svelte';
   import { chipFor, creditsText } from '../nano/nanoView';
@@ -174,6 +175,8 @@
 
   // The optional Nano account: read once after first paint, never before.
   $effect(() => nanoAccount.startLater());
+  // Where dictation goes: a local settings read after first paint, never a network call.
+  $effect(() => dictationSource.startLater());
   const nanoChip = $derived(chipFor(nanoAccount.status));
   // Runs and Automations have their own entries; the editor and the library
   // sections (agents, teams, step lists) belong to Pipelines. Exactly one is current.

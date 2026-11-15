@@ -8,6 +8,7 @@ import { createLabNanoAccount, nanoScenarioFromSearch, type LabNanoScenario } fr
 import { nanoChatGptHandler, nanoProvidersHandler } from './nanoProvidersFake';
 import { composerHandlers } from './composerFake';
 import { composerInputsHandlers } from './composerInputsFake';
+import { dictationHandlers } from './dictationFake';
 import { demoExtensions, extensionHandlers } from './extensionsFake';
 import { codexSandboxFromSearch, createLabFusion, fusionHandlers, type LabFusion } from './fusionFake';
 import { harnessConnectHandlers } from './harnessConnectFake';
@@ -186,6 +187,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ...nanoAccount.handlers,
     nano_providers_v1: (args) => nanoProvidersHandler(state, args),
     nano_chatgpt_v1: (args) => nanoChatGptHandler(state, args),
+    ...dictationHandlers(state, clock),
     ...sessionToolsHandlers(runtime, seed.nativeHistory ?? EMPTY_NATIVE_HISTORY),
     ...pipelineLibraryHandlers(runtime),
     ...teammatesHandlers(runtime, bus, team),

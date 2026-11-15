@@ -1916,3 +1916,11 @@ A macro is a saved prompt, a list of skills, or both. It is typed as `//name`
 in a message and replaced by its text when the message is sent. Macros are a
 local preference and nothing is executed. See
 [the decision](adr/060-composer-macros.md).
+
+## ADR-061 — Dictation sources: Nano, a preset provider or a custom endpoint
+
+Settings → Dictation chooses what transcribes composer dictation: the Nano
+subscription, OpenAI, Groq or a custom OpenAI-compatible endpoint. The host
+makes the upload, API keys are typed in the native dialog and stay in the OS
+credential store, and safe mode sends no audio. See
+[the decision](adr/061-dictation-sources.md).

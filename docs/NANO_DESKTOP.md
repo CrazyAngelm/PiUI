@@ -23,9 +23,9 @@ limits come from a Nano account.
 | Nano Cloud window | The user's server agent in the Nano web app, in a separate isolated window. | Whatever the web app does, in its own window and profile. |
 
 Local and cloud sessions never merge: no file, history or credential moves
-between them, and there is no second chat format. Dictation and the pet avatar
-are available in the first two modes; they are features of the account, not of
-the harness.
+between them, and there is no second chat format. The pet avatar is available
+in the first two modes; it is a feature of the account, not of the harness.
+Dictation works in every mode with the source chosen in Settings (section 10).
 
 ## 2. Components
 
@@ -268,14 +268,18 @@ The privacy model of ADR-047, as a list:
    sessions, through the relay to the gateway facade. This includes file
    contents the agent reads and sends as context, so the permission mode and
    the project matter.
-3. Audio that the user dictates (one request per recording).
+3. Audio that the user dictates (one request per recording). With a dictation
+   source other than Nano (ADR-061) the recording goes to that provider
+   instead, with the model name and the optional language hint, and Nano
+   receives nothing.
 4. Devices: the server learns a device name, platform and app version at
    sign-in.
 
 What does not leave: local Nano histories (never uploaded or synced), other
 harnesses' traffic, credentials of other products, telemetry (there is none).
 A signed-out application, and any application in safe mode, makes no request to
-Nano servers. The cloud window is a browser in its own right and talks to the
+Nano servers; safe mode sends no dictation audio to any provider either. The
+cloud window is a browser in its own right and talks to the
 Nano web app as the website does.
 
 ## 7. Modes, credits and locks
@@ -370,19 +374,24 @@ on the Nano web app (`meta.links.cloud`, default `https://hermes.nanoagents.ru/`
   Signed-out and safe-mode screens make no avatar request and have no empty
   avatar slot or unavailable avatar preference.
 - Dictation: a composer feature that works for every harness. The WebView
-  records with `MediaRecorder` (push-to-talk, at most five minutes, visible
-  recording state) and sends the bytes to the host (`nano_dictation_v1`); the
-  host posts them to `media/dictation` and returns text for the composer. The
-  WebView makes no network request, so the CSP is unchanged. The recording
-  stays in memory for one retry and is never written to disk. Available only
-  when `capabilities.dictation` and `features.dictation` are both true.
-  WebView2's own microphone prompt applies; whether the host can answer it is
-  unverified.
+  records with `MediaRecorder` (push-to-talk, at most two minutes, visible
+  recording state) and sends the bytes to the host. With the Nano source the
+  host posts them to `media/dictation` (`nano_dictation_v1`, only when
+  `capabilities.dictation` and `features.dictation` are both true). With
+  OpenAI, Groq or a custom endpoint the host posts one multipart form to
+  `<base>/audio/transcriptions` (`dictation_transcribe_v1`, ADR-061) using its
+  own settings and the key from the OS credential store. The host returns text
+  for the composer. The WebView makes no network request, so the CSP is
+  unchanged. The recording stays in memory for one retry and is never written
+  to disk. WebView2's own microphone prompt applies; whether the host can
+  answer it is unverified.
 
 ## 11. Safe mode
 
 Safe mode makes no Nano network call: no discovery, no refresh, no relay, no
-dictation, no cloud window; the `nano` harness refuses with `SAFE_MODE`. The
+dictation, no cloud window; the `nano` harness refuses with `SAFE_MODE`. No
+dictation audio is sent to any provider in safe mode; dictation settings can be
+read but not changed. The
 account status is read from local data and local sign-out is allowed (it
 forgets the credential without a network call). Every other command of
 `nano-account-v1` answers `safe-mode`. The generic fallback for Nano chats
@@ -404,6 +413,7 @@ otherwise.
 | Revoked device | Server revokes the family and access tokens within seconds; the client turns `device_revoked` into state `expired`, closes relay sessions and clears the cloud profile | A running agent loses its model on the next request |
 | Server compromise or hostile server response | TLS, issuer pin, same-site endpoint check, bounded bodies and time, `minClientVersion` kill switch, local histories never uploaded | A compromised Nano server sees the prompts the user sends to it |
 | Script in the WebView (model output, plugin panel) | No token in the WebView; CSP blocks network; typed commands; guard allowlist | UI spoofing inside the app |
+| A changed settings file or a hostile custom endpoint tries to obtain a provider API key | The key is stored under a hash of the provider and the exact address and is read only for that address; https or loopback http only; redirects are never followed; the WebView cannot supply an address for a request | A custom endpoint the person entered receives the recordings and the key they gave it |
 | Cost exhaustion (unattended schedules, farming) | The server's plan limits: credit balance, locked modes, per-device limits. The relay's own limits are the entitled-mode check, request size, concurrency, an upload deadline and the account generation | The relay has no spending budget per session or per schedule. Spending is bounded only by the account's plan limits on the server, and a scheduled Nano step spends unattended |
 
 Non-goals: OS isolation of the agent (Pi has none and Windows containment only
@@ -435,6 +445,8 @@ server-side limits.
   it) and keeps the Nano sign-in in memory only; no claim is made for macOS.
 - Downloads in the cloud window are cancelled; a host save dialog is a later
   step.
+- Provider API keys for dictation can be entered on Windows only (the native key
+  dialog).
 - Evidence so far is synthetic (the dev server and fixtures). Real-provider
   behavior is reported separately once the production server ships the API.
 
@@ -473,3 +485,8 @@ WebView, мост и Pi их не видят.
 не ведущим. Ограничения и дальнейшие шаги: встроенные Node и Pi, Nano как
 ведущий Fusion, инструмент генерации изображений, нативный облачный чат,
 вход по коду устройства, локальный голос.
+
+Диктовку можно направить не только в Nano: в настройках выбирается OpenAI, Groq
+или свой OpenAI-совместимый адрес; запрос делает хост, ключ API вводится в
+системном окне и хранится в хранилище учётных данных ОС, в безопасном режиме
+аудио никуда не отправляется.

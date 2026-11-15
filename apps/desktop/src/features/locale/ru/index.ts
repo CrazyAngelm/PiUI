@@ -3,6 +3,7 @@ import { boardRu } from './board';
 import { chatRu } from './chat';
 import { chatPipelinesRu } from './chatPipelines';
 import { classicRu } from './classic';
+import { dictationRu } from './dictation';
 import { executorsRu } from './executors';
 import { fusionRu } from './fusion';
 import { harnessesRu } from './harnesses';
@@ -24,6 +25,7 @@ export const featureRu: Readonly<Record<string, string>> = {
   ...chatRu,
   ...chatPipelinesRu,
   ...classicRu,
+  ...dictationRu,
   ...executorsRu,
   ...fusionRu,
   ...harnessesRu,

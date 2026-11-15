@@ -70,7 +70,7 @@ pub struct NanoDictationAnswerV1 {
 
 /// The accepted media type of a clip (parameters such as `;codecs=opus` are
 /// dropped), or `None`.
-fn dictation_mime(value: &str) -> Option<&'static str> {
+pub(super) fn dictation_mime(value: &str) -> Option<&'static str> {
     if value.len() > MAX_MIME_CHARS {
         return None;
     }

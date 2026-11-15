@@ -777,6 +777,20 @@ four read-only GPT 6.1 Sol passes.
   fixed. The native sign-in terminal (`CreateProcessW`) was not launched for
   real.
 
+## Dictation sources — 2026-11-15 (unreleased)
+
+- Added Settings → Dictation. The source is Off, the Nano subscription, OpenAI,
+  Groq or a custom OpenAI-compatible endpoint; the dictation button follows the
+  chosen source. New host commands `dictation_settings_v1` and
+  `dictation_transcribe_v1`, contract `contracts/dictation-v1.ts`, ADR-061.
+  `nano_dictation_v1` is unchanged.
+- Trust decisions: settings are host-owned; an API key is typed only in the
+  native masked dialog and kept in the OS credential store, bound to the exact
+  transcription address; the WebView sends audio and a MIME type only; safe
+  mode sends no audio and changes no setting.
+- Verification: pending; evidence will be synthetic (loopback fakes, UI Lab). No
+  real provider key was used.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

@@ -227,6 +227,15 @@ host talks to it; the WebView never does). Golden fixtures:
 `fixtures/nano-account-v1.json` and `fixtures/nano-server-v1.json`.
 A signed-out `nano` session fails before launch with `NANO_SIGN_IN_REQUIRED`.
 
+# Dictation v1
+
+`dictation-v1.ts` is the WebView <-> host IPC of dictation sources (ADR-061):
+`dictation_settings_v1` and `dictation_transcribe_v1`. The host owns the
+settings, every API key (typed only in the native dialog, kept in the OS
+credential store bound to the exact transcription address) and the upload; no
+key and no address for a request crosses it. The Nano source keeps using
+`nano_dictation_v1`.
+
 # App update v1
 
 `app-update-v1.ts` is an independently versioned set of commands and one event
