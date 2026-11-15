@@ -24,7 +24,7 @@ describe('nextSegmentedValue', () => {
     let selected: 'en' | 'ru' = 'en';
     // The toggle group sends "" for each press on the active item, then the other item's value.
     for (const requested of ['', '', 'ru', '', 'en', '']) {
-      const next = nextSegmentedValue(selected, requested, languages);
+      const next: 'en' | 'ru' | null = nextSegmentedValue(selected, requested, languages);
       if (next !== null) selected = next;
       expect(['en', 'ru']).toContain(selected);
     }
