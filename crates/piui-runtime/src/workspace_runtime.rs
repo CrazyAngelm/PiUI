@@ -1694,6 +1694,8 @@ impl NativeRuntime {
     pub async fn spawn(
         config: NativeRuntimeConfig,
     ) -> Result<(Self, NativeEventReceiver), NativeRuntimeError> {
+        // Before any package root is resolved, not only before the launch.
+        settle_search_path().await?;
         let config = resolve_native_runtime_config(config)?;
         validate_config(&config)?;
         let (node, launch) = resolve_session_launch(&config).await?;
@@ -2777,8 +2779,14 @@ pub fn resolve_native_runtime_config(
     Ok(config)
 }
 
+/// The Prime Agent package root, found the way discovery and a launch find
+/// every npm package (`package_search_roots`).
 fn find_prime_package_root() -> Option<PathBuf> {
-    global_package_roots()
+    find_prime_package_root_in(crate::search_path::current())
+}
+
+fn find_prime_package_root_in(path_env: Option<OsString>) -> Option<PathBuf> {
+    package_search_roots_in("prime-agent", "prime-agent", "dist/bundle/cli.js", path_env)
         .into_iter()
         .map(|root| root.join("prime-agent"))
         .find(|root| verified_prime_package_root(root))
@@ -3287,7 +3295,7 @@ fn resolve_harness_launch_for_config(
         return Err(NativeRuntimeError::HarnessUnavailable);
     }
     Ok(ResolvedHarnessLaunch {
-        program: resolve_node()?,
+        program: package_node(&entry)?,
         args: vec![entry.to_string_lossy().into_owned()],
         version: package_version(&entry),
     })
@@ -3764,49 +3772,90 @@ fn parse_hermes_version(line: &str) -> Option<String> {
     Some(rest[..end].to_owned())
 }
 
-/// Finds a Node-packaged harness: through the launcher npm put on the search
-/// path (it names the prefix the user really runs, on Unix), else in the
-/// fixed global package roots.
+/// The folders that can hold the npm package `package`, most specific first:
+/// the one its launcher on the search path points into (Unix; the symlink
+/// names the prefix the user really runs), then the global package roots.
+/// Discovery, the model catalog and a launch all find a package through this.
+fn package_search_roots_in(
+    launcher: &str,
+    package: &str,
+    relative_entry: &str,
+    path_env: Option<OsString>,
+) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    #[cfg(unix)]
+    if let Some(entry) =
+        crate::real_rpc::package_entry_from_launchers(launcher, package, relative_entry, path_env)
+    {
+        let depth = Path::new(package).components().count()
+            + Path::new(relative_entry).components().count();
+        roots.extend(entry.ancestors().nth(depth).map(Path::to_path_buf));
+    }
+    #[cfg(not(unix))]
+    let _ = (launcher, package, relative_entry, path_env);
+    roots.extend(global_package_roots());
+    roots
+}
+
+/// The entry file of a Node-packaged harness (`<root>/<package>/<entry>`).
+fn find_package_entry_in(
+    launcher: &str,
+    package: &str,
+    relative_entry: &str,
+    path_env: Option<OsString>,
+) -> Option<PathBuf> {
+    package_search_roots_in(launcher, package, relative_entry, path_env)
+        .into_iter()
+        .map(|root| root.join(package).join(relative_entry))
+        .find(|path| path.is_file())
+}
+
 fn resolve_package_launch(
     launcher: &str,
     package: &str,
     relative_entry: &str,
 ) -> Result<ResolvedHarnessLaunch, NativeRuntimeError> {
-    #[cfg(unix)]
-    let from_launcher = crate::real_rpc::package_entry_from_launchers(
+    let entry = find_package_entry_in(
         launcher,
         package,
         relative_entry,
         crate::search_path::current(),
-    );
-    #[cfg(not(unix))]
-    let from_launcher: Option<PathBuf> = {
-        let _ = launcher;
-        None
-    };
-    let entry = from_launcher
-        .or_else(|| {
-            global_package_roots()
-                .into_iter()
-                .map(|root| root.join(package).join(relative_entry))
-                .find(|path| path.is_file())
-        })
-        .ok_or(NativeRuntimeError::HarnessUnavailable)?;
-    // The Node of the prefix that holds the package runs it (Unix).
-    #[cfg(unix)]
-    let node = if let Some(node) = crate::real_rpc::node_beside_package(&entry) {
-        node
-    } else {
-        resolve_node()?
-    };
-    #[cfg(not(unix))]
-    let node = resolve_node()?;
+    )
+    .ok_or(NativeRuntimeError::HarnessUnavailable)?;
+    let node = package_node(&entry)?;
     let version = package_version(&entry);
     Ok(ResolvedHarnessLaunch {
         program: node,
         args: vec![entry.to_string_lossy().into_owned()],
         version,
     })
+}
+
+/// The Node.js that runs a package entry: a valid `PIUI_NODE` first, then the
+/// Node.js of the package's own prefix (Unix), then the one on the search path.
+fn package_node(entry: &Path) -> Result<PathBuf, NativeRuntimeError> {
+    package_node_in(
+        entry,
+        std::env::var_os("PIUI_NODE"),
+        crate::search_path::current(),
+    )
+}
+
+fn package_node_in(
+    entry: &Path,
+    override_program: Option<OsString>,
+    path_env: Option<OsString>,
+) -> Result<PathBuf, NativeRuntimeError> {
+    if let Some(node) = valid_node_override(override_program) {
+        return Ok(node);
+    }
+    #[cfg(unix)]
+    if let Some(node) = crate::real_rpc::node_beside_package(entry) {
+        return Ok(node);
+    }
+    #[cfg(not(unix))]
+    let _ = entry;
+    resolve_node_in(None, path_env)
 }
 
 fn package_version(entry: &Path) -> Option<String> {
@@ -3833,15 +3882,18 @@ pub(crate) fn resolve_node() -> Result<PathBuf, NativeRuntimeError> {
     resolve_node_in(std::env::var_os("PIUI_NODE"), crate::search_path::current())
 }
 
+/// `PIUI_NODE` when it names an existing absolute file.
+fn valid_node_override(value: Option<OsString>) -> Option<PathBuf> {
+    let path = PathBuf::from(value?);
+    (path.is_absolute() && path.is_file()).then_some(path)
+}
+
 fn resolve_node_in(
     override_program: Option<OsString>,
     path: Option<OsString>,
 ) -> Result<PathBuf, NativeRuntimeError> {
-    if let Some(value) = override_program {
-        let path = PathBuf::from(value);
-        if path.is_absolute() && path.is_file() {
-            return Ok(path);
-        }
+    if let Some(node) = valid_node_override(override_program) {
+        return Ok(node);
     }
     let names: &[&str] = if cfg!(windows) {
         &["node.exe", "node"]
@@ -6220,8 +6272,12 @@ mod tests {
         ] {
             assert!(removed.contains(name), "{name} must be removed");
         }
+        // Unix also hands the child the effective search path (`PATH`).
         assert!(
-            command.get_envs().all(|(_, value)| value.is_none()),
+            command
+                .get_envs()
+                .filter(|(name, _)| *name != "PATH")
+                .all(|(_, value)| value.is_none()),
             "the launcher only removes variables"
         );
         // Other harnesses keep the user's environment minus host-only capabilities.
@@ -6229,6 +6285,7 @@ mod tests {
         let other = bridge_command(Path::new("node"), &config, None);
         let other_removed = other
             .get_envs()
+            .filter(|(key, _)| *key != "PATH")
             .map(|(key, _)| key.to_string_lossy().into_owned())
             .collect::<HashSet<_>>();
         assert_eq!(
@@ -6876,9 +6933,13 @@ mod tests {
             let mut other = test_config();
             other.harness = harness;
             let command = bridge_command(Path::new("node"), &other, None);
+            // Unix also hands the child the effective search path (`PATH`).
             assert!(
-                command.get_envs().all(|(name, value)| value.is_none()
-                    && name != crate::nano::NANO_RELAY_KEY_BRIDGE_ENV),
+                command
+                    .get_envs()
+                    .filter(|(name, _)| *name != "PATH")
+                    .all(|(name, value)| value.is_none()
+                        && name != crate::nano::NANO_RELAY_KEY_BRIDGE_ENV),
                 "{harness:?}"
             );
         }
@@ -7018,6 +7079,127 @@ mod tests {
             Err(NativeRuntimeError::NodeUnavailable)
         ));
         std::fs::remove_dir_all(root).expect("removes node fixture");
+    }
+
+    /// A package under `<root>/prefix/lib/node_modules`, outside every fixed
+    /// global root, with its npm launcher symlink in `<root>/prefix/bin`.
+    #[cfg(unix)]
+    fn launcher_fixture(
+        name: &str,
+        launcher: &str,
+        package: &str,
+        entry: &str,
+        manifest: &str,
+    ) -> (PathBuf, OsString) {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!("piui-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let package_root = root.join("prefix/lib/node_modules").join(package);
+        let entry_file = package_root.join(entry);
+        std::fs::create_dir_all(entry_file.parent().expect("entry parent")).expect("package");
+        std::fs::create_dir_all(root.join("prefix/bin")).expect("bin");
+        std::fs::write(&entry_file, "// fixture").expect("entry");
+        std::fs::write(package_root.join("package.json"), manifest).expect("manifest");
+        symlink(&entry_file, root.join("prefix/bin").join(launcher)).expect("launcher");
+        let root = std::fs::canonicalize(&root).expect("canonical root");
+        let path = std::env::join_paths([root.join("prefix/bin")]).expect("PATH");
+        (root, path)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_catalog_and_launch_find_a_prime_package_through_its_launcher() {
+        let (root, path) = launcher_fixture(
+            "prime-launcher",
+            "prime-agent",
+            "prime-agent",
+            "dist/bundle/cli.js",
+            r#"{"name":"prime-agent","version":"0.9.3"}"#,
+        );
+        let package_root = root.join("prefix/lib/node_modules/prime-agent");
+        // The catalog and the launch resolve the package root ...
+        assert_eq!(
+            find_prime_package_root_in(Some(path.clone())),
+            Some(package_root.clone())
+        );
+        // ... and discovery resolves the entry, from the same folders.
+        assert_eq!(
+            find_package_entry_in(
+                "prime-agent",
+                "prime-agent",
+                "dist/bundle/cli.js",
+                Some(path.clone())
+            ),
+            Some(package_root.join("dist/bundle/cli.js"))
+        );
+        assert_eq!(
+            package_search_roots_in(
+                "prime-agent",
+                "prime-agent",
+                "dist/bundle/cli.js",
+                Some(path)
+            )
+            .first(),
+            Some(&root.join("prefix/lib/node_modules"))
+        );
+        // Without the launcher the same package is not found.
+        assert_eq!(
+            find_package_entry_in(
+                "prime-agent",
+                "prime-agent",
+                "dist/bundle/cli.js",
+                Some("/piui-no-such-folder".into())
+            ),
+            None
+        );
+        std::fs::remove_dir_all(root).expect("removes fixture");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_package_runs_on_piui_node_then_its_prefix_node_then_the_path_node() {
+        let (root, _) = launcher_fixture(
+            "package-node",
+            "codex",
+            "@openai/codex",
+            "bin/codex.js",
+            r#"{"name":"@openai/codex","version":"1.0.0"}"#,
+        );
+        let entry = root.join("prefix/lib/node_modules/@openai/codex/bin/codex.js");
+        let prefix_node = root.join("prefix/bin/node");
+        let explicit = root.join("explicit-node");
+        let on_path = root.join("path/node");
+        std::fs::create_dir_all(on_path.parent().expect("path folder")).expect("path folder");
+        for file in [&prefix_node, &explicit, &on_path] {
+            std::fs::write(file, "").expect("node fixture");
+        }
+        let path: OsString = on_path.parent().expect("path folder").into();
+
+        // A valid PIUI_NODE wins over the prefix's own Node.js ...
+        assert_eq!(
+            package_node_in(&entry, Some(explicit.clone().into()), Some(path.clone()))
+                .expect("override"),
+            explicit
+        );
+        // ... an invalid one is ignored, and the prefix's Node.js wins over PATH.
+        for invalid in [Some(root.join("missing").into_os_string()), None] {
+            assert_eq!(
+                package_node_in(&entry, invalid, Some(path.clone())).expect("prefix node"),
+                prefix_node
+            );
+        }
+        // A package outside an npm prefix runs on the Node.js on the path.
+        let elsewhere = root.join("project/node_modules/pkg/index.js");
+        assert_eq!(
+            package_node_in(&elsewhere, None, Some(path)).expect("path node"),
+            on_path
+        );
+        assert!(matches!(
+            package_node_in(&elsewhere, None, None),
+            Err(NativeRuntimeError::NodeUnavailable)
+        ));
+        std::fs::remove_dir_all(root).expect("removes fixture");
     }
 
     #[test]

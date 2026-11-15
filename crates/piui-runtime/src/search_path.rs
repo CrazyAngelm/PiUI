@@ -243,10 +243,11 @@ mod imp {
         entries
     }
 
-    /// Combines the login shell's `PATH`, the process `PATH` and the extra
-    /// folders. The login shell's order wins when the process `PATH` lacks one
-    /// of its entries (a desktop launch); an application started from a
-    /// terminal keeps its own order.
+    /// Combines the process `PATH`, the login shell's `PATH` and the extra
+    /// folders. The process `PATH` keeps its order and wins a conflict (an
+    /// application started from a terminal, or a system that already lists
+    /// its own Node.js); the shell's entries it lacks follow, then the extra
+    /// folders. Relative and repeated entries are dropped.
     pub(super) fn merge(
         captured: Option<&OsStr>,
         process: Option<&OsStr>,
@@ -254,14 +255,8 @@ mod imp {
     ) -> Option<OsString> {
         let captured = absolute_entries(captured);
         let process = absolute_entries(process);
-        let process_lacks_entries = captured.iter().any(|entry| !process.contains(entry));
-        let ordered: Vec<&PathBuf> = if process_lacks_entries {
-            captured.iter().chain(process.iter()).collect()
-        } else {
-            process.iter().collect()
-        };
         let mut result: Vec<PathBuf> = Vec::new();
-        for entry in ordered.into_iter().chain(extra.iter()) {
+        for entry in process.iter().chain(captured.iter()).chain(extra.iter()) {
             if entry.is_absolute() && !result.contains(entry) {
                 result.push(entry.clone());
             }
@@ -564,15 +559,40 @@ mod tests {
         }
 
         #[test]
-        fn merge_prefers_the_login_shell_order_when_the_process_path_lacks_entries() {
+        fn merge_appends_the_login_shell_entries_the_process_path_lacks() {
             assert_eq!(
                 merged(Some("/a:/b"), Some("/b:/c"), &["/x"]).as_deref(),
-                Some("/a:/b:/c:/x")
+                Some("/b:/c:/a:/x")
             );
             // An extra folder that is already present is not added twice.
             assert_eq!(
                 merged(Some("/a:/b"), Some("/b:/c"), &["/c", "/x"]).as_deref(),
-                Some("/a:/b:/c:/x")
+                Some("/b:/c:/a:/x")
+            );
+            // A desktop launch: the nvm folder follows the system folders.
+            assert_eq!(
+                merged(
+                    Some("/home/u/.nvm/versions/node/v22.3.0/bin:/usr/bin"),
+                    Some("/usr/local/bin:/usr/bin:/bin"),
+                    &[]
+                )
+                .as_deref(),
+                Some("/usr/local/bin:/usr/bin:/bin:/home/u/.nvm/versions/node/v22.3.0/bin")
+            );
+        }
+
+        #[test]
+        fn merge_lets_the_process_path_win_conflicting_installs() {
+            // Node 22 on the process PATH is not shadowed by a profile's Node 18,
+            // even though the profile lists an entry the process lacks.
+            assert_eq!(
+                merged(
+                    Some("/opt/node18/bin:/usr/bin"),
+                    Some("/opt/node22/bin:/usr/bin"),
+                    &["/usr/local/bin"]
+                )
+                .as_deref(),
+                Some("/opt/node22/bin:/usr/bin:/opt/node18/bin:/usr/local/bin")
             );
         }
 
@@ -592,7 +612,7 @@ mod tests {
         fn merge_drops_relative_and_duplicate_entries() {
             assert_eq!(
                 merged(Some("/a:rel/bin:/a"), Some("bin:/b:/b:."), &[]).as_deref(),
-                Some("/a:/b")
+                Some("/b:/a")
             );
         }
 

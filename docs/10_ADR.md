@@ -1935,8 +1935,9 @@ their models, and every failure read "Could not load models".
 - One source of the executable search path, `piui_runtime::search_path`. On
   Windows it is the process `PATH`, unchanged. On Unix it is the process `PATH`,
   the `PATH` printed by the user's login shell and the usual install folders
-  that exist. When the process `PATH` lacks an entry of the shell's, the shell's
-  order wins; an application started from a terminal keeps its own order.
+  that exist, in that order: the process `PATH` keeps its order and wins a
+  conflict (a system that lists its own Node.js is not shadowed by a profile's
+  other one), the shell's entries it lacks follow, then the install folders.
 - The shell is `$SHELL` (else bash, else sh) run as `-ilc` (bash, zsh, fish) or
   `-lc` (sh, dash, ksh, ash), once after start in the background, in the home
   folder and its own process group, with stdin closed, stderr dropped, a 5 s
@@ -1956,10 +1957,13 @@ their models, and every failure read "Could not load models".
   time.
 - npm packages are also found through the launcher on the path (`codex`,
   `prime-agent`; a symlink names the real prefix), through every `<prefix>/bin`
-  on the path, `PNPM_HOME` and bun's global folder. A package runs on the Node.js
-  of its own prefix when it has one.
+  on the path, `PNPM_HOME` and bun's global folder. Discovery, the model catalog
+  and a launch resolve a package through the same folders. A package runs on a
+  valid `PIUI_NODE`, else on the Node.js of its own prefix, else on the one on
+  the search path.
 - On Unix, discovery reports an installed harness without Node.js as
-  unavailable, with a reason that names the fix. A missing harness or Node.js
+  unavailable, with a reason that names the fix; this includes a native ACP
+  agent (Goose, OpenCode), which also starts behind a Node.js bridge. A missing harness or Node.js
   answers a catalog request with `UNAVAILABLE`, not `RUNTIME_FAILED`, and a
   catalog without models shows a hint in the composer.
 
