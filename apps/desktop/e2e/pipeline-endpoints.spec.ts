@@ -59,7 +59,7 @@ async function openTemplate(lab: Lab, template: string) {
 
 test.describe('Start and Output blocks', () => {
   test('move like steps, stay put when steps move, and keep their place after save and reopen', async ({ lab, page }) => {
-    const { editor, card } = await openTemplate(lab, 'Chain');
+    const { editor, canvas, card } = await openTemplate(lab, 'Chain');
     const [start, output, planner] = [card('Start'), card('Output'), card('Planner')];
     await expect(start).toHaveClass(/(?:^|\s)draggable(?:\s|$)/);
     await expect(output).toHaveClass(/(?:^|\s)draggable(?:\s|$)/);
@@ -67,6 +67,8 @@ test.describe('Start and Output blocks', () => {
 
     await dragBy(page, start, 80, 120);
     await expect.poll(() => place(start)).not.toEqual(original.start);
+    // A dragged block opens its inspector over the right of the canvas, which would cover Output.
+    await clickCanvas(page, canvas);
     await dragBy(page, output, -60, 90);
     await expect.poll(() => place(output)).not.toEqual(original.output);
     const moved = { start: await place(start), output: await place(output) };
