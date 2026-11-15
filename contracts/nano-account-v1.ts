@@ -119,7 +119,10 @@ export interface NanoAccountStatusV1 {
   /** Of the selected workspace; null until loaded or while signed out. */
   readonly entitlements: NanoEntitlementsV1 | null;
   readonly usage: NanoUsageV1 | null;
-  /** From the server's desktop meta; null until discovery answered. */
+  /**
+   * From the server's desktop meta; null until discovery answered.
+   * `remoteAccess` is false when the server does not mention it.
+   */
   readonly capabilities: NanoCapabilitiesV1 | null;
   readonly credentialStore: NanoCredentialStoreV1 | null;
   /** A refresh, sign-in or workspace load is in flight. */

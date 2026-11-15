@@ -11,7 +11,7 @@ description = "Nano account sign-in, credential custody and the loopback model r
 [dependencies]
 base64 = "0.22"
 bytes = "1"
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 getrandom = "0.3"
 http = "1"
 http-body-util = "0.1"
@@ -25,11 +25,16 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-platform-verifier = "0.7"
 semver = "1"
 serde.workspace = true
-serde_json.workspace = true
+# `raw_value` carries remote event payloads through without parsing them.
+serde_json = { workspace = true, features = ["raw_value"] }
 sha2.workspace = true
 subtle = "2.6"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net"] }
+# Frames the stream `reqwest` upgraded (the remote link, ADR-062): no TLS, no
+# connect feature, so the issuer pin, the platform verifier and the proxy
+# rules of the account's HTTP client apply unchanged.
+tokio-tungstenite = { version = "0.29", default-features = false }
 url = "2.5"
 zeroize = "1"
 
@@ -40,6 +45,8 @@ keyring = { version = "3.6", default-features = false, features = ["windows-nati
 
 [dev-dependencies]
 tempfile = "3"
+# The in-process loopback server of the remote link tests.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -814,6 +814,21 @@ impl NanoAccount {
         Err(error)
     }
 
+    /// Sends the remote link's upgrade request of `generation` (ADR-062).
+    /// Same rules as every authorized request: the token is fetched, and a
+    /// 401 retried once after a refresh, only while `generation` is current;
+    /// a second 401 or `device_revoked` expires the account.
+    pub(crate) async fn send_link_request<F>(
+        &self,
+        generation: AccountGeneration,
+        build: F,
+    ) -> Result<reqwest::Response, NanoError>
+    where
+        F: Fn(&reqwest::Client, &str) -> reqwest::RequestBuilder,
+    {
+        self.send_authorized(generation.0, build).await
+    }
+
     async fn get_json<T: DeserializeOwned>(
         &self,
         generation: u64,

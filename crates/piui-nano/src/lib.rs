@@ -18,6 +18,10 @@
 //!   user with the user's permissions.
 //! - The Pi agent directory ([`agent_dir`]) holds configuration only; the
 //!   relay key reaches Pi through its environment.
+//! - The remote link ([`remote`], ADR-062) is an outbound WebSocket that only
+//!   the host opens, only while the person's toggle is on, signed in and
+//!   outside safe mode. It reuses the account's HTTP client, so the access
+//!   token never leaves [`NanoAccount`]; the crate logs no frame.
 //!
 //! The wire types mirror `contracts/nano-account-v1.ts` ([`status`]) and
 //! `contracts/nano-server-v1.ts` ([`wire`]).
@@ -33,6 +37,7 @@ pub mod oauth;
 pub mod openai_subscription;
 pub mod pkce;
 pub mod relay;
+pub mod remote;
 pub mod secret;
 pub mod status;
 pub mod store;

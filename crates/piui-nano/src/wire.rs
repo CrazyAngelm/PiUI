@@ -55,6 +55,9 @@ pub struct NanoCapabilitiesV1 {
     pub voice: bool,
     pub image_generation: bool,
     pub avatars: bool,
+    /// The remote link of ADR-062. Absent on older servers: read as `false`.
+    #[serde(default)]
+    pub remote_access: bool,
 }
 
 /// Absolute https URLs on the issuer's site.
