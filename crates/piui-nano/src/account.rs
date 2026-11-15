@@ -1317,7 +1317,8 @@ impl NanoAccount {
         let mut body = Vec::with_capacity(audio.len() + 256);
         body.extend_from_slice(
             format!(
-                "--{boundary}\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"dictation\"\r\nContent-Type: {mime}\r\n\r\n"
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"{}\"\r\nContent-Type: {mime}\r\n\r\n",
+                audio_file_name(mime)
             )
             .as_bytes(),
         );
@@ -1399,6 +1400,22 @@ fn audio_mime(mime: &str) -> Option<&str> {
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b"+-.".contains(&c));
     token.then_some(essence)
+}
+
+/// The part's file name. The server forwards it to a transcription gateway
+/// that infers the container from the extension and refuses a name without
+/// one, so the name always carries the extension of `mime` (an `audio_mime`
+/// essence).
+fn audio_file_name(mime: &str) -> &'static str {
+    let subtype = mime.strip_prefix("audio/").unwrap_or_default();
+    match subtype.to_ascii_lowercase().as_str() {
+        "ogg" | "opus" => "dictation.ogg",
+        "wav" | "x-wav" | "wave" | "vnd.wave" => "dictation.wav",
+        "mpeg" | "mp3" => "dictation.mp3",
+        "mp4" | "m4a" | "x-m4a" | "aac" => "dictation.m4a",
+        "flac" | "x-flac" => "dictation.flac",
+        _ => "dictation.webm",
+    }
 }
 
 #[cfg(test)]
