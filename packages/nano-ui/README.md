@@ -73,14 +73,35 @@ CSP allows only `'self'`). The browser keeps a non-extractable ECDSA P-256 key
 pairing code that the desktop shows too. The shell mounts only when the
 desktop's contract numbers equal the ones compiled in.
 
-Install the bundle as one artifact: copy the whole `dist-remote/` directory to
-`NanoAgentProject.HermesWebApp/wwwroot/vendor/nano-remote/` (replace the
-directory, never merge it) and check the hashes in `remote-manifest.json`
-against the files. The Blazor "Devices" page reads that manifest to build the
+Every device is shown by the same page on the same origin, so the bundle gives
+each device its own browser storage: `src/remote/storageScope.ts` replaces
+`localStorage` and `sessionStorage` before any shell module runs, and the shell's
+drafts, last chat and other preferences are kept under `nano-remote:<device
+id>:`. A draft typed for one computer is never shown on another. Only the viewer
+key (IndexedDB) is shared, because it identifies the browser, not a device. When
+the browser refuses the replacement the shell does not mount.
+
+An event that was too big for one frame is reported by the computer as a `gap`
+frame. `RemoteConnection.onGap` hands it to `main.ts`, which mounts the shell
+again on the same welcomed socket: the shell reads the catalog and every open
+chat from scratch, with no new handshake and so no new pairing prompt. Bursts
+are coalesced and repeated reloads are at least five seconds apart
+(`src/remote/resync.ts`). Drafts survive; an unsent image does not.
+
+Escape inside the iframe never reaches the host page. Pressing it twice within
+a short time posts `{ nanoRemote: 1, type: 'focus-bar' }` to the same-origin
+parent, which moves focus to the Disconnect bar so the keyboard is never trapped.
+
+Install the bundle as one artifact. In the server checkout run
+`node scripts/hermes/import-nano-remote.mjs --source <this package>/dist-remote`:
+it verifies every file against `remote-manifest.json`, replaces
+`NanoAgentProject.HermesWebApp/wwwroot/vendor/nano-remote/` as a whole (never a
+merge) and leaves the old copy untouched when anything fails; `--check` verifies
+the installed copy. The Blazor "Devices" page reads that manifest to build the
 iframe address and refuses a bundle whose manifest is missing or wrong.
 
 - `pnpm --filter @piui/nano-ui test:remote:unit` runs the connection,
-  transport, pairing-code and key tests in Node.
+  transport, pairing-code, key, storage-scope and resync tests in Node.
 - `pnpm --filter @piui/nano-ui test:remote` builds the bundle and runs the
   browser test with the persistent test profile. Its relay and desktop are
   scripted in `tests/remote-harness.ts` (the desktop is answered by the UI Lab

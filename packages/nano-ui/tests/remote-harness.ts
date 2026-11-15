@@ -32,6 +32,10 @@ const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 export const MOUNT = '/vendor/nano-remote/';
 export const DEVICE_ID = 'dev_e2e';
 export const DEVICE_NAME = 'Test desktop';
+/** A second computer of the same person, for the tests that switch devices in one browser. */
+export const OTHER_DEVICE_ID = 'dev_e2e_b';
+export const OTHER_DEVICE_NAME = 'Other desktop';
+const DEVICES: Readonly<Record<string, string>> = { [DEVICE_ID]: DEVICE_NAME, [OTHER_DEVICE_ID]: OTHER_DEVICE_NAME };
 
 const TYPES: Readonly<Record<string, string>> = {
   '.html': 'text/html; charset=utf-8',
@@ -74,13 +78,14 @@ export class Viewer {
 
   constructor(
     readonly id: string,
+    readonly deviceId: string,
     private readonly socket: Duplex,
     private readonly lab: RemoteLab,
   ) {
     socket.on('data', (chunk: Buffer) => this.receive(chunk));
     socket.on('close', () => this.dispose());
     socket.on('error', () => this.dispose());
-    this.envelope({ t: 'ready', viewer: id, device: { id: DEVICE_ID, name: DEVICE_NAME } });
+    this.envelope({ t: 'ready', viewer: id, device: { id: deviceId, name: DEVICES[deviceId] ?? deviceId } });
   }
 
   /** The person pressed Allow on the desktop. */
@@ -89,7 +94,7 @@ export class Viewer {
     this.send({
       k: 'welcome',
       proto: 1,
-      device: { id: DEVICE_ID, name: DEVICE_NAME },
+      device: { id: this.deviceId, name: DEVICES[this.deviceId] ?? this.deviceId },
       app: { version: '0.0.0-e2e' },
       grant: 'once',
       shell: { ...NANO_REMOTE_SHELL_CONTRACTS, ...this.lab.options.shell },
@@ -121,6 +126,11 @@ export class Viewer {
   /** Pushes an event the way the desktop does when something changes there. */
   push(channel: string, payload: unknown): void {
     this.send({ k: 'ev', ch: channel, p: payload });
+  }
+
+  /** The desktop skipped an event that was too big for one frame. */
+  gap(channel: string, sessionId?: string): void {
+    this.send(sessionId === undefined ? { k: 'gap', ch: channel } : { k: 'gap', ch: channel, sid: sessionId });
   }
 
   close(code: number): void {
@@ -237,7 +247,7 @@ export class Viewer {
       key: { kty: 'EC', crv: 'P-256', x: this.publicKey.subarray(1, 33).toString('base64url'), y: this.publicKey.subarray(33, 65).toString('base64url') },
       format: 'jwk',
     });
-    const text = nanoRemoteProofMessage(DEVICE_ID, this.id, this.nonce);
+    const text = nanoRemoteProofMessage(this.deviceId, this.id, this.nonce);
     if (signature.length !== 64 || !verify('sha256', Buffer.from(text, 'utf8'), { key, dsaEncoding: 'ieee-p1363' }, signature)) {
       this.close(4401);
       return;
@@ -365,8 +375,8 @@ export class RemoteLab {
   }
 
   /** The page of the remote shell, as the Nano Web iframe loads it. */
-  launch(theme: 'light' | 'dark' = 'light', language: 'en' | 'ru' = 'en'): string {
-    return `${this.origin()}${MOUNT}index.html#device=${DEVICE_ID}&lang=${language}&theme=${theme}`;
+  launch(theme: 'light' | 'dark' = 'light', language: 'en' | 'ru' = 'en', device: string = DEVICE_ID): string {
+    return `${this.origin()}${MOUNT}index.html#device=${device}&lang=${language}&theme=${theme}`;
   }
 
   /** The UI Lab host: the desktop UI's own fake of the Rust host, loaded through Vite like a unit test does. */
@@ -410,7 +420,8 @@ export class RemoteLab {
 
   private upgrade(request: IncomingMessage, socket: Duplex): void {
     const path = (request.url ?? '').split('?')[0];
-    if (path !== nanoRemoteViewerSocketPath(DEVICE_ID)) return this.refuse(socket, 'path');
+    const deviceId = Object.keys(DEVICES).find((id) => path === nanoRemoteViewerSocketPath(id));
+    if (deviceId === undefined) return this.refuse(socket, 'path');
     // The relay only accepts its own pages: the browser sends the page origin.
     if (request.headers.origin !== this.origin()) return this.refuse(socket, 'origin');
     const protocols = String(request.headers['sec-websocket-protocol'] ?? '').split(',').map((item) => item.trim());
@@ -421,7 +432,7 @@ export class RemoteLab {
     socket.write(
       `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\nSec-WebSocket-Protocol: ${NANO_REMOTE_SUBPROTOCOL}\r\n\r\n`,
     );
-    this.viewers.push(new Viewer(`vw_${randomBytes(9).toString('base64url')}`, socket, this));
+    this.viewers.push(new Viewer(`vw_${randomBytes(9).toString('base64url')}`, deviceId, socket, this));
   }
 
   private async serve(url: string, response: import('node:http').ServerResponse): Promise<void> {

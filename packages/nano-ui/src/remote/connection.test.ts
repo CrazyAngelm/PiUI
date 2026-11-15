@@ -7,6 +7,7 @@ import {
   exceedsFrame,
   shellMatches,
   type ConnectionState,
+  type RemoteGap,
   type RemoteSocket,
 } from './connection';
 import { fromBase64Url, openIdentity, pairingCode } from './identity';
@@ -369,6 +370,57 @@ describe('events', () => {
     socket.inner({ k: 'ev', ch: 'piui://nano-remote-v1', p: {} });
     socket.inner({ k: 'ev', ch: 'piui://secret', p: {} });
     socket.inner({ k: 'ev', p: {} });
+    expect(seen).toEqual([]);
+  });
+
+  it('tells every listener when the host skipped an event, without ending or re-pairing the session', async () => {
+    const { connection, socket, states } = await welcomed();
+    const sent = socket.sent.length;
+    const statesBefore = states.length;
+    const seen: RemoteGap[] = [];
+    connection.onGap(() => {
+      throw new Error('listener bug');
+    });
+    const stop = connection.onGap((gap) => seen.push(gap));
+    socket.inner({ k: 'gap', ch: 'piui://workspace-event', sid: 'ses_1' });
+    socket.inner({ k: 'gap', ch: 'piui://session-catalog' });
+    expect(seen).toEqual([
+      { channel: 'piui://workspace-event', sessionId: 'ses_1' },
+      { channel: 'piui://session-catalog', sessionId: undefined },
+    ]);
+    // The same socket keeps serving: nothing is sent, no new state, still welcomed.
+    expect(socket.sent).toHaveLength(sent);
+    expect(socket.closedWith).toBeUndefined();
+    expect(connection.state.kind).toBe('welcomed');
+    expect(states).toHaveLength(statesBefore);
+    stop();
+    socket.inner({ k: 'gap', ch: 'piui://workspace-event', sid: 'ses_2' });
+    expect(seen).toHaveLength(2);
+  });
+
+  it('reads a gap without a usable session id as a gap of the whole channel and drops unadvertised ones', async () => {
+    const { connection, socket } = await welcomed();
+    const seen: RemoteGap[] = [];
+    connection.onGap((gap) => seen.push(gap));
+    socket.inner({ k: 'gap', ch: 'piui://workspace-event', sid: 7 });
+    socket.inner({ k: 'gap', ch: 'piui://workspace-event', sid: '' });
+    socket.inner({ k: 'gap', ch: 'piui://secret', sid: 'ses_1' });
+    socket.inner({ k: 'gap', ch: 'piui://nano-remote-v1' });
+    socket.inner({ k: 'gap', sid: 'ses_1' });
+    socket.inner({ k: 'gap', ch: 4 });
+    expect(seen).toEqual([
+      { channel: 'piui://workspace-event', sessionId: undefined },
+      { channel: 'piui://workspace-event', sessionId: undefined },
+    ]);
+    expect(connection.state.kind).toBe('welcomed');
+  });
+
+  it('ignores a gap before the welcome', async () => {
+    const context = await open();
+    const seen: RemoteGap[] = [];
+    context.connection.onGap((gap) => seen.push(gap));
+    context.socket.receive({ t: 'ready', viewer: VIEWER, device: { id: DEVICE, name: DEVICE_NAME } });
+    context.socket.inner({ k: 'gap', ch: 'piui://workspace-event', sid: 'ses_1' });
     expect(seen).toEqual([]);
   });
 

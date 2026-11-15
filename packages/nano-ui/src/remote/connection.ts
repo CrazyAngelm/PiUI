@@ -51,6 +51,15 @@ export type ConnectionState =
 /** Refusals of this layer: the contract's codes plus the one only a browser can produce. */
 export type RemoteLocalCode = NanoRemoteRefusalCodeV1 | 'remote-timeout';
 
+/**
+ * The host skipped an event that did not fit in a frame (`gap`, additive within v1). The viewer
+ * reads its state again: the one session `sessionId` when given, everything it shows otherwise.
+ */
+export interface RemoteGap {
+  readonly channel: string;
+  readonly sessionId: string | undefined;
+}
+
 /** What the transport module needs from a welcomed session. */
 export interface RemoteLink {
   readonly commands: readonly string[];
@@ -199,6 +208,7 @@ export class RemoteConnection implements RemoteLink {
   private nextId = 1;
   private readonly states = new Set<(state: ConnectionState) => void>();
   private readonly events = new Set<(channel: string, payload: unknown) => void>();
+  private readonly gaps = new Set<(gap: RemoteGap) => void>();
   private readonly pending = new Map<number, Pending>();
   private readonly queue: Queued[] = [];
   private readonly assemblies = new Map<number, Assembly>();
@@ -227,6 +237,12 @@ export class RemoteConnection implements RemoteLink {
   onEvent(handler: (channel: string, payload: unknown) => void): () => void {
     this.events.add(handler);
     return () => this.events.delete(handler);
+  }
+
+  /** Called when the computer skipped an event that was too big to forward. The socket stays open. */
+  onGap(handler: (gap: RemoteGap) => void): () => void {
+    this.gaps.add(handler);
+    return () => this.gaps.delete(handler);
   }
 
   /** Opens the socket. Call once, after the state handlers are registered. */
@@ -374,6 +390,8 @@ export class RemoteConnection implements RemoteLink {
         return this.handlePart(inner);
       case 'ev':
         return this.handleEvent(inner);
+      case 'gap':
+        return this.handleGap(inner);
       case 'bye':
         return this.handleBye(inner);
       default:
@@ -437,6 +455,23 @@ export class RemoteConnection implements RemoteLink {
         handler(ch, frame.p);
       } catch {
         // One faulty listener never stops the others; the payload is not logged.
+      }
+    }
+  }
+
+  /**
+   * A channel this session does not carry is ignored like an unknown event. A session id that is not
+   * a string is dropped rather than trusted: the viewer then re-reads everything, which is always safe.
+   */
+  private handleGap(frame: Record<string, unknown>): void {
+    const { ch, sid } = frame;
+    if (!this.is('welcomed') || typeof ch !== 'string' || !this.channelSet.has(ch)) return;
+    const gap: RemoteGap = { channel: ch, sessionId: typeof sid === 'string' && sid.length > 0 ? sid : undefined };
+    for (const handler of [...this.gaps]) {
+      try {
+        handler(gap);
+      } catch {
+        // One faulty listener never stops the others.
       }
     }
   }

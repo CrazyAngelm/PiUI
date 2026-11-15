@@ -1,3 +1,4 @@
+import { storageScoped } from './storageScopeInstall';
 import { mount, unmount } from 'svelte';
 import { language, loadRussian } from '../../../../apps/desktop/src/features/locale/language';
 import { stylePreference } from '../../../../apps/desktop/src/styles/stylePreference.svelte';
@@ -8,10 +9,12 @@ import '../../../../apps/desktop/src/styles/motion.css';
 import './remote.css';
 import RemoteGate from './RemoteGate.svelte';
 import { RemoteConnection, shellMatches, type ClosedReason, type ConnectionState } from './connection';
+import { installEscapeChord } from './escapeChord';
 import { gateModel } from './gateModel.svelte';
 import { viewForState, type GateView } from './gateView';
 import { browserLabel, openIdentity, type ViewerIdentity } from './identity';
 import { createAttemptCounter, parseLaunch, retryDelay, viewerSocketUrl, type GateTheme } from './launch';
+import { createResync } from './resync';
 import { installRemoteConnection } from './transport';
 
 /**
@@ -43,6 +46,7 @@ async function main(target: HTMLElement): Promise<void> {
   const launch = parseLaunch(location.hash);
   const attempts = createAttemptCounter(sessionStorageOrUndefined());
   stylePreference.apply();
+  installEscapeChord(window);
   holdTheme(launch?.theme ?? 'system');
   const requested = launch?.language ?? 'ru';
   gateModel.language = requested;
@@ -78,6 +82,12 @@ async function main(target: HTMLElement): Promise<void> {
     return;
   }
 
+  // The shell keeps drafts and the open chat in web storage: without a per-device scope they would be shared between computers.
+  if (!storageScoped) {
+    show({ kind: 'unsupported' });
+    return;
+  }
+
   let identity: ViewerIdentity;
   try {
     identity = await openIdentity();
@@ -110,10 +120,42 @@ async function main(target: HTMLElement): Promise<void> {
   };
 
   let sequence = 0;
+  let mountShell: (() => ReturnType<typeof mount>) | undefined;
+
+  const lostShell = (): void => {
+    connection.close();
+    installRemoteConnection(undefined);
+    show({ kind: 'disconnected', reason: 'network' });
+    scheduleRetry('network');
+  };
+
+  /**
+   * The computer skipped an event that was too big for a frame, so what the shell shows may be behind.
+   * The shell keeps its state in a store it does not share, so the clean way to read everything again
+   * is to mount it again on the same welcomed session: no new handshake, hence no new pairing prompt.
+   * Drafts survive in the per-device storage; an unsent image does not.
+   */
+  const remountShell = async (): Promise<void> => {
+    const current = shell;
+    const mountAgain = mountShell;
+    const ticket = sequence;
+    if (current === undefined || mountAgain === undefined || connection.state.kind !== 'welcomed') return;
+    shell = undefined;
+    await unmount(current);
+    if (ticket !== sequence || connection.state.kind !== 'welcomed') return; // The connection ended meanwhile; its screen is up.
+    try {
+      shell = mountAgain();
+    } catch {
+      lostShell();
+    }
+  };
+  const resync = createResync(remountShell);
+
   const apply = async (state: ConnectionState): Promise<void> => {
     const ticket = ++sequence;
     const view = viewForState(state);
     if (view !== undefined) {
+      resync.cancel();
       await hideShell();
       if (ticket !== sequence) return;
       show(view);
@@ -133,18 +175,20 @@ async function main(target: HTMLElement): Promise<void> {
       await hideGate();
       if (ticket !== sequence) return;
       attempts.reset();
-      shell = mount(AppShell, { target });
+      mountShell = () => mount(AppShell, { target });
+      shell = mountShell();
     } catch {
       // The shell chunk did not load: treat it like a lost connection.
-      connection.close();
-      installRemoteConnection(undefined);
-      show({ kind: 'disconnected', reason: 'network' });
-      scheduleRetry('network');
+      lostShell();
     }
   };
 
   connection.onState((state) => {
     void apply(state);
+  });
+  // A gap before the shell exists needs nothing: the shell reads its state when it starts.
+  connection.onGap(() => {
+    if (shell !== undefined) resync.request();
   });
   connection.start();
 }

@@ -1,6 +1,6 @@
 import { test, expect } from './browserFixture';
 import { NANO_REMOTE_COMMANDS } from '../../../contracts/nano-remote-v1';
-import { DEVICE_NAME, startRemoteLab, type RemoteLab } from './remote-harness';
+import { DEVICE_ID, DEVICE_NAME, OTHER_DEVICE_ID, startRemoteLab, type RemoteLab } from './remote-harness';
 
 // The built `dist-remote` bundle (pnpm build:remote) against a scripted relay and a desktop backed
 // by the UI Lab host. Synthetic: no real Nano server, desktop or provider is involved.
@@ -20,6 +20,24 @@ test.beforeEach(() => {
   lab.options.approval = 'manual';
   lab.options.shell = {};
 });
+
+/** The page's real localStorage, read through a fresh same-origin frame because the page itself sees only its device's keys. */
+async function nativeStorage(page: import('@playwright/test').Page): Promise<Record<string, string>> {
+  return page.evaluate(() => {
+    const frame = document.body.appendChild(document.createElement('iframe'));
+    try {
+      const store = (frame.contentWindow as Window).localStorage;
+      const all: Record<string, string> = {};
+      for (let index = 0; index < store.length; index += 1) {
+        const key = store.key(index) as string;
+        all[key] = store.getItem(key) ?? '';
+      }
+      return all;
+    } finally {
+      frame.remove();
+    }
+  });
+}
 
 function navigation(page: import('@playwright/test').Page) {
   return page.getByRole('navigation', { name: 'Workspace navigation' });
@@ -81,6 +99,27 @@ test('a message typed in the browser reaches the desktop and its events come bac
   })).toBe(true);
   await expect.poll(() => viewer.events.length).toBeGreaterThan(0);
   for (const event of viewer.events) expect(event.channel).toMatch(/^piui:\/\//);
+});
+
+test('a skipped oversized event makes the shell read its state again on the same session, without a new pairing', async ({ page }) => {
+  lab.options.approval = 'auto';
+  const next = lab.nextViewer();
+  await page.goto(lab.launch());
+  const viewer = await next;
+  await expect(page.getByText(CHAT, { exact: true }).first()).toBeVisible();
+  const catalogReads = (): number => viewer.requests.filter((request) => (request.args as { command?: { type?: string } }).command?.type === 'catalog').length;
+  await expect.poll(catalogReads).toBeGreaterThan(0);
+  const before = catalogReads();
+  const proofs = lab.proofs;
+
+  viewer.gap('piui://workspace-event', 'ses_unknown');
+  viewer.gap('piui://workspace-event');
+  await expect.poll(catalogReads).toBeGreaterThan(before);
+  await expect(page.getByText(CHAT, { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Confirm on your computer' })).toHaveCount(0);
+  // The same socket served it: no second handshake, so no new code for the person to confirm.
+  expect(lab.proofs).toBe(proofs);
+  expect(viewer.closed).toBeUndefined();
 });
 
 test('the desktop can end the session, and the gate takes its place', async ({ page }) => {
@@ -147,4 +186,38 @@ test('the gate and the shell fit a phone', async ({ page }) => {
   await page.locator('.narrow-bar').getByRole('button').first().click();
   await expect(page.getByText(CHAT, { exact: true }).first()).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test('drafts and the open chat belong to one device: A, then B, then A again', async ({ page }) => {
+  lab.options.approval = 'auto';
+  const draft = 'Draft typed for the first computer only';
+  const composer = page.getByRole('textbox', { name: 'Message', exact: true });
+  const draftsKey = (device: string) => `nano-remote:${device}:piui.shell.drafts.v1`;
+  // A device switch in the host page is a new frame; a fragment change alone would keep this page.
+  const open = async (device: string) => {
+    await page.goto('about:blank');
+    const next = lab.nextViewer();
+    await page.goto(lab.launch('light', 'en', device));
+    await next;
+    await expect(page.getByText(CHAT, { exact: true }).first()).toBeVisible();
+    await page.getByText(CHAT, { exact: true }).first().click();
+    await expect(composer).toBeVisible();
+  };
+
+  await open(DEVICE_ID);
+  await composer.fill(draft);
+  await expect.poll(async () => (await nativeStorage(page))[draftsKey(DEVICE_ID)] ?? '').toContain(draft);
+
+  await open(OTHER_DEVICE_ID);
+  await expect(composer).toHaveValue('');
+  const forB = await nativeStorage(page);
+  expect(forB[draftsKey(OTHER_DEVICE_ID)] ?? '').not.toContain(draft);
+
+  await open(DEVICE_ID);
+  await expect(composer).toHaveValue(draft);
+
+  // Nothing the shell saved is outside a device's own prefix.
+  const keys = Object.keys(await nativeStorage(page));
+  expect(keys.length).toBeGreaterThan(0);
+  expect(keys.filter((key) => !key.startsWith('nano-remote:'))).toEqual([]);
 });
