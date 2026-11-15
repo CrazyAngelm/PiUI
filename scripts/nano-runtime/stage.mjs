@@ -81,13 +81,39 @@ function hashFile(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
+// Pinned downloads, kept by their SHA-256 between release builds under the
+// bounded target/ cache, so a host outage does not fail a rebuild.
+let downloadCache;
+
 async function download(url, destination, expectedHash, redirect = 'error') {
-  const response = await fetch(url, { redirect });
-  if (!response.ok || !response.body) throw new Error(`Download failed (${response.status}): ${url}`);
-  await writeBounded(Readable.fromWeb(response.body), destination);
-  if (hashFile(destination) !== expectedHash) {
-    throw new Error(`SHA-256 mismatch: ${url}`);
+  const cached = downloadCache && join(downloadCache, expectedHash);
+  if (cached && lstatSync(cached, { throwIfNoEntry: false })?.isFile() && hashFile(cached) === expectedHash) {
+    copyFileSync(cached, destination);
+    return;
   }
+  let failure;
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, 5_000 * attempt));
+    let response;
+    try {
+      response = await fetch(url, { redirect });
+    } catch (error) {
+      failure = error;
+      continue;
+    }
+    if (!response.ok || !response.body) {
+      failure = new Error(`Download failed (${response.status}): ${url}`);
+      if (response.status >= 500 || response.status === 429) continue;
+      throw failure;
+    }
+    await writeBounded(Readable.fromWeb(response.body), destination);
+    if (hashFile(destination) !== expectedHash) {
+      throw new Error(`SHA-256 mismatch: ${url}`);
+    }
+    if (cached) copyFileSync(destination, cached);
+    return;
+  }
+  throw failure;
 }
 
 export function fileManifest(root, entries) {
@@ -191,6 +217,11 @@ export async function stageWindowsNanoRuntime() {
   mkdirSync(cache, { recursive: true });
   if (lstatSync(cache).isSymbolicLink() || realpathSync(cache) !== cache) {
     throw new Error('Nano runtime npm cache must be a plain directory.');
+  }
+  downloadCache = join(target, 'nano-runtime-downloads');
+  mkdirSync(downloadCache, { recursive: true });
+  if (lstatSync(downloadCache).isSymbolicLink() || realpathSync(downloadCache) !== downloadCache) {
+    throw new Error('Nano runtime download cache must be a plain directory.');
   }
   const stage = mkdtempSync(join(target, 'nano-runtime-'));
   const dispose = () => {
