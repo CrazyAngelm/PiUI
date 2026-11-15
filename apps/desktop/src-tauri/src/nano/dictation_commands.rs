@@ -114,19 +114,24 @@ impl NanoHost {
         Ok(self.dictation_view(settings))
     }
 
-    /// Stores a key the native dialog returned.
+    /// Stores a key the native dialog returned, for `endpoint`, the address
+    /// the dialog showed. The host refuses it when the provider's address is
+    /// no longer that one, so a key never goes to an address the person did
+    /// not see.
     pub(crate) async fn dictation_store_key(
         &self,
         provider: DictationProviderId,
         key: SecretString,
+        endpoint: String,
     ) -> Result<DictationSettingsV1, DictationError> {
         if self.safe_mode {
             return Err(DictationError::SafeMode);
         }
         let sources = self.dictation.clone();
-        let settings = tokio::task::spawn_blocking(move || sources.set_key(provider, &key))
-            .await
-            .map_err(|_| DictationError::Storage)??;
+        let settings =
+            tokio::task::spawn_blocking(move || sources.set_key(provider, &key, &endpoint))
+                .await
+                .map_err(|_| DictationError::Storage)??;
         Ok(self.dictation_view(settings))
     }
 
@@ -193,7 +198,7 @@ pub async fn dictation_settings_v1<R: Runtime>(
                 .map_err(|_| DictationError::PromptFailed)?;
             Ok(match key {
                 Some(key) => {
-                    host.dictation_store_key(provider, SecretString::new(key.to_string()))
+                    host.dictation_store_key(provider, SecretString::new(key.to_string()), endpoint)
                         .await?
                 }
                 // The dialog was cancelled: nothing changes.
@@ -243,6 +248,14 @@ mod tests {
             }
         }))
         .expect("save request")
+    }
+
+    /// The address the key dialog would show for the custom endpoint.
+    fn shown_address(host: &NanoHost) -> String {
+        host.dictation
+            .key_target(DictationProviderId::Custom)
+            .expect("key target")
+            .0
     }
 
     fn clip(audio_base64: &str, mime_type: &str) -> DictationTranscribeRequestV1 {
@@ -369,9 +382,13 @@ mod tests {
             Some(DictationError::SafeMode)
         );
         assert_eq!(
-            host.dictation_store_key(DictationProviderId::OpenAi, SecretString::new(KEY.into()))
-                .await
-                .err(),
+            host.dictation_store_key(
+                DictationProviderId::OpenAi,
+                SecretString::new(KEY.into()),
+                String::new()
+            )
+            .await
+            .err(),
             Some(DictationError::SafeMode)
         );
         assert_eq!(
@@ -442,7 +459,11 @@ mod tests {
             .await
             .expect("save custom");
         let view = host
-            .dictation_store_key(DictationProviderId::Custom, SecretString::new(KEY.into()))
+            .dictation_store_key(
+                DictationProviderId::Custom,
+                SecretString::new(KEY.into()),
+                shown_address(&host),
+            )
             .await
             .expect("store key");
         let text = serde_json::to_string(&view).expect("json");
@@ -457,12 +478,50 @@ mod tests {
         let _ = std::fs::remove_dir_all(directory);
     }
 
+    #[tokio::test]
+    async fn a_key_typed_for_one_address_is_refused_for_another() {
+        let (host, directory) = fresh("dictation-race", false);
+        host.dictation_settings(save_request("custom", "http://127.0.0.1:9/v1", "m"))
+            .await
+            .expect("save custom");
+        // The dialog showed this address ...
+        let shown = shown_address(&host);
+        // ... and the address changed before the key was stored.
+        host.dictation_settings(save_request("custom", "http://127.0.0.1:10/v1", "m"))
+            .await
+            .expect("move");
+        assert_eq!(
+            host.dictation_store_key(
+                DictationProviderId::Custom,
+                SecretString::new(KEY.into()),
+                shown,
+            )
+            .await
+            .err(),
+            Some(DictationError::SettingsChanged)
+        );
+        let view = host
+            .dictation_settings(DictationSettingsRequestV1::Get {})
+            .await
+            .expect("settings");
+        let view = serde_json::to_value(view).expect("json");
+        assert_eq!(view["providers"][2]["keySet"], json!(false));
+        assert_eq!(
+            view["providers"][2]["baseUrl"],
+            json!("http://127.0.0.1:10/v1")
+        );
+        let file = std::fs::read_to_string(directory.join("dictation-v1.json")).expect("file");
+        assert!(!file.contains(KEY));
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
     #[test]
     fn errors_reject_as_a_json_code() {
         for (error, code) in [
             (DictationError::InvalidKey, "invalid-key"),
             (DictationError::NotConfigured, "not-configured"),
             (DictationError::SafeMode, "safe-mode"),
+            (DictationError::SettingsChanged, "settings-changed"),
         ] {
             assert_eq!(
                 serde_json::to_value(DictationErrorV1::from(error)).expect("json"),

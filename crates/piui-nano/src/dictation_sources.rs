@@ -34,6 +34,7 @@ const MAX_ANSWER_BYTES: usize = 1024 * 1024;
 const MAX_URL_CHARS: usize = 2048;
 const MAX_MODEL_CHARS: usize = 128;
 const MAX_KEY_BYTES: usize = 512;
+const MAX_STALE_KEYS: usize = 16;
 const OPENAI_URL: &str = "https://api.openai.com/v1";
 const GROQ_URL: &str = "https://api.groq.com/openai/v1";
 const OPENAI_MODEL: &str = "gpt-4o-transcribe";
@@ -130,6 +131,9 @@ pub enum DictationError {
     /// The native key dialog could not be opened.
     #[error("the API key dialog could not be opened")]
     PromptFailed,
+    /// The address changed while the key dialog was open; nothing was stored.
+    #[error("the settings changed while the API key dialog was open")]
+    SettingsChanged,
     /// The provider refused the API key (401, 403).
     #[error("the provider refused the API key")]
     InvalidKey,
@@ -217,6 +221,9 @@ struct Stored {
     custom_base_url: String,
     custom_model: String,
     keys: BTreeMap<String, String>,
+    /// Credential entries (`<provider>:<binding>`) of keys that were dropped
+    /// but could not be deleted yet; every change tries them again.
+    stale: Vec<String>,
 }
 
 /// Everything one upload needs. `Debug` never prints the key.
@@ -310,6 +317,25 @@ fn binding(provider: DictationProviderId, url: &Url) -> String {
     format!("{:x}", scope.finalize())
 }
 
+/// Name of the credential entry that holds a provider's key for a binding.
+fn vault_name(provider: DictationProviderId, binding: &str) -> String {
+    format!("{}:{binding}", provider.id())
+}
+
+/// Whether a name read from the file can be an entry this module created.
+fn is_vault_name(name: &str) -> bool {
+    let Some((provider, hash)) = name.split_once(':') else {
+        return false;
+    };
+    DictationProviderId::ALL
+        .iter()
+        .any(|id| id.id() == provider)
+        && hash.len() == 64
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 impl Stored {
     /// Never trusts the file: a field that does not validate falls back to its
     /// default.
@@ -321,6 +347,9 @@ impl Stored {
         self.custom_model = clean_model(&self.custom_model, "").unwrap_or_default();
         self.custom_base_url = clean_base_url(&self.custom_base_url).unwrap_or_default();
         self.language = clean_language(self.language.as_deref()).unwrap_or_default();
+        self.stale.retain(|name| is_vault_name(name));
+        self.stale.dedup();
+        self.stale.truncate(MAX_STALE_KEYS);
         self
     }
 
@@ -361,28 +390,38 @@ pub struct DictationSources {
     path: PathBuf,
     store: StoreFactory,
     lock: Mutex<()>,
+    /// Makes the next settings writes fail (tests only).
+    #[cfg(test)]
+    fail_writes: std::sync::atomic::AtomicBool,
 }
 
 impl DictationSources {
     /// Sources kept in `path`, with keys in the OS credential store.
     pub fn new(path: PathBuf) -> Self {
-        Self {
-            path,
-            store: Box::new(dictation_store),
-            lock: Mutex::new(()),
-        }
+        Self::with_store(path, Box::new(dictation_store))
     }
 
     /// A key vault for isolated application tests, with no OS writes.
     pub fn with_memory(path: PathBuf) -> Self {
         let vault: Mutex<HashMap<String, Arc<MemoryStore>>> = Mutex::new(HashMap::new());
+        Self::with_store(
+            path,
+            Box::new(move |id| {
+                let mut stores = vault.lock().ok()?;
+                let store: Arc<dyn CredentialStore> =
+                    stores.entry(id.to_owned()).or_default().clone();
+                Some(store)
+            }),
+        )
+    }
+
+    fn with_store(path: PathBuf, store: StoreFactory) -> Self {
         Self {
             path,
-            store: Box::new(move |id| {
-                let mut stores = vault.lock().ok()?;
-                Some(stores.entry(id.to_owned()).or_default().clone())
-            }),
+            store,
             lock: Mutex::new(()),
+            #[cfg(test)]
+            fail_writes: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -416,22 +455,23 @@ impl DictationSources {
         stored.groq_model = groq_model;
         stored.custom_model = custom_model;
         stored.custom_base_url = custom_base_url;
-        // A key belongs to the address it was entered for.
-        let dropped = if previous == stored.endpoint(DictationProviderId::Custom) {
-            None
-        } else {
-            stored.keys.remove(DictationProviderId::Custom.id())
-        };
-        self.write(&stored)?;
-        if let Some(old) = dropped {
-            let _ = self
-                .vault(DictationProviderId::Custom, &old)
-                .map(|store| store.delete());
+        // A key belongs to the address it was entered for. The old credential
+        // is listed before it is deleted, so a failed deletion is retried and
+        // the key is never used for the new address either way.
+        if previous != stored.endpoint(DictationProviderId::Custom)
+            && let Some(old) = stored.keys.remove(DictationProviderId::Custom.id())
+        {
+            stored
+                .stale
+                .push(vault_name(DictationProviderId::Custom, &old));
         }
+        self.write(&stored)?;
+        self.forget_stale(&mut stored);
         Ok(Self::view(&stored))
     }
 
-    /// The transcription address and model the native key dialog shows.
+    /// The transcription address and model the native key dialog shows. The
+    /// address goes back to [`Self::set_key`] as the one the person confirmed.
     ///
     /// # Errors
     /// [`DictationError::InvalidUrl`] without an address,
@@ -451,16 +491,21 @@ impl DictationSources {
         Ok((url.to_string(), model.to_owned()))
     }
 
-    /// Stores a key for the provider's current address.
+    /// Stores a key for the provider's address, but only while that address is
+    /// still `confirmed`, the one the key dialog showed.
     ///
     /// # Errors
     /// [`DictationError::Invalid`] for an empty, long or non-ASCII key,
     /// [`DictationError::InvalidUrl`] without an address,
-    /// [`DictationError::CredentialStore`] or [`DictationError::Storage`].
+    /// [`DictationError::SettingsChanged`] when the address is not `confirmed`
+    /// any more, [`DictationError::CredentialStore`] or
+    /// [`DictationError::Storage`]. A failure leaves the previous key and
+    /// settings as they were.
     pub fn set_key(
         &self,
         provider: DictationProviderId,
         key: &SecretString,
+        confirmed: &str,
     ) -> Result<DictationSettings, DictationError> {
         if key.is_empty()
             || key.expose().len() > MAX_KEY_BYTES
@@ -473,19 +518,39 @@ impl DictationSources {
         let url = stored
             .endpoint(provider)
             .ok_or(DictationError::InvalidUrl)?;
+        if url.as_str() != confirmed {
+            return Err(DictationError::SettingsChanged);
+        }
         let bound = binding(provider, &url);
-        let store = self.vault(provider, &bound)?;
+        let name = vault_name(provider, &bound);
+        let store = self.entry(&name)?;
+        // The key being replaced, so a failed save of the settings puts it back.
+        let previous = if stored.key_set(provider) {
+            store.load().map_err(|_| DictationError::CredentialStore)?
+        } else {
+            None
+        };
         store
             .save(key)
             .map_err(|_| DictationError::CredentialStore)?;
-        let replaced = stored.keys.insert(provider.id().to_owned(), bound.clone());
+        if let Some(old) = stored.keys.insert(provider.id().to_owned(), bound.clone())
+            && old != bound
+        {
+            stored.stale.push(vault_name(provider, &old));
+        }
+        stored.stale.retain(|stale| *stale != name);
         if let Err(error) = self.write(&stored) {
-            let _ = store.delete();
+            match previous {
+                Some(old) => {
+                    let _ = store.save(&old);
+                }
+                None => {
+                    let _ = store.delete();
+                }
+            }
             return Err(error);
         }
-        if let Some(old) = replaced.filter(|old| *old != bound) {
-            let _ = self.vault(provider, &old).map(|store| store.delete());
-        }
+        self.forget_stale(&mut stored);
         Ok(Self::view(&stored))
     }
 
@@ -493,22 +558,41 @@ impl DictationSources {
     ///
     /// # Errors
     /// [`DictationError::CredentialStore`] when the current key cannot be
-    /// deleted, [`DictationError::Storage`].
+    /// deleted, [`DictationError::Storage`]. A failure leaves the key and the
+    /// settings as they were.
     pub fn clear_key(
         &self,
         provider: DictationProviderId,
     ) -> Result<DictationSettings, DictationError> {
         let _guard = self.lock.lock().map_err(|_| DictationError::Storage)?;
         let mut stored = self.read();
-        if let Some(old) = stored.keys.remove(provider.id()) {
-            let _ = self.vault(provider, &old).map(|store| store.delete());
+        let was_set = stored.key_set(provider);
+        let current_binding = stored.endpoint(provider).map(|url| binding(provider, &url));
+        if let Some(old) = stored.keys.remove(provider.id())
+            && Some(&old) != current_binding.as_ref()
+        {
+            stored.stale.push(vault_name(provider, &old));
         }
-        if let Some(url) = stored.endpoint(provider) {
-            self.vault(provider, &binding(provider, &url))?
+        let current = match &current_binding {
+            Some(bound) => Some(self.vault(provider, bound)?),
+            None => None,
+        };
+        let previous = match &current {
+            Some(store) if was_set => store.load().ok().flatten(),
+            _ => None,
+        };
+        if let Some(store) = &current {
+            store
                 .delete()
                 .map_err(|_| DictationError::CredentialStore)?;
         }
-        self.write(&stored)?;
+        if let Err(error) = self.write(&stored) {
+            if let (Some(store), Some(old)) = (&current, &previous) {
+                let _ = store.save(old);
+            }
+            return Err(error);
+        }
+        self.forget_stale(&mut stored);
         Ok(Self::view(&stored))
     }
 
@@ -532,15 +616,20 @@ impl DictationSources {
         if model.is_empty() {
             return Err(DictationError::NotConfigured);
         }
-        // The key is looked up under the binding computed from the address in
-        // use, never under the one the file claims.
-        let key = match self
-            .vault(provider, &binding(provider, &url))
-            .and_then(|store| store.load().map_err(|_| DictationError::CredentialStore))
-        {
-            Ok(key) => key,
-            Err(error) if provider.key_required() => return Err(error),
-            Err(_) => None,
+        // A key is read only while the settings record one for exactly this
+        // address, under the binding computed from the address in use. A
+        // credential left behind by a failed deletion is never sent.
+        let key = if stored.key_set(provider) {
+            match self
+                .vault(provider, &binding(provider, &url))
+                .and_then(|store| store.load().map_err(|_| DictationError::CredentialStore))
+            {
+                Ok(key) => key,
+                Err(error) if provider.key_required() => return Err(error),
+                Err(_) => None,
+            }
+        } else {
+            None
         };
         if key.is_none() && provider.key_required() {
             return Err(DictationError::NotConfigured);
@@ -562,8 +651,37 @@ impl DictationSources {
     }
 
     fn write(&self, stored: &Stored) -> Result<(), DictationError> {
+        #[cfg(test)]
+        if self.fail_writes.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(DictationError::Storage);
+        }
         let bytes = serde_json::to_vec_pretty(stored).map_err(|_| DictationError::Storage)?;
         atomic_write(&self.path, &bytes).map_err(|_| DictationError::Storage)
+    }
+
+    /// Deletes the credentials of dropped keys. One that cannot be deleted
+    /// stays listed in the file and is tried again at the next change.
+    fn forget_stale(&self, stored: &mut Stored) {
+        let in_use: Vec<String> = stored
+            .keys
+            .iter()
+            .map(|(provider, bound)| format!("{provider}:{bound}"))
+            .collect();
+        let listed = stored.stale.len();
+        stored.stale.retain(|name| {
+            if in_use.contains(name) {
+                return false;
+            }
+            !self.entry(name).is_ok_and(|store| store.delete().is_ok())
+        });
+        if stored.stale.len() != listed {
+            // A failed write only means the next change deletes them again.
+            let _ = self.write(stored);
+        }
+    }
+
+    fn entry(&self, name: &str) -> Result<Arc<dyn CredentialStore>, DictationError> {
+        (self.store)(name).ok_or(DictationError::CredentialStore)
     }
 
     fn vault(
@@ -571,7 +689,7 @@ impl DictationSources {
         provider: DictationProviderId,
         binding: &str,
     ) -> Result<Arc<dyn CredentialStore>, DictationError> {
-        (self.store)(&format!("{}:{binding}", provider.id())).ok_or(DictationError::CredentialStore)
+        self.entry(&vault_name(provider, binding))
     }
 
     fn view(stored: &Stored) -> DictationSettings {
@@ -755,9 +873,13 @@ fn multipart_body(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
     use super::*;
+    use crate::error::NanoError;
+    use crate::status::NanoCredentialStoreV1;
 
     const KEY: &str = "synthetic-dictation-key";
 
@@ -776,6 +898,16 @@ mod tests {
         SecretString::new(value.to_owned())
     }
 
+    /// Stores `key` for the address the key dialog would show right now.
+    fn put_key(
+        sources: &DictationSources,
+        provider: DictationProviderId,
+        key: &str,
+    ) -> Result<DictationSettings, DictationError> {
+        let (confirmed, _) = sources.key_target(provider)?;
+        sources.set_key(provider, &secret(key), &confirmed)
+    }
+
     /// A custom source at `base`, with an optional key and language, resolved
     /// into a plan on an isolated, memory-only host.
     fn custom_plan(base: &str, key: Option<&str>, language: Option<&str>) -> TranscriptionPlan {
@@ -785,9 +917,7 @@ mod tests {
         settings.language = language.map(str::to_owned);
         sources.save(settings).expect("save");
         if let Some(key) = key {
-            sources
-                .set_key(DictationProviderId::Custom, &secret(key))
-                .expect("key");
+            put_key(&sources, DictationProviderId::Custom, key).expect("key");
         }
         sources.plan().expect("plan")
     }
@@ -980,9 +1110,7 @@ mod tests {
         // A custom endpoint needs no key to be ready.
         let before = sources.settings();
         assert!(before.providers[2].ready && !before.providers[2].key_set);
-        let settings = sources
-            .set_key(DictationProviderId::Custom, &secret(KEY))
-            .expect("key");
+        let settings = put_key(&sources, DictationProviderId::Custom, KEY).expect("key");
         assert!(settings.providers[2].key_set && settings.providers[2].ready);
         assert!(!fs::read_to_string(&path).expect("file").contains(KEY));
         assert!(
@@ -1042,15 +1170,11 @@ mod tests {
         let long_key = "k".repeat(600);
         for bad in ["", "a b", long_key.as_str()] {
             assert_eq!(
-                sources
-                    .set_key(DictationProviderId::OpenAi, &secret(bad))
-                    .err(),
+                put_key(&sources, DictationProviderId::OpenAi, bad).err(),
                 Some(DictationError::Invalid)
             );
         }
-        let view = sources
-            .set_key(DictationProviderId::OpenAi, &secret(KEY))
-            .expect("key");
+        let view = put_key(&sources, DictationProviderId::OpenAi, KEY).expect("key");
         assert!(view.providers[0].ready && view.providers[0].key_set);
         let plan = sources.plan().expect("plan");
         assert_eq!(
@@ -1202,6 +1326,7 @@ mod tests {
             (DictationError::CredentialStore, "credential-store"),
             (DictationError::NotConfigured, "not-configured"),
             (DictationError::SafeMode, "safe-mode"),
+            (DictationError::SettingsChanged, "settings-changed"),
         ] {
             assert_eq!(serde_json::to_value(error).expect("json"), code);
         }
@@ -1209,5 +1334,274 @@ mod tests {
         let debug = format!("{plan:?}");
         assert!(!debug.contains(KEY), "{debug}");
         assert!(debug.contains("stt.example.test"));
+    }
+
+    const A: &str = "https://a.example.test/v1";
+    const B: &str = "https://b.example.test/v1";
+
+    /// A memory credential entry whose deletion can be made to fail.
+    struct Flaky {
+        inner: MemoryStore,
+        fail_delete: Arc<AtomicBool>,
+    }
+
+    impl CredentialStore for Flaky {
+        fn kind(&self) -> NanoCredentialStoreV1 {
+            NanoCredentialStoreV1::Memory
+        }
+        fn load(&self) -> Result<Option<SecretString>, NanoError> {
+            self.inner.load()
+        }
+        fn save(&self, token: &SecretString) -> Result<(), NanoError> {
+            self.inner.save(token)
+        }
+        fn delete(&self) -> Result<(), NanoError> {
+            if self.fail_delete.load(Ordering::SeqCst) {
+                return Err(NanoError::CredentialStoreFailed);
+            }
+            self.inner.delete()
+        }
+    }
+
+    /// Sources over memory entries that refuse every deletion while the
+    /// returned flag is set.
+    fn flaky_sources(path: PathBuf) -> (DictationSources, Arc<AtomicBool>) {
+        let fail_delete = Arc::new(AtomicBool::new(false));
+        let flag = fail_delete.clone();
+        let entries: Mutex<HashMap<String, Arc<Flaky>>> = Mutex::new(HashMap::new());
+        let sources = DictationSources::with_store(
+            path,
+            Box::new(move |id| {
+                let mut entries = entries.lock().ok()?;
+                let entry: Arc<dyn CredentialStore> = entries
+                    .entry(id.to_owned())
+                    .or_insert_with(|| {
+                        Arc::new(Flaky {
+                            inner: MemoryStore::new(),
+                            fail_delete: flag.clone(),
+                        })
+                    })
+                    .clone();
+                Some(entry)
+            }),
+        );
+        (sources, fail_delete)
+    }
+
+    /// The secret held under the binding of `provider` at `base`.
+    fn stored_secret(
+        sources: &DictationSources,
+        provider: DictationProviderId,
+        base: &str,
+    ) -> Option<String> {
+        let url = transcription_url(base).expect("address");
+        sources
+            .vault(provider, &binding(provider, &url))
+            .expect("vault")
+            .load()
+            .expect("load")
+            .map(|key| key.expose().to_owned())
+    }
+
+    fn planned_key(sources: &DictationSources) -> Option<String> {
+        sources
+            .plan()
+            .expect("plan")
+            .key
+            .map(|key| key.expose().to_owned())
+    }
+
+    #[test]
+    fn a_key_is_stored_only_for_the_address_the_dialog_showed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sources = DictationSources::with_memory(dir.path().join("dictation-v1.json"));
+        sources
+            .save(update(DictationSource::Custom, A, "synthetic-model"))
+            .expect("save");
+        let (shown, _) = sources
+            .key_target(DictationProviderId::Custom)
+            .expect("target");
+        assert_eq!(shown, "https://a.example.test/v1/audio/transcriptions");
+
+        // The address changes while the dialog is open.
+        sources
+            .save(update(DictationSource::Custom, B, "synthetic-model"))
+            .expect("move");
+        assert_eq!(
+            sources
+                .set_key(DictationProviderId::Custom, &secret(KEY), &shown)
+                .err(),
+            Some(DictationError::SettingsChanged)
+        );
+        assert!(!sources.settings().providers[2].key_set);
+        assert_eq!(planned_key(&sources), None);
+        assert_eq!(
+            stored_secret(&sources, DictationProviderId::Custom, A),
+            None
+        );
+        assert_eq!(
+            stored_secret(&sources, DictationProviderId::Custom, B),
+            None
+        );
+
+        // The key typed for the address now in use is stored for it only.
+        let (shown, _) = sources
+            .key_target(DictationProviderId::Custom)
+            .expect("target");
+        sources
+            .set_key(DictationProviderId::Custom, &secret(KEY), &shown)
+            .expect("key");
+        assert_eq!(
+            stored_secret(&sources, DictationProviderId::Custom, B).as_deref(),
+            Some(KEY)
+        );
+        assert_eq!(
+            stored_secret(&sources, DictationProviderId::Custom, A),
+            None
+        );
+        assert_eq!(
+            sources.plan().expect("plan").url.as_str(),
+            "https://b.example.test/v1/audio/transcriptions"
+        );
+
+        // An address that was cleared in the meantime is refused as well.
+        sources
+            .save(update(DictationSource::Custom, "", "synthetic-model"))
+            .expect("clear address");
+        assert_eq!(
+            sources
+                .set_key(DictationProviderId::Custom, &secret(KEY), &shown)
+                .err(),
+            Some(DictationError::InvalidUrl)
+        );
+    }
+
+    #[test]
+    fn a_failed_settings_write_keeps_the_previous_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sources = DictationSources::with_memory(dir.path().join("dictation-v1.json"));
+        let openai = DictationProviderId::OpenAi;
+        sources
+            .save(update(DictationSource::OpenAi, "", ""))
+            .expect("save");
+
+        // A first key whose settings cannot be written leaves no secret behind.
+        sources.fail_writes.store(true, Ordering::SeqCst);
+        assert_eq!(
+            put_key(&sources, openai, "first-key").err(),
+            Some(DictationError::Storage)
+        );
+        sources.fail_writes.store(false, Ordering::SeqCst);
+        assert_eq!(stored_secret(&sources, openai, OPENAI_URL), None);
+        assert!(!sources.settings().providers[0].key_set);
+
+        put_key(&sources, openai, "old-key").expect("key");
+        assert_eq!(planned_key(&sources).as_deref(), Some("old-key"));
+
+        // Replacing it fails the same way: the old key is back, not lost.
+        sources.fail_writes.store(true, Ordering::SeqCst);
+        assert_eq!(
+            put_key(&sources, openai, "new-key").err(),
+            Some(DictationError::Storage)
+        );
+        sources.fail_writes.store(false, Ordering::SeqCst);
+        assert!(sources.settings().providers[0].key_set);
+        assert_eq!(planned_key(&sources).as_deref(), Some("old-key"));
+
+        // So does removing it.
+        sources.fail_writes.store(true, Ordering::SeqCst);
+        assert_eq!(
+            sources.clear_key(openai).err(),
+            Some(DictationError::Storage)
+        );
+        sources.fail_writes.store(false, Ordering::SeqCst);
+        assert!(sources.settings().providers[0].key_set);
+        assert_eq!(planned_key(&sources).as_deref(), Some("old-key"));
+
+        put_key(&sources, openai, "new-key").expect("replace");
+        assert_eq!(planned_key(&sources).as_deref(), Some("new-key"));
+    }
+
+    #[test]
+    fn a_credential_left_by_a_failed_deletion_is_never_used_and_is_retried() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dictation-v1.json");
+        let (sources, fail_delete) = flaky_sources(path.clone());
+        let custom = DictationProviderId::Custom;
+        sources
+            .save(update(DictationSource::Custom, A, "synthetic-model"))
+            .expect("save");
+        put_key(&sources, custom, KEY).expect("key");
+
+        // The credential of the old address cannot be deleted.
+        fail_delete.store(true, Ordering::SeqCst);
+        let moved = sources
+            .save(update(DictationSource::Custom, B, "synthetic-model"))
+            .expect("move");
+        assert!(!moved.providers[2].key_set);
+        let back = sources
+            .save(update(DictationSource::Custom, A, "synthetic-model"))
+            .expect("back");
+        // The entry is still there, but the settings do not record it: it is
+        // neither shown as set nor sent.
+        assert_eq!(stored_secret(&sources, custom, A).as_deref(), Some(KEY));
+        assert!(!back.providers[2].key_set);
+        assert_eq!(planned_key(&sources), None);
+        assert_eq!(sources.read().stale.len(), 1);
+        assert!(!fs::read_to_string(&path).expect("file").contains(KEY));
+
+        // Once deletion works again, the next change removes it for good.
+        fail_delete.store(false, Ordering::SeqCst);
+        sources
+            .save(update(DictationSource::Custom, A, "synthetic-model"))
+            .expect("save again");
+        assert_eq!(stored_secret(&sources, custom, A), None);
+        assert!(sources.read().stale.is_empty());
+        assert_eq!(planned_key(&sources), None);
+    }
+
+    #[test]
+    fn a_new_key_at_an_address_with_a_leftover_credential_survives_the_retry() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (sources, fail_delete) = flaky_sources(dir.path().join("dictation-v1.json"));
+        let custom = DictationProviderId::Custom;
+        sources
+            .save(update(DictationSource::Custom, A, "synthetic-model"))
+            .expect("save");
+        put_key(&sources, custom, "left-over").expect("key");
+        fail_delete.store(true, Ordering::SeqCst);
+        sources
+            .save(update(DictationSource::Custom, B, "synthetic-model"))
+            .expect("move");
+        sources
+            .save(update(DictationSource::Custom, A, "synthetic-model"))
+            .expect("back");
+
+        put_key(&sources, custom, "fresh").expect("fresh key");
+        fail_delete.store(false, Ordering::SeqCst);
+        sources
+            .save(update(DictationSource::Custom, A, "another-model"))
+            .expect("retry");
+        assert_eq!(stored_secret(&sources, custom, A).as_deref(), Some("fresh"));
+        assert_eq!(planned_key(&sources).as_deref(), Some("fresh"));
+        assert!(sources.settings().providers[2].key_set);
+    }
+
+    #[test]
+    fn the_stale_list_of_an_edited_file_names_only_entries_this_module_made() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dictation-v1.json");
+        let sources = DictationSources::with_memory(path.clone());
+        let genuine = format!("custom:{}", "ab12".repeat(16));
+        let wrong_provider = format!("other:{}", "a".repeat(64));
+        fs::write(
+            &path,
+            serde_json::json!({
+                "stale": [genuine, "custom:short", wrong_provider, "no-colon", "openai:../x"]
+            })
+            .to_string(),
+        )
+        .expect("edit");
+        assert_eq!(sources.read().stale, vec![genuine]);
     }
 }

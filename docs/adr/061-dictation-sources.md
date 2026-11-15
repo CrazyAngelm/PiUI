@@ -28,8 +28,13 @@ dictation button is shown whenever the chosen source can transcribe now.
   OS credential store, service `dev.piui.desktop.dictation`, under a name that
   contains a hash of the provider and the exact transcription address. An
   edited settings file cannot send a stored key elsewhere, and changing the
-  custom address drops its key. There is no file, environment or memory
-  fallback outside isolated test hosts. Key entry exists on Windows only; a
+  custom address drops its key. The dialog shows the address; the host stores
+  the key only while the provider's address is still that one (otherwise
+  `settings-changed`, nothing stored), under its settings lock. A key is read
+  only while the settings record it for the exact address. A failed settings
+  write puts the previous key back, and a credential that could not be deleted
+  is listed in the file and deleted at the next change. There is no file,
+  environment or memory fallback outside isolated test hosts. Key entry exists on Windows only; a
   custom endpoint that needs no key works on every platform.
 - **Network rules.** `https`, or `http` to a loopback host only; no user
   information, query or fragment in the address; redirects are never followed;

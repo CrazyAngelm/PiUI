@@ -66,6 +66,14 @@ export class DictationSource {
     return this.active !== undefined;
   }
 
+  /**
+   * Names what a recording would go to, as a primitive. It stays equal while only unrelated
+   * account or settings data changes (a token refresh replaces the whole account status).
+   */
+  get key(): string {
+    return this.active ?? 'none';
+  }
+
   /** Size limit of a clip for the active source. */
   get maxBytes(): number | undefined {
     return this.active === 'nano' ? this.account.dictationMaxBytes : this.settings?.maxBytes;
@@ -111,6 +119,20 @@ export class DictationSource {
     this.queue = next;
     return next;
   }
+}
+
+/**
+ * Returns a function to call with the current key: it runs `onChange` only when the key differs
+ * from the last one seen. An effect that reads the source re-runs for every update of the data
+ * behind it; with this, a re-run that leaves the key as it was does nothing.
+ */
+export function whenKeyChanges(initial: string, onChange: () => void): (key: string) => void {
+  let seen = initial;
+  return (key) => {
+    if (key === seen) return;
+    seen = key;
+    onChange();
+  };
 }
 
 export const dictationSource = new DictationSource(dictationHost);

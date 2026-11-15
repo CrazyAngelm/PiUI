@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { language, t } from '../../features/locale/language';
-  import type { DictationProviderIdV1, DictationSettingsUpdateV1, DictationSettingsV1, DictationSourceV1 } from '../../host-api/dictationClient';
+  import type { DictationSourceV1 } from '../../host-api/dictationClient';
   import { Button, Field, Input, Skeleton } from '../../lib/ui';
   import { DICTATION_MODEL_SUGGESTIONS, DICTATION_SOURCE_ERROR_COPY } from '../nano/dictationCopy';
+  import { DictationDrafts, savedUpdate } from '../nano/dictationDrafts.svelte';
   import { dictationSource as sharedSource, type DictationSource } from '../nano/dictationSource.svelte';
   import { nanoAccount as sharedAccount } from '../nano/nanoAccount.svelte';
 
@@ -22,36 +23,9 @@
   const current = $derived(settings?.providers.find((provider) => provider.id === settings.source));
   const canSetKey = $derived(current !== undefined && current.baseUrl !== '' && current.model !== '');
 
-  const providerOf = (id: DictationProviderIdV1) => source.settings?.providers.find((provider) => provider.id === id);
-  const fromHost = () => ({
-    openaiModel: providerOf('openai')?.model ?? '',
-    groqModel: providerOf('groq')?.model ?? '',
-    customModel: providerOf('custom')?.model ?? '',
-    customBaseUrl: providerOf('custom')?.baseUrl ?? '',
-    languageCode: source.settings?.language ?? '',
-  });
-  // Drafts start from the host's values. A draft follows the host only when the host's value for
-  // that field changed, so a refused save keeps what was typed and a save in flight never erases
-  // the field being typed in.
-  let seen = untrack(fromHost);
-  let openaiModel = $state(seen.openaiModel);
-  let groqModel = $state(seen.groqModel);
-  let customModel = $state(seen.customModel);
-  let customBaseUrl = $state(seen.customBaseUrl);
-  let languageCode = $state(seen.languageCode);
-
-  $effect(() => {
-    if (source.settings === undefined) return;
-    untrack(() => {
-      const next = fromHost();
-      if (next.openaiModel !== seen.openaiModel) openaiModel = next.openaiModel;
-      if (next.groqModel !== seen.groqModel) groqModel = next.groqModel;
-      if (next.customModel !== seen.customModel) customModel = next.customModel;
-      if (next.customBaseUrl !== seen.customBaseUrl) customBaseUrl = next.customBaseUrl;
-      if (next.languageCode !== seen.languageCode) languageCode = next.languageCode;
-      seen = next;
-    });
-  });
+  // The text fields start from the host's values; a reply to a save never replaces what was typed after it.
+  const drafts = untrack(() => new DictationDrafts(source));
+  $effect(() => drafts.adopt());
 
   onMount(() => {
     void source.start();
@@ -68,26 +42,11 @@
       : undefined,
   );
 
-  /** What the host last saved, as an update. */
-  const savedUpdate = (host: DictationSettingsV1): DictationSettingsUpdateV1 => ({
-    source: host.source,
-    language: host.language,
-    openaiModel: host.providers.find((provider) => provider.id === 'openai')?.model ?? '',
-    groqModel: host.providers.find((provider) => provider.id === 'groq')?.model ?? '',
-    customBaseUrl: host.providers.find((provider) => provider.id === 'custom')?.baseUrl ?? '',
-    customModel: host.providers.find((provider) => provider.id === 'custom')?.model ?? '',
-  });
-
-  /** Saves the changed fields on top of what the host last saved, so a refused field never blocks another. */
-  function update(fields: Partial<DictationSettingsUpdateV1>): Promise<boolean> {
-    return source.save((host) => (host === undefined ? undefined : { ...savedUpdate(host), ...fields }));
-  }
-
-  const hint = (): string | null => (languageCode.trim() === '' ? null : languageCode.trim());
-
   function chooseSource(event: Event & { currentTarget: HTMLSelectElement }): void {
     const select = event.currentTarget;
-    void update({ source: select.value as DictationSourceV1 }).then((done) => {
+    const chosen = select.value as DictationSourceV1;
+    // The change goes on top of what the host last saved, so a refused text field never blocks it.
+    void source.save((host) => (host === undefined ? undefined : { ...savedUpdate(host), source: chosen })).then((done) => {
       // A refused change snaps the select back to the source the host kept.
       if (!done) select.value = source.settings?.source ?? 'nano';
     });
@@ -122,13 +81,13 @@
         <Field label={$t('API base URL')} for={`${uid}-url`} error={urlError}>
           <Input
             id={`${uid}-url`}
-            bind:value={customBaseUrl}
+            bind:value={drafts.customBaseUrl}
             type="url"
             placeholder="https://api.example.com/v1"
             invalid={urlError !== undefined}
             autocomplete="off"
             spellcheck={false}
-            onchange={() => void update({ customBaseUrl })}
+            onchange={() => void drafts.save('customBaseUrl')}
           />
         </Field>
       {/if}
@@ -136,32 +95,32 @@
         {#if provider === 'openai'}
           <Input
             id={`${uid}-model`}
-            bind:value={openaiModel}
+            bind:value={drafts.openaiModel}
             list={`${uid}-models`}
             invalid={modelError !== undefined}
             autocomplete="off"
             spellcheck={false}
-            onchange={() => void update({ openaiModel })}
+            onchange={() => void drafts.save('openaiModel')}
           />
         {:else if provider === 'groq'}
           <Input
             id={`${uid}-model`}
-            bind:value={groqModel}
+            bind:value={drafts.groqModel}
             list={`${uid}-models`}
             invalid={modelError !== undefined}
             autocomplete="off"
             spellcheck={false}
-            onchange={() => void update({ groqModel })}
+            onchange={() => void drafts.save('groqModel')}
           />
         {:else}
           <Input
             id={`${uid}-model`}
-            bind:value={customModel}
+            bind:value={drafts.customModel}
             list={`${uid}-models`}
             invalid={modelError !== undefined}
             autocomplete="off"
             spellcheck={false}
-            onchange={() => void update({ customModel })}
+            onchange={() => void drafts.save('customModel')}
           />
         {/if}
         <datalist id={`${uid}-models`}>
@@ -171,14 +130,14 @@
       <Field label={$t('Spoken language')} for={`${uid}-language`} optionalLabel={$t('optional')} error={languageError}>
         <Input
           id={`${uid}-language`}
-          bind:value={languageCode}
+          bind:value={drafts.language}
           placeholder="en"
           maxlength={3}
           invalid={languageError !== undefined}
           autocomplete="off"
           autocapitalize="none"
           spellcheck={false}
-          onchange={() => void update({ language: hint() })}
+          onchange={() => void drafts.save('language')}
         />
       </Field>
       <div class="key" role="group" aria-labelledby={`${uid}-key`}>

@@ -32,6 +32,7 @@ export const DICTATION_ERROR_CODES: readonly DictationErrorCodeV1[] = [
   'storage',
   'unsupported',
   'prompt-failed',
+  'settings-changed',
   'invalid-key',
   'rate-limited',
   'too-large',

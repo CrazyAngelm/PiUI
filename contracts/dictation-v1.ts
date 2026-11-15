@@ -84,6 +84,7 @@ export type DictationErrorCodeV1 =
   | 'storage'
   | 'unsupported'
   | 'prompt-failed'
+  | 'settings-changed'
   | 'invalid-key'
   | 'rate-limited'
   | 'too-large'

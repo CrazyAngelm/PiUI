@@ -5,7 +5,7 @@ import {
   type DictationSettingsUpdateV1,
   type DictationSettingsV1,
 } from '../../host-api/dictationClient';
-import { DictationSource } from './dictationSource.svelte';
+import { DictationSource, whenKeyChanges } from './dictationSource.svelte';
 
 type Provider = DictationSettingsV1['providers'][number];
 
@@ -173,5 +173,26 @@ describe('reading the settings after first paint', () => {
     cancelled.startLater(300)();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(other.settings).not.toHaveBeenCalled();
+  });
+});
+
+describe('what a recording would go to', () => {
+  it('is named by a key that is the source, or none', async () => {
+    expect((await started(view('off'), true)).key).toBe('none');
+    expect((await started(view('nano'), true)).key).toBe('nano');
+    expect((await started(view('nano'), false)).key).toBe('none');
+    expect((await started(view('openai', 'openai'))).key).toBe('openai');
+  });
+
+  it('runs a change only when the key differs from the last one seen', () => {
+    const changed = vi.fn();
+    const guard = whenKeyChanges('nano', changed);
+    guard('nano');
+    expect(changed).not.toHaveBeenCalled();
+    guard('none');
+    guard('none');
+    expect(changed).toHaveBeenCalledTimes(1);
+    guard('nano');
+    expect(changed).toHaveBeenCalledTimes(2);
   });
 });

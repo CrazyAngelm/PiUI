@@ -20,6 +20,8 @@ export const dictationRu: Readonly<Record<string, string>> = {
   'Enter an HTTPS address. HTTP works only for this computer (localhost).': 'Укажите адрес HTTPS. HTTP работает только для этого компьютера (localhost).',
   'Enter a model name.': 'Укажите название модели.',
   'Use a language code such as en or ru.': 'Укажите код языка, например en или ru.',
+  'The address changed while the key dialog was open, so the key was not saved. Enter it again.':
+    'Адрес изменился, пока было открыто окно ключа, поэтому ключ не сохранён. Введите его снова.',
   'Could not read or save dictation settings.': 'Не удалось прочитать или сохранить настройки диктовки.',
   'The speech service refused the API key. Check it in Settings.': 'Сервис распознавания отклонил ключ API. Проверьте его в настройках.',
   'The speech service is receiving too many requests or the quota ran out. Try again later.':

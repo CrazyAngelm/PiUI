@@ -9,7 +9,7 @@
   import { dictationClock } from './dictation';
   import { DICTATION_SOURCE_ERROR_COPY } from './dictationCopy';
   import { Dictation, type DictationEnvironment } from './dictationSession.svelte';
-  import { dictationSource as sharedSource, type DictationSource } from './dictationSource.svelte';
+  import { dictationSource as sharedSource, whenKeyChanges, type DictationSource } from './dictationSource.svelte';
 
   interface Props {
     /** Receives the recognized words; the composer puts them at its caret. */
@@ -57,10 +57,11 @@
   onDestroy(() => dictation.cancel());
 
   // A recording belongs to the source it started with: it is cancelled when the source changes or goes away.
-  $effect(() => {
-    void source.active;
-    untrack(() => dictation.cancel());
-  });
+  // Only a change of the key counts: the account status is replaced by every token refresh, and that
+  // must not discard a clip that is being transcribed.
+  const sourceKey = $derived(source.key);
+  const cancelWhenSourceChanges = untrack(() => whenKeyChanges(source.key, () => dictation.cancel()));
+  $effect(() => cancelWhenSourceChanges(sourceKey));
 
   function keydown(event: KeyboardEvent): void {
     if (event.key === 'Escape' && dictation.phase !== 'idle') {

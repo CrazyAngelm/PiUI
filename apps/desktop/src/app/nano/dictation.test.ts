@@ -14,6 +14,7 @@ import {
   pickDictationMime,
 } from './dictation';
 import { Dictation, type DictationEnvironment, type RecorderLike } from './dictationSession.svelte';
+import { DictationSource, whenKeyChanges } from './dictationSource.svelte';
 
 describe('dictation guards', () => {
   it('prefers webm with opus and skips formats the recorder lacks', () => {
@@ -374,5 +375,67 @@ describe('dictation session', () => {
     expect(test.session.error).toBe(DICTATION_ERROR_COPY.failed);
     expect(test.sent).toEqual([]);
     expect(test.track.stop).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a recording and the source it started with', () => {
+  /** A Nano source over an account whose whole status can be replaced, as a token refresh does. */
+  function nanoRig() {
+    let status = { revision: 1, dictation: true };
+    const account = {
+      get canDictate(): boolean {
+        return status.dictation;
+      },
+      dictationMaxBytes: 5_000_000,
+    };
+    const source = new DictationSource({ settings: () => Promise.reject(new Error('not read')) }, account);
+    const test = rig();
+    // What the dictation button wires: the guard runs whenever the effect re-runs.
+    const guard = whenKeyChanges(source.key, () => test.session.cancel());
+    return {
+      test,
+      source,
+      refresh(next: Partial<typeof status> = {}) {
+        status = { ...status, revision: status.revision + 1, ...next };
+        guard(source.key);
+      },
+    };
+  }
+
+  /** Records one clip and leaves it uploading until `release` is called. */
+  async function upload(test: ReturnType<typeof rig>): Promise<(text: string) => void> {
+    let release: (value: { text: string }) => void = () => undefined;
+    test.setAnswer(() => new Promise((resolve) => (release = resolve)));
+    await test.session.start();
+    test.recorder.emit(4);
+    await test.session.toggle();
+    await settle();
+    expect(test.session.phase).toBe('sending');
+    return (text) => release({ text });
+  }
+
+  it('keeps a clip that is uploading when the account status is only refreshed', async () => {
+    const { test, source, refresh } = nanoRig();
+    expect(source.active).toBe('nano');
+    const finish = await upload(test);
+    refresh();
+    refresh();
+    expect(source.active).toBe('nano');
+    expect(test.session.phase).toBe('sending');
+    finish('kept words');
+    await settle();
+    expect(test.texts).toEqual(['kept words']);
+    expect(test.session.error).toBeUndefined();
+  });
+
+  it('drops the clip when the source stops being available', async () => {
+    const { test, source, refresh } = nanoRig();
+    const finish = await upload(test);
+    refresh({ dictation: false });
+    expect(source.active).toBeUndefined();
+    expect(test.session.phase).toBe('idle');
+    finish('too late');
+    await settle();
+    expect(test.texts).toEqual([]);
   });
 });

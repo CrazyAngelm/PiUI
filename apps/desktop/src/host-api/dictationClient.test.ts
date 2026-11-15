@@ -91,7 +91,7 @@ describe('dictation client', () => {
   });
 
   it('lists the contract error codes once each', () => {
-    expect(DICTATION_ERROR_CODES).toHaveLength(17);
-    expect(new Set(DICTATION_ERROR_CODES).size).toBe(17);
+    expect(DICTATION_ERROR_CODES).toHaveLength(18);
+    expect(new Set(DICTATION_ERROR_CODES).size).toBe(18);
   });
 });

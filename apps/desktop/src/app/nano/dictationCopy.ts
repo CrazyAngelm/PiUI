@@ -12,6 +12,7 @@ export const DICTATION_SOURCE_ERROR_COPY: Readonly<Record<DictationErrorCode, st
   storage: 'Could not read or save dictation settings.',
   unsupported: 'API keys can be entered only on Windows in this version.',
   'prompt-failed': 'Could not open the native API key dialog.',
+  'settings-changed': 'The address changed while the key dialog was open, so the key was not saved. Enter it again.',
   'invalid-key': 'The speech service refused the API key. Check it in Settings.',
   'rate-limited': 'The speech service is receiving too many requests or the quota ran out. Try again later.',
   'too-large': 'The recording was too large to send.',
