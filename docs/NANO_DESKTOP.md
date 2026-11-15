@@ -519,7 +519,8 @@ how (once or always) and a button that disconnects it at once. Settings lists
 the remembered browsers with their last use and lets the person forget them.
 
 **Limits.** 262144-byte frames (larger results are split in `part` frames and
-refused above 64 MiB), two browsers per device, eight requests in flight per
+refused above 64 MiB; an event over one frame is replaced by a small `gap` frame
+that makes the browser read that session again), two browsers per device, eight requests in flight per
 browser, 75 s of silence ends the link, one pairing prompt at a time.
 
 **Disclosure.** The Nano server relays the frames in memory and keeps none; it

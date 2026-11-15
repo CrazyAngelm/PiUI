@@ -421,7 +421,7 @@ pub(crate) async fn run(app: &AppHandle, admitted: Admitted) -> Result<Value, Va
             let Some(host) = app.try_state::<Arc<NanoHost>>() else {
                 return Err(not_ready());
             };
-            to_json::<_, serde_json::Error>(Ok(commands::nano_account_status_v1(host)))
+            to_json(Ok::<_, Value>(commands::nano_account_status_v1(host)))
         }
     }
 }

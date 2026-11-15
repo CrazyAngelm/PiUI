@@ -82,6 +82,11 @@ Nano server and has exactly one listener, the loopback relay (ADR-048).
 - A paired browser can do in chats what the keyboard can, including approving a
   tool call. This is remote control of agents that run as the user, not a
   sandbox, and no document describes it as one.
+- An event larger than one frame (a Pi `editor` prefill, say) is never sent. The
+  desktop sends the browser a small `gap` frame (`ch`, plus `sid` when the event
+  named a session) and the browser reads that state again; a queue overflow
+  still drops the browser, which reloads on reconnect. `gap` is additive within
+  `nano-remote.v1`, so a browser that predates it ignores it.
 - A new dependency: `tokio-tungstenite` (framing only, without TLS or connect
   features). The WebSocket upgrade itself uses the account's `reqwest` client, so
   the link inherits the issuer pin, the platform certificate verifier,

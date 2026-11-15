@@ -277,6 +277,14 @@ pub enum HostMessage {
         ch: String,
         p: Box<RawValue>,
     },
+    /// An event on `ch` was too large for one frame and was not sent: the
+    /// browser reads its state again (additive within `nano-remote.v1`;
+    /// `sid` names the one session concerned, when the event had one).
+    Gap {
+        ch: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sid: Option<String>,
+    },
     Bye {
         reason: ByeReason,
     },
@@ -305,6 +313,7 @@ impl HostMessage {
             Self::Res { .. } => "res",
             Self::Part { .. } => "part",
             Self::Ev { .. } => "ev",
+            Self::Gap { .. } => "gap",
             Self::Bye { .. } => "bye",
         }
     }

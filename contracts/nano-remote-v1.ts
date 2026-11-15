@@ -206,6 +206,12 @@ export type NanoRemoteHostMessageV1 =
   | { readonly k: 'res'; readonly id: number; readonly ok: false; readonly error: unknown }
   | { readonly k: 'part'; readonly id: number; readonly seq: number; readonly last: boolean; readonly ok: boolean; readonly data: string }
   | { readonly k: 'ev'; readonly ch: string; readonly p: unknown }
+  /**
+   * An event on `ch` was too large for one frame and was not sent (additive
+   * within v1; older viewers ignore it). The viewer reads its state again:
+   * the one session `sid` when present, everything it shows otherwise.
+   */
+  | { readonly k: 'gap'; readonly ch: string; readonly sid?: string }
   | { readonly k: 'bye'; readonly reason: NanoRemoteByeReasonV1 };
 
 /** The text a browser signs: device id, viewer id and nonce bind the proof to one relay session. */

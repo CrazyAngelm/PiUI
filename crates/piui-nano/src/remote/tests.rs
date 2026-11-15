@@ -16,7 +16,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+use tokio_tungstenite::tungstenite::handshake::server::{
+    Callback, ErrorResponse, Request, Response,
+};
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use url::Url;
 
@@ -285,6 +287,20 @@ fn host_messages_serialize_to_the_contract() {
         (
             HostMessage::event("piui://x", r#"{"a":1}"#.to_owned()).expect("event"),
             json!({ "k": "ev", "ch": "piui://x", "p": { "a": 1 } }),
+        ),
+        (
+            HostMessage::Gap {
+                ch: "piui://x".to_owned(),
+                sid: Some("s1".to_owned()),
+            },
+            json!({ "k": "gap", "ch": "piui://x", "sid": "s1" }),
+        ),
+        (
+            HostMessage::Gap {
+                ch: "piui://x".to_owned(),
+                sid: None,
+            },
+            json!({ "k": "gap", "ch": "piui://x" }),
         ),
     ];
     for (message, expected) in samples {
@@ -808,9 +824,20 @@ struct SeenRequest {
 
 type Seen = Arc<Mutex<Vec<SeenRequest>>>;
 
-async fn upgrade(stream: TcpStream, seen: &Seen) -> Socket {
-    let seen = Arc::clone(seen);
-    tokio_tungstenite::accept_hdr_async(stream, move |request: &Request, mut response: Response| {
+/// Records the handshake request and answers with the link's subprotocol.
+struct Recorder(Seen);
+
+impl Callback for Recorder {
+    // The error type is fixed by tungstenite's `Callback` trait.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the signature is dictated by tokio-tungstenite"
+    )]
+    fn on_request(
+        self,
+        request: &Request,
+        mut response: Response,
+    ) -> Result<Response, ErrorResponse> {
         let header = |name: &str| {
             request
                 .headers()
@@ -818,7 +845,7 @@ async fn upgrade(stream: TcpStream, seen: &Seen) -> Socket {
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_owned)
         };
-        seen.lock().expect("seen").push(SeenRequest {
+        self.0.lock().expect("seen").push(SeenRequest {
             uri: request.uri().to_string(),
             authorization: header("authorization"),
             client: header("x-nano-client"),
@@ -829,9 +856,13 @@ async fn upgrade(stream: TcpStream, seen: &Seen) -> Socket {
             HeaderValue::from_static(SUBPROTOCOL),
         );
         Ok(response)
-    })
-    .await
-    .expect("websocket handshake")
+    }
+}
+
+async fn upgrade(stream: TcpStream, seen: &Seen) -> Socket {
+    tokio_tungstenite::accept_hdr_async(stream, Recorder(Arc::clone(seen)))
+        .await
+        .expect("websocket handshake")
 }
 
 async fn accept(listener: &TcpListener, seen: &Seen) -> Socket {

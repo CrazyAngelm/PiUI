@@ -143,6 +143,10 @@ pub(crate) enum Decision {
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum RemoteError {
     #[error("invalid")]
+    #[expect(
+        dead_code,
+        reason = "frozen NanoRemoteErrorCodeV1 member; no settings command takes free-form input yet"
+    )]
     Invalid,
     #[error("safe-mode")]
     SafeMode,
@@ -166,6 +170,24 @@ impl From<StoreError> for RemoteError {
             StoreError::NotFound => Self::NotFound,
         }
     }
+}
+
+/// The longest session id a `gap` frame carries.
+const MAX_GAP_SESSION_BYTES: usize = 128;
+
+/// The `sessionId` of a host event, when it has a short one: the browser then
+/// reads only that session again. The rest of the (possibly huge) document is
+/// skipped, never copied.
+fn event_session(payload: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Probe {
+        #[serde(rename = "sessionId")]
+        session_id: Option<String>,
+    }
+    serde_json::from_str::<Probe>(payload)
+        .ok()?
+        .session_id
+        .filter(|id| !id.is_empty() && id.len() <= MAX_GAP_SESSION_BYTES)
 }
 
 // ---------------------------------------------------------------------------
@@ -1152,12 +1174,10 @@ impl Core {
 
     /// A host event on an allowlisted channel, as the text of its JSON
     /// payload, for every welcomed browser. A payload that would not fit one
-    /// frame is not forwarded: a browser sees it on its next read.
+    /// frame is not forwarded; each browser gets a small `gap` frame instead,
+    /// so it reads the state again rather than waiting for an event that
+    /// never comes (an oversized approval has no successor).
     pub(crate) fn host_event(&mut self, channel: &str, payload: &str) -> Vec<Effect> {
-        let mut effects = Vec::new();
-        if payload.len() + channel.len() + 64 > MAX_FRAME_BYTES {
-            return effects;
-        }
         let mut ids: Vec<&String> = self
             .viewers
             .iter()
@@ -1165,8 +1185,23 @@ impl Core {
             .map(|(id, _)| id)
             .collect();
         ids.sort();
+        let oversized = payload.len() + channel.len() + 64 > MAX_FRAME_BYTES;
+        let session = if oversized && !ids.is_empty() {
+            event_session(payload)
+        } else {
+            None
+        };
+        let mut effects = Vec::new();
         for id in ids {
-            if let Some(message) = HostMessage::event(channel, payload.to_owned()) {
+            let message = if oversized {
+                Some(HostMessage::Gap {
+                    ch: channel.to_owned(),
+                    sid: session.clone(),
+                })
+            } else {
+                HostMessage::event(channel, payload.to_owned())
+            };
+            if let Some(message) = message {
                 effects.push(Effect::Send {
                     viewer: id.clone(),
                     message,

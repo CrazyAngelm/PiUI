@@ -468,6 +468,9 @@ same device replaces the older (4409) and ends that link's browsers.
 server: a signed handshake (`hello`, `challenge`, `proof`), a pairing prompt at
 the computer, `welcome` with the contract versions and the allowlist, then
 `req`/`res`/`part`/`ev`/`bye`. Their grammar is in `contracts/nano-remote-v1.ts`.
+An event too large for one frame is not sent; the desktop sends `gap` (`ch`, and
+`sid` when the event named one session) so the browser reads that state again.
+Viewers ignore inner kinds they do not know.
 
 ## 5. Gateway semantics
 

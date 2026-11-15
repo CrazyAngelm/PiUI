@@ -5,11 +5,12 @@
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use piui_nano::remote::frames::{DropReason, ViewerMessage};
+use piui_nano::remote::frames::{DropReason, MAX_FRAME_BYTES, ViewerMessage};
 use piui_nano::remote::grants::RemoteStore;
 use piui_nano::remote::link::{LinkEvent, LinkState};
 use piui_nano::remote::pairing::{RawKey, decode_key, encode_key};
 use piui_nano::status::NanoAccountStateV1;
+use piui_runtime::workspace_runtime::ApprovalKind;
 use serde_json::{Value, json};
 
 use super::remote_core::{
@@ -18,6 +19,9 @@ use super::remote_core::{
 };
 use super::remote_dispatch::{REMOTE_CHANNELS, REMOTE_COMMANDS, Refusal, SHELL_CONTRACTS, admit};
 use super::tests::test_dir;
+use crate::workspace_api::{
+    ApprovalDecision, WORKSPACE_PROTOCOL, WorkspaceApproval, WorkspaceEvent, WorkspaceEventPayload,
+};
 
 const FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -1408,8 +1412,106 @@ fn host_events_reach_welcomed_browsers_only() {
         core.host_event("piui://composer-v19", "not json")
             .is_empty()
     );
+}
+
+/// A real v15 approval event with a Pi `editor` prefill of `prefill_bytes`.
+fn approval_event(prefill_bytes: usize) -> String {
+    let event = WorkspaceEvent {
+        protocol: WORKSPACE_PROTOCOL,
+        session_id: "s_editor".to_owned(),
+        revision: 41,
+        event: WorkspaceEventPayload::Approval {
+            approval: WorkspaceApproval {
+                id: "req-1".to_owned(),
+                session_id: "s_editor".to_owned(),
+                kind: ApprovalKind::Input,
+                title: "Edit the file".to_owned(),
+                description: String::new(),
+                decisions: vec![ApprovalDecision::ApproveOnce, ApprovalDecision::Cancel],
+                input_label: Some("Text".to_owned()),
+                options: None,
+                prefill: Some("x".repeat(prefill_bytes)),
+                timeout_ms: None,
+                form: None,
+            },
+        },
+    };
+    serde_json::to_string(&event).expect("event text")
+}
+
+#[test]
+fn an_oversized_event_is_never_sent_but_each_browser_gets_a_gap() {
+    let (mut core, clock) = welcomed_core();
+    open(&mut core, "vw_two", clock.at(2));
+    let payload = approval_event(300_000);
+    assert!(payload.len() > MAX_FRAME_BYTES);
+    let effects = core.host_event("piui://workspace-event", &payload);
+    assert_eq!(
+        sent(&effects),
+        vec![(
+            VIEWER.to_owned(),
+            json!({ "k": "gap", "ch": "piui://workspace-event", "sid": "s_editor" })
+        )]
+    );
+    for effect in &effects {
+        if let Effect::Send { message, .. } = effect {
+            let text = serde_json::to_string(message).expect("frame text");
+            assert!(text.len() < 256, "the gap frame is small: {}", text.len());
+        }
+    }
+    assert!(dropped(&effects).is_empty());
+    assert_eq!(core.welcomed(), 1, "the browser stays connected");
+}
+
+#[test]
+fn an_event_just_under_the_limit_still_goes_as_an_event() {
+    let (mut core, _clock) = welcomed_core();
+    let payload = approval_event(MAX_FRAME_BYTES - 1_000);
+    assert!(payload.len() + "piui://workspace-event".len() + 64 <= MAX_FRAME_BYTES);
+    let effects = core.host_event("piui://workspace-event", &payload);
+    let frames = sent(&effects);
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].1["k"], "ev");
+    assert!(frames[0].1.to_string().len() <= MAX_FRAME_BYTES);
+}
+
+#[test]
+fn a_gap_names_no_session_when_the_event_has_none() {
+    let (mut core, _clock) = welcomed_core();
     let huge = format!("\"{}\"", "a".repeat(300_000));
-    assert!(core.host_event("piui://workspace-event", &huge).is_empty());
+    let effects = core.host_event("piui://workspace-event", &huge);
+    assert_eq!(
+        sent(&effects),
+        vec![(
+            VIEWER.to_owned(),
+            json!({ "k": "gap", "ch": "piui://workspace-event" })
+        )]
+    );
+    let long_id = format!(
+        "{{\"sessionId\":\"{}\",\"pad\":\"{}\"}}",
+        "s".repeat(200),
+        "p".repeat(300_000)
+    );
+    let effects = core.host_event("piui://workspace-event", &long_id);
+    assert_eq!(
+        sent(&effects),
+        vec![(
+            VIEWER.to_owned(),
+            json!({ "k": "gap", "ch": "piui://workspace-event" })
+        )],
+        "a session id over the bound is left out"
+    );
+}
+
+#[test]
+fn an_oversized_event_without_a_welcomed_browser_sends_nothing() {
+    let (mut core, clock) = online_core();
+    open(&mut core, VIEWER, clock.at(0));
+    let payload = approval_event(300_000);
+    assert!(
+        core.host_event("piui://workspace-event", &payload)
+            .is_empty()
+    );
 }
 
 #[test]
