@@ -22,6 +22,8 @@
   // The optional Nano account: read once after first paint, never before.
   $effect(() => nanoAccount.startLater());
 
+  /** Bumped to retry the lazy work-location chunk after a failed load. */
+  let locationAttempt = $state(0);
   const current = $derived(railCurrent(store.route));
   const inboxCount = $derived(store.inboxApprovals.length);
   const running = $derived(store.runningSessions.some((session) => session.runId));
@@ -97,9 +99,13 @@
   {#if nanoAccount.canUseCloud}
     <div class="rail__end">
       <!-- Never needed at first paint; its own chunk keeps the first-paint budget. -->
-      {#await import('../nano/WorkLocation.svelte') then location}
-        <location.default />
-      {/await}
+      {#key locationAttempt}
+        {#await import('../nano/WorkLocation.svelte') then location}
+          <location.default />
+        {:catch}
+          <IconButton size="lg" label={$t('Try again')} onclick={() => (locationAttempt += 1)}><History /></IconButton>
+        {/await}
+      {/key}
     </div>
   {/if}
 </nav>
