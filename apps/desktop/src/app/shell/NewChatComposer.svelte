@@ -37,7 +37,8 @@
   import type { AgentProfile, RunInputValue } from '../../host-api/orchestrationClient';
   import { useWorkspace } from './context';
   import { modelSelectionKey, resolveModelSelection } from '../../host-api/modelSelection';
-  import { choiceFor, executorOf, reconcileSelection, restoredSelection, startingExecutor, withChoice, type NewChatChoices, type NewChatSelection, type RememberedExecutor } from './newChatChoice';
+  import { choiceFor, executorOf, reconcileSelection, rememberedPipelineUsable, restoredSelection, startingExecutor, withChoice, withExecutorIn, type NewChatChoices, type NewChatSelection, type PipelineCandidate, type RememberedExecutor } from './newChatChoice';
+  import { teammates } from '../team/teammatesStore.svelte';
   import FusionModeBar from '../fusion/FusionModeBar.svelte';
   import { fusionErrorText, refusalCopy, roleLabel } from '../fusion/fusionPair';
   import type { FusionPairV1 } from '../../host-api/fusionClient';
@@ -344,11 +345,13 @@
   const pipelinesAllowed = $derived(trusted && !store.safeMode);
   /** Projects whose library was asked for, answered or not: a refused library no longer holds the start back. */
   const librariesAsked = new SvelteSet<string>();
-  /** Whether a remembered pipeline still starts a chat, checked once per project and pipeline in this composer. Key `${workspaceId}:${commandId}`. */
-  const pipelineChecks = new SvelteMap<string, boolean>();
+  /** What a remembered pipeline is now, read once per project and pipeline in this composer (null: gone). Key `${workspaceId}:${commandId}`. */
+  const pipelineChecks = new SvelteMap<string, PipelineCandidate | null>();
   const checkingPipelines = new Set<string>();
   /** The project in which the person chose an executor in the picker; what was remembered no longer decides there. */
   let executorPickedIn = $state<string | undefined>();
+  /** The remembered executor is still being restored: sending now would start with the wrong one and overwrite the memory. */
+  let executorPending = $state(true);
   $effect(() => {
     const id = workspaceId;
     if (!id || !pipelinesAllowed) return;
@@ -366,8 +369,15 @@
     const allowed = pipelinesAllowed;
     const remembered = untrack(() => executorOf(choices.projects[id]));
     const check = allowed && remembered?.pipeline ? `${id}:${remembered.pipeline}` : undefined;
-    const usable = check === undefined ? undefined : pipelineChecks.get(check);
-    if (check !== undefined && usable === undefined) untrack(() => verifyPipeline(id, remembered?.pipeline ?? '', check));
+    const candidate = check === undefined ? undefined : pipelineChecks.get(check);
+    if (check !== undefined && candidate === undefined) untrack(() => verifyPipeline(id, remembered?.pipeline ?? '', check));
+    // The picker's own rules, read live: a teammate turned off or an agent installed later changes the answer.
+    const usable = rememberedPipelineUsable({
+      candidate,
+      teammate: teammates.byLaunchCommand(id, remembered?.pipeline),
+      teamKnown: teammates.teams[id] !== undefined,
+      harnesses: executorHarnesses,
+    });
     const start = startingExecutor(remembered, {
       allowed,
       chatDefault: library ? (library.chatDefault ?? '') : undefined,
@@ -375,20 +385,26 @@
       rememberedUsable: usable,
     });
     untrack(() => {
-      if (!start.ready) return;
       // Safe mode and a restricted project always talk directly, whatever was picked.
-      if (executorPickedIn === id && allowed) return;
+      const picked = executorPickedIn === id && allowed;
+      executorPending = !start.ready && !picked;
+      if (!start.ready || picked) return;
       if (pipelineId !== start.pipeline) pipelineId = start.pipeline;
     });
   });
-  /** A pipeline remembered from an earlier chat may have been deleted or lost its message input since. */
+  /**
+   * A pipeline remembered from an earlier chat may have been deleted, lost its message input or its
+   * teammate may have been turned off since: it is read again, with the project's teammates, before
+   * it is selected for the person.
+   */
   function verifyPipeline(id: string, commandId: string, key: string): void {
     if (!commandId || checkingPipelines.has(key)) return;
     checkingPipelines.add(key);
-    void chatPipelines.detail(id, commandId, true).then(
-      (detail) => pipelineChecks.set(key, detail.accepts),
-      () => pipelineChecks.set(key, false),
+    const read = chatPipelines.detail(id, commandId, true).then(
+      (detail): PipelineCandidate => ({ accepts: detail.accepts, ...(detail.reply ? { replyHarness: detail.reply.harness } : {}) }),
+      () => null,
     );
+    void Promise.all([read, teammates.ensure(id, true).catch(() => undefined)]).then(([candidate]) => pipelineChecks.set(key, candidate));
   }
   $effect(() => {
     const id = workspaceId;
@@ -472,7 +488,7 @@
     choices = next;
     try {
       localStorage.setItem(CHOICE_KEY, JSON.stringify(choices.projects));
-      localStorage.setItem(LAST_CHOICE_KEY, JSON.stringify(choices.last));
+      if (choices.last) localStorage.setItem(LAST_CHOICE_KEY, JSON.stringify(choices.last));
     } catch {
       // Remembered choices are a convenience only.
     }
@@ -495,9 +511,13 @@
     return { pipeline: commandId, ...(known ? { chatDefault: known.chatDefault ?? '' } : {}) };
   }
 
-  /** A chat started in another project than the one now shown keeps that project's own picks: only its executor is written. */
+  /**
+   * A template is saved before its chat starts, so this runs long after the picks were read: the
+   * project may have changed, and another composer may have remembered newer picks. Only this
+   * project's executor is written, into what is stored now.
+   */
   function rememberExecutorIn(targetId: string, executor: RememberedExecutor): void {
-    persist(withChoice(choices, targetId, { ...(choiceFor(choices, targetId) ?? {}), executor }));
+    persist(withExecutorIn(readChoices(), choices, targetId, executor));
   }
 
   const executor = $derived<Executor>(
@@ -538,6 +558,7 @@
 
   function chooseExecutor(next: Executor): void {
     executorPickedIn = workspaceId;
+    executorPending = false;
     if (next.kind === 'template') {
       const choice = choiceFromKey(next.id, chatPipelines.libraries[workspaceId]?.templates ?? []);
       if (!choice) return;
@@ -605,11 +626,13 @@
       // project Send only opens the trust review (`send()` returns after `onTrust`).
       (fusionMode
         ? fusionReady
-        : templateChoice
-          ? Boolean(draft?.detail.accepts) && available.length > 0
-          : pipelineId
-            ? Boolean(pipelineDetail?.accepts) && available.length > 0
-            : Boolean(harness) && (modelKey ? explicitModelReady || catalogBlocked : canUseDefaultModel)),
+        : executorPending
+          ? false
+          : templateChoice
+            ? Boolean(draft?.detail.accepts) && available.length > 0
+            : pipelineId
+              ? Boolean(pipelineDetail?.accepts) && available.length > 0
+              : Boolean(harness) && (modelKey ? explicitModelReady || catalogBlocked : canUseDefaultModel)),
   );
 
   function setText(value: string): void {

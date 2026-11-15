@@ -143,3 +143,48 @@ export function startingExecutor(remembered: RememberedExecutor | undefined, fac
   if (libraryPending) return { ready: false };
   return { ready: true, pipeline: facts.chatDefault ?? '' };
 }
+
+/** What a remembered pipeline turned out to be when it was read again (null: it is gone or could not be read). */
+export interface PipelineCandidate {
+  /** The pipeline takes a chat message. */
+  accepts: boolean;
+  /** The harness of the agent that answers and continues the chat, when the pipeline has one. */
+  replyHarness?: HarnessKind;
+}
+
+export interface PipelineEligibility {
+  candidate: PipelineCandidate | null | undefined;
+  /** The teammate that owns the pipeline, if any. */
+  teammate: { enabled: boolean } | undefined;
+  /** The project's teammates were read; without them a turned-off teammate cannot be told from none. */
+  teamKnown: boolean;
+  /** The harness catalog; empty while it has not been read. */
+  harnesses: readonly { kind: HarnessKind; available: boolean }[];
+}
+
+/**
+ * Whether a remembered pipeline may be selected without the person choosing it: the picker's own
+ * rules (it takes a message, its teammate is turned on) plus an installed harness for its answering
+ * agent. undefined while something is still being read.
+ */
+export function rememberedPipelineUsable(input: PipelineEligibility): boolean | undefined {
+  const { candidate } = input;
+  if (candidate === undefined) return undefined;
+  if (candidate === null || !candidate.accepts) return false;
+  if (!input.teamKnown || (input.teammate && !input.teammate.enabled)) return false;
+  if (!candidate.replyHarness) return true;
+  if (input.harnesses.length === 0) return undefined;
+  return input.harnesses.some((item) => item.kind === candidate.replyHarness && item.available);
+}
+
+/**
+ * The remembered choices with only one project's executor replaced, for a chat that starts long
+ * after the picks were read (a template is saved first). `current` is what is stored now, `known`
+ * what this composer holds: the stored state wins, and the latest choice is left as it is.
+ */
+export function withExecutorIn(current: NewChatChoices, known: NewChatChoices, workspaceId: string, executor: RememberedExecutor): NewChatChoices {
+  const projects = { ...known.projects, ...current.projects };
+  const last = current.last ?? known.last;
+  const base = projects[workspaceId] ?? choiceFor({ projects, ...(last ? { last } : {}) }, workspaceId) ?? {};
+  return { projects: { ...projects, [workspaceId]: { ...base, executor } }, ...(last ? { last } : {}) };
+}
