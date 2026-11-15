@@ -518,7 +518,9 @@ pub(crate) fn refresh_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> 
     }))
 }
 
-fn show_main<R: Runtime>(app: &AppHandle<R>) {
+/// Brings the main window to the front (also used by the remote pairing
+/// prompt, which must be seen by the person at the computer).
+pub(crate) fn show_main<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let _ = window.unminimize();
         let _ = window.show();
