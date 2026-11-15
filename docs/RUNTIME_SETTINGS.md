@@ -2,13 +2,31 @@
 
 The composer exposes one compact model/reasoning menu and a Fast toggle when the native adapter supports it. It uses the native catalog, preserves provider identity, reports failed changes, and shows confirmed native settings. Changes are disabled during active turns. Escape restores focus; the popover remains outside composer clipping. English remains the default; Russian labels follow app settings.
 
-`workspace_settings_v12` is an additive allowlisted get/set route described by `contracts/workspace-settings-v12.ts`. It does not change the frozen workspace v11 grammar or event channel. The host checks safe mode, project trust, live session identity, idle state and native model catalog before mutation. Responses contain no native paths, executable arguments or credentials. Native histories/settings own persistence; PiUI does not edit JSONL.
+`workspace_settings_v12` is an additive allowlisted get/set route described by `contracts/workspace-settings-v12.ts`. It does not change the frozen workspace v11 grammar or event channel. The host checks safe mode, project trust, live session identity, idle state and native model catalog before mutation. Responses contain no native paths, executable arguments or credentials. Native histories own the conversation and PiUI never edits them (no JSONL writes); in addition PiUI remembers the model, reasoning and speed a person confirmed as UI metadata (see "Settings across restarts").
 
 - Codex: native `model/list`, `thread/settings/update`, and turn settings. Reasoning choices use `supportedReasoningEfforts`; model switches use the native default effort. Fast maps to app-server `fast` / Responses `priority`; Standard maps to `default`. Managed profiles may explicitly opt into native outbound network access only with `read-only` or `workspace-write`; PiUI forwards the app-server `sandboxPolicy` on every new turn, leaves it disabled by default, and rejects cross-harness or child-authority escalation. MCP startup notifications and settings notifications are lifecycle metadata, not transcript items. A current MCP startup failure stays with resource status and clears when that server reports `ready`; it does not mark a working chat as failed. Known `webSearch` items render as metadata-only tool activity (query, action and result count); other unknown content retains its generic fallback.
 - Prime: native model registry, supported thinking levels, `setModel`, `setThinkingLevel`, `setServiceTier`. Its import-only aliased model package supplies capability detection, without duplicating model-name rules. Fast requires native `supportsFastMode`, maps to `priority`, and unsupported requests fail. Managed launch options pass the tier directly to SDK session construction rather than changing a global default during preflight.
 - Pi: native model RPC and `get_available_thinking_levels` / `set_thinking_level`. Fast is unavailable in this RPC contract. Profile instructions use native `--append-system-prompt` with an owned temporary file, cleaned on process exit. Result pipelines can use Pi, while its current adapter still does not register the workspace messaging/delegation tool.
 
 Graph model suggestions reuse catalogs already observed in native chats; explicit model IDs remain possible for offline system authoring. Both graph and advanced profile forms preserve Prime speed settings. Host save validation accepts Prime and Codex speed, and launch adapters validate native support.
+
+## Settings across restarts
+
+The model, reasoning level and speed a person confirms for a chat reach the harness through `workspace_settings_v16` (or the create request) and are remembered by the host, so a reopened chat does not fall back to the harness defaults.
+
+- What is remembered: the model (id and provider), the reasoning level and the speed, taken from the native readback after a confirmed `set`, or from the create request. Catalog metadata such as the model's reasoning levels is not stored. A level or speed that was never chosen is never compared or re-applied.
+- Where: `workspace-session-settings-v1/<session-id>.json` in the app data directory, written atomically (staging file, `sync_all`, rename). It sits next to, not inside, the `workspace-registry-v11` session registry, whose format is unchanged, so an older build still reads every chat and ignores the directory. It is UI metadata, not history: an unreadable or missing file only means the chat reopens with the harness's own settings, and the directory is safe to delete. Deleting a chat (or a failed first launch) removes its file.
+- When it is applied: on an ordinary reopen, after the native session resumed and before the registry row takes the native snapshot. The host compares the snapshot with the remembered settings and, only if they differ, re-applies them through the typed runtime adapter (`setModel`), then reads the snapshot back. The open start itself carries no model or level, so a model the harness no longer offers can never block opening a chat.
+- Who is exempt: Pi and the Nano lane (`HarnessKind::restores_session_settings()`; the session JSONL restores `model_change` and `thinking_level_change`, native history stays authoritative), sessions on the Nano source (pinned to their recorded mode at start), and run members.
+- Failure rule: a refused or unconfirmed re-apply never fails the open. The chat opens with the harness's settings and the snapshot carries the host-decided notice `settings-not-restored`, shown as a line above the composer. The next confirmed choice in the picker clears it.
+- Presentation: the chip in the composer reads the live session's native settings as soon as the chat is live (not only when the menu opens) and takes every confirmed change at once. Safe mode and history-only (closed) chats make no read and show the registry model only.
+
+Known limits:
+
+- A model changed inside the harness itself (a native slash command) on Claude Code, Codex, ACP or Hermes is not remembered; the last choice confirmed through the PiUI menu wins on reopen. Pi and Nano are exempt, so a Pi session continued in the terminal keeps what its JSONL says.
+- Codex versions that restore the thread's own model on `thread/resume` produce no difference and therefore no re-apply.
+- Chats that existed before this behaviour have no remembered file and behave as before until the next confirmed choice; nothing is seeded from the observed model.
+- A session on the Nano source has no reasoning levels or speed to remember.
 
 ## Verification
 

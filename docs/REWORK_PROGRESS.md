@@ -777,6 +777,25 @@ four read-only GPT 6.1 Sol passes.
   fixed. The native sign-in terminal (`CreateProcessW`) was not launched for
   real.
 
+## A chat keeps its model and reasoning across restarts — 2026-11-15 (unreleased)
+
+- Presentation: the composer chip read the native settings only after the menu
+  opened, so a reopened chat showed the model name without reasoning or Fast. It
+  now reads them as soon as the chat is live (never in safe mode or for a closed
+  chat) and takes every confirmed change from `runtimeSettings`.
+- Host: nothing remembered the settings a person confirmed, and an ordinary
+  reopen starts without a model or level on purpose. The host now keeps the
+  confirmed model, reasoning and speed in `workspace-session-settings-v1/` (UI
+  metadata next to the unchanged v11 registry) and, after the native resume,
+  re-applies them through `setModel` only when the snapshot differs. Pi and Nano
+  restore from their own history and are exempt. A refused re-apply never fails
+  the open and shows the notice `settings-not-restored`.
+- Tests were written but not run by the implementer: Rust unit tests for the
+  store, the comparison and `restores_session_settings`, three host restart
+  tests with a synthetic adapter, Vitest for the change signal, notice codes and
+  the lab reopen, and one UI Lab Playwright scenario. No real Claude Code or
+  Codex reopen was exercised.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

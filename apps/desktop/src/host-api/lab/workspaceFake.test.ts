@@ -287,6 +287,21 @@ describe('UI Lab workspace host', () => {
     expect(await rejection(settings({ type: 'get', sessionId: closed }))).toMatchObject({ code: 'NOT_FOUND' });
   });
 
+  it('a closed and reopened chat reports the settings it had', async () => {
+    const host = labHost();
+    const id = sessionId(host, 'Route host calls through one transport');
+    const settings = () => host.invoke<RuntimeSettings>('workspace_settings_v16', { command: { type: 'get', sessionId: id } });
+    const before = await settings();
+    expect(before).toMatchObject({ model: { id: 'gpt-lab-5-codex' }, thinkingLevel: 'high', serviceTier: 'fast' });
+    await command(host, { type: 'closeSession', sessionId: id });
+    expect(await rejection(settings())).toMatchObject({ code: 'NOT_FOUND' });
+    await command(host, { type: 'openSession', sessionId: id });
+    const after = await settings();
+    expect(after.model?.id).toBe(before.model?.id);
+    expect(after.thinkingLevel).toBe(before.thinkingLevel);
+    expect(after.serviceTier).toBe(before.serviceTier);
+  });
+
   it('projects closed history with host limits and serves full answers from workspace_history_v1', async () => {
     const host = labHost();
     const id = sessionId(host, 'Session compaction deep-dive');

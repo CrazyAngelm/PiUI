@@ -30,7 +30,10 @@ only an older version, an unrecognized identity or a failed protocol handshake
 refuses the session. Hidden
 current models retain their native reasoning metadata;
 an absent model remains visible without invented effort levels. Model changes,
-effort and Fast use `workspace_settings_v16` and the native adapter.
+effort and Fast use `workspace_settings_v16` and the native adapter. The chip
+shows the live session's model, reasoning and speed without opening the menu,
+and a reopened chat gets its remembered settings back (see
+[RUNTIME_SETTINGS.md](RUNTIME_SETTINGS.md), "Settings across restarts").
 
 The compact picker opens an effort panel and a separate model list with the
 current selection checked. The native range control supports arrow keys, Home

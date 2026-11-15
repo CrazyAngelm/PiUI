@@ -10,6 +10,7 @@ export const SESSION_NOTICE_CODES = [
   'unsupported-board-tool-resume',
   'unsupported-sidekick-tool',
   'unsupported-sidekick-tool-resume',
+  'settings-not-restored',
 ] as const;
 export type SessionNoticeCode = (typeof SESSION_NOTICE_CODES)[number];
 

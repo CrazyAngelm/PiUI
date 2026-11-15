@@ -260,6 +260,15 @@ impl HarnessKind {
         !matches!(self, Self::Pi | Self::Nano)
     }
 
+    /// Whether a resumed session restores its model and reasoning level from
+    /// its own native history (Pi JSONL `model_change` and
+    /// `thinking_level_change` entries; Nano is Pi underneath). The host never
+    /// re-applies remembered settings to these: native history is authoritative.
+    #[must_use]
+    pub const fn restores_session_settings(self) -> bool {
+        matches!(self, Self::Pi | Self::Nano)
+    }
+
     /// Whether the adapter can take the Fusion `sidekick` host tool (ADR-043):
     /// Claude Code through its session MCP server, and Codex through a dynamic
     /// tool registered on `thread/start` (a resumed thread keeps it only when
@@ -1018,6 +1027,9 @@ pub enum NativeNoticeCode {
     UnsupportedSidekickTool,
     /// A resumed Codex thread was started without the `sidekick` tool.
     UnsupportedSidekickToolResume,
+    /// Host-decided: the settings remembered for a reopened chat could not be
+    /// re-applied; the chat runs with the harness's own settings.
+    SettingsNotRestored,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -6530,6 +6542,10 @@ mod tests {
                 "unsupported-sidekick-tool-resume",
                 NativeNoticeCode::UnsupportedSidekickToolResume,
             ),
+            (
+                "settings-not-restored",
+                NativeNoticeCode::SettingsNotRestored,
+            ),
         ] {
             let notice: NativeEvent =
                 serde_json::from_value(json!({"type": "notice", "code": code})).expect("notice");
@@ -6618,6 +6634,20 @@ mod tests {
         assert!(HarnessKind::Codex.supports_board_tool());
         assert!(!HarnessKind::Pi.supports_board_tool());
         assert!(!HarnessKind::Nano.supports_board_tool());
+    }
+
+    #[test]
+    fn only_pi_and_nano_restore_their_settings_from_native_history() {
+        assert!(HarnessKind::Pi.restores_session_settings());
+        assert!(HarnessKind::Nano.restores_session_settings());
+        assert!(!HarnessKind::Codex.restores_session_settings());
+        assert!(!HarnessKind::ClaudeCode.restores_session_settings());
+        assert!(!HarnessKind::Hermes.restores_session_settings());
+        assert!(!HarnessKind::PrimeAgent.restores_session_settings());
+        assert!(
+            !HarnessKind::Acp(AcpAgentId::new("opencode").expect("agent id"))
+                .restores_session_settings()
+        );
     }
 
     #[test]

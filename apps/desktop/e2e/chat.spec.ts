@@ -46,7 +46,7 @@ test.describe('new chat', () => {
     expect((await transcript.innerText()).length).toBeGreaterThan(early);
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
     // The chosen model and reasoning reached the native session settings.
-    await page.getByRole('button', { name: 'GPT Lab 5 Codex', exact: true }).click();
+    await page.getByRole('button', { name: 'GPT Lab 5 Codex high', exact: true }).click();
     await expect(page.getByRole('radiogroup', { name: 'Reasoning' }).getByRole('radio', { name: 'high', exact: true })).toBeChecked();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('button', { name: 'GPT Lab 5 Codex high' })).toBeVisible();
@@ -135,6 +135,20 @@ test.describe('chat header', () => {
     await confirm.getByRole('button', { name: 'Cancel' }).click();
     await expect(confirm).toBeHidden();
     await expect(page.getByRole('heading', { level: 1, name: 'Plan a weekend in Lisbon' })).toBeVisible();
+  });
+});
+
+test.describe('chat settings', () => {
+  test('a reopened chat shows its model and reasoning before the menu is opened', async ({ lab, page }) => {
+    await lab.open();
+    // A saved chat: opening it resumes the native session.
+    await lab.chat(/Plan a weekend in Lisbon/).click();
+    await expect(page.getByRole('button', { name: 'Claude Lab Haiku low', exact: true })).toBeVisible();
+    // Another chat and back: each chat keeps showing its own settings.
+    await lab.chat(/Route host calls through one transport/).click();
+    await expect(page.getByRole('button', { name: 'GPT Lab 5 Codex high', exact: true })).toBeVisible();
+    await lab.chat(/Plan a weekend in Lisbon/).click();
+    await expect(page.getByRole('button', { name: 'Claude Lab Haiku low', exact: true })).toBeVisible();
   });
 });
 

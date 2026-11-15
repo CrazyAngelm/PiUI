@@ -212,6 +212,7 @@ export const shellRu: Readonly<Record<string, string>> = {
   "Theme": "Тема",
   "This agent is part of a pipeline run and follows its saved settings. You can stop it or answer its requests here.": "Этот агент — часть запуска конвейера и работает по его сохранённым настройкам. Здесь можно остановить его или ответить на его запросы.",
   "This chat is no longer available": "Этот чат больше недоступен",
+  "This chat's saved model and reasoning could not be restored. It is using the harness defaults; choose them again.": "Не удалось восстановить сохранённые модель и уровень рассуждений этого чата. Используются настройки агента по умолчанию — выберите их заново.",
   "This folder is restricted": "Папка ограничена",
   "This folder is restricted. Trust it to let agents work on its files.": "Папка ограничена. Доверьте её, чтобы агенты могли работать с файлами.",
   "This model has no reasoning options.": "У этой модели нет настроек размышлений.",

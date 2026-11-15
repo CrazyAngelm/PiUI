@@ -30,6 +30,7 @@ describe('session notices', () => {
     expect(sessionNotices(snapshot({ notices: 'unsupported-board-tool' }))).toEqual([]);
     expect(sessionNotices(snapshot({ notices: ['unsupported-board-tool-resume', 'future-code', 7, 'unsupported-board-tool-resume'] })))
       .toEqual(['unsupported-board-tool-resume']);
+    expect(sessionNotices(snapshot({ notices: ['settings-not-restored'] }))).toEqual(['settings-not-restored']);
   });
 
   it('applies a notice event without touching the transcript', () => {
