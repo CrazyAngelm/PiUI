@@ -33,6 +33,21 @@ async function clickCanvas(page: Page, canvas: Locator): Promise<void> {
   await page.mouse.click(box.x + box.width / 2, box.y + 95);
 }
 
+/** Shift-drags a frame around two cards, from the empty canvas beside and below them: a marquee selection. */
+async function marquee(page: Page, first: Locator, second: Locator): Promise<void> {
+  const [a, b] = [await first.boundingBox(), await second.boundingBox()];
+  if (!a || !b) throw new Error('The cards are not on the canvas.');
+  const from = { x: Math.max(a.x + a.width, b.x + b.width) + 10, y: Math.max(a.y + a.height, b.y + b.height) + 30 };
+  const to = { x: Math.min(a.x, b.x) - 10, y: Math.min(a.y, b.y) - 30 };
+  await page.keyboard.down('Shift');
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2, { steps: 6 });
+  await page.mouse.move(to.x, to.y, { steps: 6 });
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+}
+
 async function openTemplate(lab: Lab, template: string) {
   await lab.open();
   const editor = await lab.openPipelines();
@@ -116,6 +131,38 @@ test.describe('Start and Output blocks', () => {
     await expect.poll(() => place(builder)).toEqual(builderBefore);
   });
 
+  test('a marquee selection moves with the arrow keys, is kept after a refresh of the canvas and undone in one step', async ({ lab, page }) => {
+    const { editor, canvas, card } = await openTemplate(lab, 'Chain');
+    const [planner, builder, reviewer] = [card('Planner'), card('Builder'), card('Reviewer')];
+    const before = { planner: await place(planner), builder: await place(builder), reviewer: await place(reviewer) };
+    const undo = editor.getByRole('button', { name: 'Undo', exact: true });
+
+    await marquee(page, planner, builder);
+    await expect(planner).toHaveClass(/(?:^|\s)selected(?:\s|$)/);
+    await expect(builder).toHaveClass(/(?:^|\s)selected(?:\s|$)/);
+    // Focus sits on the selection frame, not on a card.
+    const frame = canvas.locator('.svelte-flow__selection-wrapper');
+    await expect(frame).toBeVisible();
+    await frame.focus();
+    await page.keyboard.press('ArrowDown');
+    await expect.poll(async () => (await place(planner)).y - before.planner.y).toBeGreaterThan(0);
+    const moved = { planner: await place(planner), builder: await place(builder) };
+    expect(moved.builder.y - before.builder.y).toBe(moved.planner.y - before.planner.y);
+    expect(await place(reviewer)).toEqual(before.reviewer);
+    await expect(undo).toBeEnabled();
+
+    // Selecting a block redraws every card from the graph: the move must be in the graph.
+    await card('Start').click();
+    await expect(page.getByRole('complementary', { name: 'Start', exact: true })).toBeVisible();
+    expect(await place(planner)).toEqual(moved.planner);
+    expect(await place(builder)).toEqual(moved.builder);
+
+    await undo.click();
+    await expect.poll(() => place(planner)).toEqual(before.planner);
+    await expect.poll(() => place(builder)).toEqual(before.builder);
+    await expect(undo).toBeDisabled();
+  });
+
   test('a wire to Start explains the rule and changes nothing', async ({ lab }) => {
     const { editor, canvas, card } = await openTemplate(lab, 'Chain');
     const start = card('Start');
@@ -153,6 +200,43 @@ test.describe('Start and Output blocks', () => {
     await page.keyboard.press('Delete');
     await expect(builder).toBeAttached();
     await expect(lab.toast('Start and Output stay in every pipeline').last()).toBeVisible();
+  });
+
+  test('clicking an automatic wire after a marquee selection replaces the selection, so Delete cannot remove steps', async ({ lab, page }) => {
+    const { canvas, card } = await openTemplate(lab, 'Chain');
+    const [planner, builder] = [card('Planner'), card('Builder')];
+
+    await marquee(page, planner, builder);
+    await expect(planner).toHaveClass(/(?:^|\s)selected(?:\s|$)/);
+    await expect(builder).toHaveClass(/(?:^|\s)selected(?:\s|$)/);
+    await canvas.getByRole('group', { name: /^Connection from Start to / }).first().locator('path').first().dispatchEvent('click');
+    await expect(page.getByRole('complementary', { name: 'Start', exact: true })).toBeVisible();
+    await expect(canvas.locator('.svelte-flow__node.selected')).toHaveCount(1);
+    await expect(planner).not.toHaveClass(/(?:^|\s)selected(?:\s|$)/);
+    await expect(builder).not.toHaveClass(/(?:^|\s)selected(?:\s|$)/);
+    await expect(canvas.locator('.svelte-flow__selection-wrapper')).toHaveCount(0);
+    await page.keyboard.press('Delete');
+    await expect(planner).toBeAttached();
+    await expect(builder).toBeAttached();
+    await expect(lab.toast('Start and Output stay in every pipeline').first()).toBeVisible();
+
+    // Same for a completion wire after the frame is drawn again.
+    await marquee(page, planner, builder);
+    await canvas.getByRole('group', { name: /^Completion connection from / }).first().locator('path').first().dispatchEvent('click');
+    await expect(page.getByRole('complementary', { name: 'Output', exact: true })).toBeVisible();
+    await expect(canvas.locator('.svelte-flow__node.selected')).toHaveCount(1);
+    await page.keyboard.press('Delete');
+    await expect(planner).toBeAttached();
+    await expect(builder).toBeAttached();
+  });
+
+  test('automatic wires are not Tab stops, so a stale selection cannot be deleted from them', async ({ lab }) => {
+    const { canvas } = await openTemplate(lab, 'Chain');
+    const automatic = canvas.getByRole('group', { name: /^(Connection from Start to |Completion connection from )/ });
+    expect(await automatic.count()).toBeGreaterThan(1);
+    expect(await automatic.evaluateAll((wires) => wires.filter((wire) => wire.hasAttribute('tabindex')).length)).toBe(0);
+    // A wire the person made is still a keyboard stop.
+    await expect(canvas.getByRole('group', { name: /^Result connection from Planner to Builder/ })).toHaveAttribute('tabindex', '0');
   });
 
   test('a declared Output wire is deleted like any wire and final steps keep their completion wire', async ({ lab, page }) => {
@@ -261,6 +345,23 @@ test.describe('Start and Output blocks', () => {
     await expect(menu).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(menu).toHaveCount(0);
+  });
+
+  test('Tab is not swallowed in safe mode', async ({ lab, page }) => {
+    await lab.open('safe');
+    const editor = await lab.openPipelines();
+    await editor.getByRole('button', { name: 'Release check', exact: true }).click();
+    const canvas = editor.getByRole('application');
+    await clickCanvas(page, canvas);
+    expect(await page.evaluate(() => document.activeElement?.localName)).toMatch(/^(body|main)$/);
+    await page.evaluate(() => {
+      window.addEventListener('keydown', (event) => {
+        if (event.key === 'Tab') Reflect.set(window, 'piuiTabPrevented', event.defaultPrevented);
+      });
+    });
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => Reflect.get(window, 'piuiTabPrevented'))).toBe(false);
+    await expect(page.getByRole('menu').filter({ hasText: 'Add to canvas' })).toHaveCount(0);
   });
 
   test('safe mode keeps Start and Output fixed', async ({ lab }) => {

@@ -157,7 +157,11 @@
           targetHandle: 'in',
           data: { kind: 'result' },
           class: 'start-edge',
+          // Automatic wire: neither selectable nor Tab-focusable (Enter would do nothing and Delete would
+          // hit a stale selection). Clicking it selects the Start block; the Start block is the keyboard path.
           selectable: false,
+          focusable: false,
+          ariaRole: 'group',
           deletable: false,
           markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: 'var(--piui-success)' },
         });
@@ -189,6 +193,7 @@
           data: { kind: 'result' },
           class: declared ? 'output-edge output-edge--declared' : 'output-edge',
           selectable: declared,
+          ...(declared ? {} : { focusable: false, ariaRole: 'group' as const }),
           deletable: declared && !readOnly,
           selected: declared && editor.selectedEdge === id,
           markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: 'var(--piui-decoration-secondary)' },
@@ -312,7 +317,8 @@
     if (!element) return;
     // Svelte Flow moves selected cards on arrow keys without a drag event; keep that move like a drag.
     const keyup = (event: KeyboardEvent): void => {
-      if (event.key.startsWith('Arrow') && event.target instanceof HTMLElement && event.target.closest('.svelte-flow__node')) {
+      // After a marquee selection focus sits on the selection frame, not on a card; its arrow keys move the group.
+      if (event.key.startsWith('Arrow') && event.target instanceof HTMLElement && event.target.closest('.svelte-flow__node, .svelte-flow__selection-wrapper')) {
         // Every card is reported; the store records only the ones whose place changed.
         commitMoves(nodes);
       }
@@ -327,6 +333,12 @@
       editor.selectedBlock = block;
     }
     if (editor.selectedEdge) editor.selectedEdge = '';
+  }
+
+  /** An automatic wire was activated: its block becomes the whole selection, whatever was selected before. */
+  function activateWire(block: 'start' | 'output'): void {
+    selectBlock(block);
+    api?.select(block === 'start' ? blocks.start : blocks.output);
   }
 
   function selectNode(node: FlowNode): void {
@@ -401,7 +413,7 @@
       // An automatic wire belongs to its block: selecting the block also drops any other selection,
       // so Delete can never remove a step the person is no longer looking at.
       if (wire && edge.selectable === false) {
-        selectBlock(wire.kind);
+        activateWire(wire.kind);
         return;
       }
       editor.selectedEdge = edge.id;

@@ -20,6 +20,7 @@ Nano Desktop is currently a developer preview. Versions before 1.0 may change wi
 ### Fixed
 
 - Pipelines: Delete after clicking an automatic wire no longer removes the step that was selected before. A step moved left of or above the canvas origin keeps its place after reopening and no longer stops Export JSON or Save as template. New steps are no longer created on top of each other, arrow-key moves are kept, and Tab no longer traps keyboard focus inside the canvas.
+- Pipelines: clicking an automatic wire after a marquee selection now replaces that selection, so Delete cannot remove several steps; automatic wires are no longer Tab stops. Arrow keys move a marquee selection as a group and the move is kept and can be undone. Tab is no longer swallowed on the canvas in safe mode.
 - A message sent into a running turn appears in the chat at once, marked as not read yet. It used to appear only when the agent read it at its next step, which could take half a minute.
 - OpenCode models show their reasoning levels in the model picker, in a new chat and in an open one. Each model offers its own levels, and `default` is no longer listed as a level.
 - The new-chat harness, model, reasoning, speed and permission picks are remembered as soon as they are made, not when a message is sent. A project without its own choice starts from the latest one, and a harness that was still being checked at startup takes over once it is ready.
