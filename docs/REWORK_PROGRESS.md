@@ -458,7 +458,9 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   (steps, answer, stop, run again, open run) among its messages, and hands a
   finished answer to its agent inside the next message.
 - **Project default:** Start block → "Start new chats of this project with
-  this pipeline"; new chats talk directly otherwise.
+  this pipeline"; new chats talk directly otherwise. A new chat starts like
+  the project's last one (pipeline or harness, remembered per project beside
+  the model picks); a gone pipeline or a newer project default wins over it.
 - **Templates:** "Save as template…" in the editor (every project or this
   one), listed on the editor's start screen and in the composer; a template
   opens as an unsaved draft with the harness's first model filled in.

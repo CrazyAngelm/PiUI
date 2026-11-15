@@ -4,6 +4,7 @@
   import Zap from '@lucide/svelte/icons/zap';
   import Brain from '@lucide/svelte/icons/brain';
   import { onMount, tick, untrack } from 'svelte';
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity';
   import { t } from '../../features/locale/language';
   import { cachedHarnessModels, catalogDegraded, isNanoConnectorModel, rememberedHarnessModels } from '../../host-api/harnessModels';
   import { prewarmHarnessCatalogs } from '../../host-api/catalogPrewarm';
@@ -36,7 +37,7 @@
   import type { AgentProfile, RunInputValue } from '../../host-api/orchestrationClient';
   import { useWorkspace } from './context';
   import { modelSelectionKey, resolveModelSelection } from '../../host-api/modelSelection';
-  import { choiceFor, reconcileSelection, restoredSelection, withChoice, type NewChatChoices, type NewChatSelection } from './newChatChoice';
+  import { choiceFor, executorOf, reconcileSelection, restoredSelection, startingExecutor, withChoice, type NewChatChoices, type NewChatSelection, type RememberedExecutor } from './newChatChoice';
   import FusionModeBar from '../fusion/FusionModeBar.svelte';
   import { fusionErrorText, refusalCopy, roleLabel } from '../fusion/fusionPair';
   import type { FusionPairV1 } from '../../host-api/fusionClient';
@@ -336,23 +337,59 @@
     });
   });
 
-  // New chats talk directly unless the project names a default chat pipeline.
-  let defaultFor: string | undefined;
-  const chatDefault = $derived(chatPipelines.libraries[workspaceId]?.chatDefault);
+  // A new chat starts like the project's last one (a saved pipeline or the harness), else through
+  // the project's default chat pipeline, else directly (`startingExecutor`). Choosing in the picker
+  // wins for that project until the project changes.
+  const library = $derived(chatPipelines.libraries[workspaceId]);
   const pipelinesAllowed = $derived(trusted && !store.safeMode);
+  /** Projects whose library was asked for, answered or not: a refused library no longer holds the start back. */
+  const librariesAsked = new SvelteSet<string>();
+  /** Whether a remembered pipeline still starts a chat, checked once per project and pipeline in this composer. Key `${workspaceId}:${commandId}`. */
+  const pipelineChecks = new SvelteMap<string, boolean>();
+  const checkingPipelines = new Set<string>();
+  /** The project in which the person chose an executor in the picker; what was remembered no longer decides there. */
+  let executorPickedIn = $state<string | undefined>();
   $effect(() => {
     const id = workspaceId;
     if (!id || !pipelinesAllowed) return;
     untrack(() => {
-      if (!chatPipelines.libraries[id]) void chatPipelines.loadLibrary(id);
+      if (!chatPipelines.libraries[id]) void chatPipelines.loadLibrary(id).finally(() => librariesAsked.add(id));
     });
   });
   $effect(() => {
-    const key = `${workspaceId}:${chatDefault ?? ''}:${pipelinesAllowed}`;
-    if (defaultFor === key) return;
-    defaultFor = key;
-    pipelineId = pipelinesAllowed ? (chatDefault ?? '') : '';
+    void workspaceId;
+    untrack(() => (executorPickedIn = undefined));
   });
+  $effect(() => {
+    const id = workspaceId;
+    if (!id) return;
+    const allowed = pipelinesAllowed;
+    const remembered = untrack(() => executorOf(choices.projects[id]));
+    const check = allowed && remembered?.pipeline ? `${id}:${remembered.pipeline}` : undefined;
+    const usable = check === undefined ? undefined : pipelineChecks.get(check);
+    if (check !== undefined && usable === undefined) untrack(() => verifyPipeline(id, remembered?.pipeline ?? '', check));
+    const start = startingExecutor(remembered, {
+      allowed,
+      chatDefault: library ? (library.chatDefault ?? '') : undefined,
+      libraryFailed: !library && librariesAsked.has(id),
+      rememberedUsable: usable,
+    });
+    untrack(() => {
+      if (!start.ready) return;
+      // Safe mode and a restricted project always talk directly, whatever was picked.
+      if (executorPickedIn === id && allowed) return;
+      if (pipelineId !== start.pipeline) pipelineId = start.pipeline;
+    });
+  });
+  /** A pipeline remembered from an earlier chat may have been deleted or lost its message input since. */
+  function verifyPipeline(id: string, commandId: string, key: string): void {
+    if (!commandId || checkingPipelines.has(key)) return;
+    checkingPipelines.add(key);
+    void chatPipelines.detail(id, commandId, true).then(
+      (detail) => pipelineChecks.set(key, detail.accepts),
+      () => pipelineChecks.set(key, false),
+    );
+  }
   $effect(() => {
     const id = workspaceId;
     const command = pipelineId;
@@ -431,16 +468,36 @@
     };
   });
 
-  /** Picks are remembered when they are made, so they survive a project switch without a sent message. */
-  function remember(): void {
-    if (!workspaceId) return;
-    choices = withChoice(choices, workspaceId, { harness: harness || undefined, modelKey, thinkingLevel, fast, permissionMode });
+  function persist(next: NewChatChoices): void {
+    choices = next;
     try {
       localStorage.setItem(CHOICE_KEY, JSON.stringify(choices.projects));
       localStorage.setItem(LAST_CHOICE_KEY, JSON.stringify(choices.last));
     } catch {
       // Remembered choices are a convenience only.
     }
+  }
+
+  /**
+   * Picks are remembered when they are made, so they survive a project switch without a sent
+   * message. The executor is remembered only when one is chosen or a chat starts: any other
+   * pick keeps what the project remembered (the composer may not have settled on it yet).
+   */
+  function remember(executor: RememberedExecutor | undefined = undefined): void {
+    if (!workspaceId) return;
+    const kept = executor ?? executorOf(choices.projects[workspaceId]);
+    persist(withChoice(choices, workspaceId, { harness: harness || undefined, modelKey, thinkingLevel, fast, permissionMode, ...(kept ? { executor: kept } : {}) }));
+  }
+
+  /** The executor of a project's chat as it is remembered: the saved pipeline, or empty for the harness, with the project's default at that time. */
+  function executorMemory(targetId: string, commandId: string): RememberedExecutor {
+    const known = chatPipelines.libraries[targetId];
+    return { pipeline: commandId, ...(known ? { chatDefault: known.chatDefault ?? '' } : {}) };
+  }
+
+  /** A chat started in another project than the one now shown keeps that project's own picks: only its executor is written. */
+  function rememberExecutorIn(targetId: string, executor: RememberedExecutor): void {
+    persist(withChoice(choices, targetId, { ...(choiceFor(choices, targetId) ?? {}), executor }));
   }
 
   const executor = $derived<Executor>(
@@ -480,6 +537,7 @@
   }
 
   function chooseExecutor(next: Executor): void {
+    executorPickedIn = workspaceId;
     if (next.kind === 'template') {
       const choice = choiceFromKey(next.id, chatPipelines.libraries[workspaceId]?.templates ?? []);
       if (!choice) return;
@@ -490,6 +548,7 @@
     templateChoice = undefined;
     if (next.kind === 'pipeline') {
       pipelineId = next.commandId;
+      remember(executorMemory(workspaceId, next.commandId));
       return;
     }
     pipelineId = '';
@@ -498,8 +557,8 @@
       modelKey = '';
       thinkingLevel = '';
       fast = false;
-      remember();
     }
+    remember(executorMemory(workspaceId, ''));
   }
 
   /** The model a template step runs on: this composer's model for its own harness, else the first of the harness's catalog (the editor's rule). */
@@ -698,6 +757,7 @@
         const graph = await readyToSave(current, (kind) => templateModel(targetId, kind), taken, (value, parameters) => $t(value, parameters));
         commandId = await chatPipelines.saveTemplate(targetId, graph);
         rememberPipeline(targetId, current.key, commandId);
+        rememberExecutorIn(targetId, executorMemory(targetId, commandId));
         toasts.show({ title: $t('Saved “{0}” to this project’s pipelines', [graph.name]) });
       } catch (error) {
         toasts.error($t('Could not save the pipeline'), $t(errorMessage(error)));
@@ -760,13 +820,13 @@
       return;
     }
     if (pipelineId) {
-      remember();
+      remember(executorMemory(workspaceId, pipelineId));
       await sendThroughPipeline();
       return;
     }
     if (!harness) return;
     busy = true;
-    remember();
+    remember(executorMemory(workspaceId, ''));
     // Started now, with the text as it is: the macro rules may still be loading when the chat is created.
     const message = expanded(text, macros.list, skillSyntax);
     const title = chatTitle(text);
