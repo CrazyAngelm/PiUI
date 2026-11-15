@@ -54,25 +54,32 @@ Verify flows in the native WebView at the user's scale: dropdown contrast,
 scrolling, resizing, keyboard access and saved-state restoration. A screenshot
 does not prove that a setting reaches the harness.
 
-## Picker tabs and the reasoning ramp
+## Picker tabs and the reasoning gauge
 
 - Pickers that split their list (executor: Direct / Pipelines; model: Favorites /
   All models) use `Segmented size="sm"` placed after the search field, so the
   search keeps initial focus. A non-empty search spans every tab. `ArrowLeft`
   and `ArrowRight` in an empty search switch tabs.
-- The reasoning control is a rising ramp: the group is a `radiogroup`
-  named "Reasoning" with radios in order (Auto first), roving tabindex and
-  arrow, Home and End selection. Each radio keeps a full-height hit area; the
-  visible bar is anchored to the bottom, its height growing with rank. Nano and
-  plain plugin ornaments use straight bars with the selected corner radius; Chaos and slanted plugin
-  ornaments use the existing 12-degree slant. Tilt, overhang and radii come from
-  semantic decoration tokens; the hit area shares the bar's transform and the
-  Auto label cancels that transform to stay upright. Every bar up to the
-  selection is lit, the selected bar has the style's accent cap,
-  and zero levels (`off`, `none`) are a short dash that a higher selection never
-  lights. One mono readout shows the hovered, focused or selected level.
-  Per-step labels are visually hidden but kept for screen readers.
-- Motion on the ramp uses only opacity and transform, at most 180 ms, with a
+- The reasoning control is a gauge: the group is a `radiogroup` named
+  "Reasoning" with radios in order (Auto first), roving tabindex and arrow,
+  Home and End selection. Auto is a button with the Sparkles icon docked before
+  the rail. Every level is a stop on a tapered rail that thickens toward the
+  highest level; each stop keeps a full-height hit area as wide as its share of
+  the rail. The rail is filled from its first stop to the selection and a thumb
+  sits on the selected stop. Auto, or no selection, leaves the rail empty and
+  hides the thumb. A zero level (`off`, `none`) is a hollow stop. One mono
+  readout shows the hovered, focused or selected level. Per-stop labels are
+  visually hidden but kept for screen readers, and every stop has a tooltip.
+- A press can slide along the rail: an outlined ghost thumb and the readout
+  preview the stop under the pointer and the release picks it. Hover and
+  keyboard focus preview the same way. The thumb itself moves only when the
+  level changes.
+- Nano and plain plugin ornaments draw a capsule thumb, a round Auto button and
+  upright ticks. Chaos and slanted plugin ornaments lean the rail, the ticks,
+  the thumb and the Auto button by the existing 12 degrees and square them.
+  Tilt and radii come from semantic decoration tokens. The buttons are never
+  transformed, and the Auto icon cancels the lean to stay upright.
+- Motion on the gauge uses only opacity and transform, at most 180 ms, with a
   reduced-motion guard; no keyframe loops, blur or filters. Set custom
   properties with `style:` directives because the CSP forbids inline `style`
   attributes.

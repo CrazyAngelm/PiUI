@@ -35,7 +35,8 @@ interface Radio {
   blocked: string | undefined;
   nativelyDisabled: boolean;
   title: string | undefined;
-  rise: string | undefined;
+  pos: string | undefined;
+  classes: string[];
 }
 
 function radios(markup: string): Radio[] {
@@ -49,7 +50,8 @@ function radios(markup: string): Radio[] {
       blocked: attribute(tag, 'aria-disabled'),
       nativelyDisabled: flagged(tag, 'disabled'),
       title: attribute(tag, 'title'),
-      rise: /--rise:\s*([\d.]+)/.exec(attribute(tag, 'style') ?? '')?.[1],
+      pos: /--pos:\s*([\d.]+)/.exec(attribute(tag, 'style') ?? '')?.[1],
+      classes: (attribute(tag, 'class') ?? '').split(/\s+/),
     });
   }
   return found;
@@ -60,6 +62,20 @@ function readout(markup: string): string | undefined {
     if (attribute(tag, 'aria-hidden') === 'true' && (attribute(tag, 'class') ?? '').split(' ').includes('readout')) return text(inner);
   }
   return undefined;
+}
+
+/** A custom property the radiogroup sets for the track, the fill and the thumbs. */
+function gauge(markup: string, name: 'count' | 'at' | 'peek' | 'fill'): string | undefined {
+  return new RegExp(`--${name}:\\s*([\\d.]+)`).exec(attribute(tagWithRole(markup, 'radiogroup'), 'style') ?? '')?.[1];
+}
+
+/** Whether the thumb (or the ghost thumb) is hidden. */
+function thumbHidden(markup: string, ghost: boolean): boolean {
+  for (const [, tag = ''] of markup.matchAll(/<span\b([^>]*)>/g)) {
+    const classes = (attribute(tag, 'class') ?? '').split(/\s+/);
+    if (classes.includes('thumb') && classes.includes('thumb--ghost') === ghost) return classes.includes('thumb--off');
+  }
+  throw new Error('No thumb was rendered.');
 }
 
 describe('ReasoningControl', () => {
@@ -97,14 +113,45 @@ describe('ReasoningControl', () => {
     expect(readout(body({ levels: CODEX, level: '', levelDefault: true }))).toBe('Auto');
   });
 
-  it('gives every bar a tooltip and leaves the visible Auto label without one', () => {
+  it('gives every stop a tooltip, Auto included', () => {
     const list = radios(body({ levels: CODEX, level: 'low', levelDefault: true }));
-    expect(list.map((radio) => radio.title)).toEqual([undefined, ...CODEX]);
+    expect(list.map((radio) => radio.title)).toEqual(['Auto', ...CODEX]);
   });
 
-  it('raises the bars from the lowest level to the highest and keeps a zero level flat', () => {
+  it('spreads the stops along the rail and keeps Auto beside it', () => {
+    const markup = body({ levels: CODEX, level: 'low', levelDefault: true });
+    expect(radios(markup).map((radio) => radio.pos)).toEqual([undefined, '0', '0.2', '0.4', '0.6', '0.8', '1']);
+    expect(gauge(markup, 'count')).toBe('6');
+    expect((attribute(tagWithRole(markup, 'radiogroup'), 'class') ?? '').split(/\s+/)).toContain('gauge--auto');
+    const plain = body({ levels: CODEX, level: 'low' });
+    expect((attribute(tagWithRole(plain, 'radiogroup'), 'class') ?? '').split(/\s+/)).not.toContain('gauge--auto');
+  });
+
+  it('puts the thumb on the selected stop and fills the rail up to it', () => {
+    const high = body({ levels: CODEX, level: 'high', levelDefault: true });
+    expect([gauge(high, 'at'), gauge(high, 'fill')]).toEqual(['4', '0.8']);
+    expect(thumbHidden(high, false)).toBe(false);
+    expect(thumbHidden(high, true)).toBe(true);
+    expect(radios(high).map((radio) => radio.classes.includes('stop--lit'))).toEqual([false, true, true, true, true, true, false]);
+
+    // The first stop holds the thumb and fills nothing.
+    const none = body({ levels: CODEX, level: 'none', levelDefault: true });
+    expect([gauge(none, 'at'), gauge(none, 'fill')]).toEqual(['0', '0']);
+    expect(thumbHidden(none, false)).toBe(false);
+  });
+
+  it('empties the rail and hides the thumb for Auto and for no selection', () => {
+    const auto = body({ levels: CODEX, level: '', levelDefault: true });
+    expect(gauge(auto, 'fill')).toBe('0');
+    expect(thumbHidden(auto, false)).toBe(true);
+    expect(radios(auto).some((radio) => radio.classes.includes('stop--lit'))).toBe(false);
+    expect(thumbHidden(body({ levels: ['low', 'medium', 'high'], level: 'max' }), false)).toBe(true);
+  });
+
+  it('draws Auto as the dock and a zero level as a hollow stop', () => {
     const list = radios(body({ levels: CODEX, level: 'low', levelDefault: true }));
-    expect(list.map((radio) => radio.rise)).toEqual([undefined, undefined, '0', '0.25', '0.5', '0.75', '1']);
+    expect(list.map((radio) => radio.classes.includes('stop--auto'))).toEqual([true, false, false, false, false, false, false]);
+    expect(list.map((radio) => radio.classes.includes('stop--zero'))).toEqual([false, true, false, false, false, false, false]);
   });
 
   it('names the levels in the interface language', () => {

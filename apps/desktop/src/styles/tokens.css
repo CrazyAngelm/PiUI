@@ -371,7 +371,7 @@
   --piui-decoration-capability-shape: polygon(22% 0, 100% 0, 78% 100%, 0 100%);
   --piui-decoration-gauge-shape: polygon(14% 0, 100% 0, 86% 100%, 0 100%);
   --piui-decoration-gauge-tilt: -12deg;
-  /* Existing ramp overhang: its 32px hit area leans 32px * tan(12deg). */
+  /* Lean of a 32px slanted block, 32px * tan(12deg). Plugin styles set it; the reasoning gauge does not need it. */
   --piui-decoration-gauge-overhang: 7px;
   --piui-decoration-meter-shape: polygon(0 0, 100% 0, 99% 100%, 0 100%);
   --piui-decoration-radius: 0px;
