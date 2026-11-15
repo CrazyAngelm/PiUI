@@ -1156,9 +1156,9 @@ pub struct AcpLaunch {
     pub nano: Option<crate::acp_nano::AcpNanoSource>,
 }
 
-/// Gets the configured OpenCode models without opening a conversation.
-/// The host calls this for its trusted, verified built-in OpenCode launch
-/// from an authorized project directory, off the UI path.
+/// Gets the configured OpenCode models, with their reasoning variants, without
+/// opening a conversation. The host calls this for its trusted, verified
+/// built-in OpenCode launch from an authorized project directory, off the UI path.
 pub fn probe_opencode_native_models(launch: &AcpLaunch, cwd: &Path) -> Option<Vec<WorkspaceModel>> {
     if launch.agent.as_str() != crate::acp_nano::NANO_SOURCE_AGENT
         || launch.nano.is_some()
@@ -1173,7 +1173,9 @@ pub fn probe_opencode_native_models(launch: &AcpLaunch, cwd: &Path) -> Option<Ve
     );
     let output = run_probe_command(
         &launch.command.program,
-        &launch.command.version_args(&["models".into()]),
+        &launch
+            .command
+            .version_args(&["models".into(), "--verbose".into()]),
         &environment,
         cwd,
         ProbeOutput::NativeModels,
@@ -1181,33 +1183,96 @@ pub fn probe_opencode_native_models(launch: &AcpLaunch, cwd: &Path) -> Option<Ve
     Some(parse_opencode_models(&output))
 }
 
+/// Reasoning levels lowest first. `serde_json` maps do not keep the agent's order.
+const OPENCODE_LEVEL_ORDER: &[&str] = &["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// The `variants` names of one `opencode models --verbose` row. `default` is
+/// the agent's own choice, not a level.
+fn opencode_levels(model: &serde_json::Value) -> Option<Vec<String>> {
+    let mut levels: Vec<String> = model
+        .get("variants")?
+        .as_object()?
+        .keys()
+        .filter(|name| {
+            name.as_str() != "default"
+                && !name.is_empty()
+                && name.len() <= 32
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        })
+        .take(16)
+        .cloned()
+        .collect();
+    let rank = |name: &str| {
+        OPENCODE_LEVEL_ORDER
+            .iter()
+            .position(|known| *known == name)
+            .unwrap_or(OPENCODE_LEVEL_ORDER.len())
+    };
+    levels.sort_by_key(|name| rank(name.as_str()));
+    (!levels.is_empty()).then_some(levels)
+}
+
+/// Models of `opencode models`: one `provider/model` row each. With `--verbose`
+/// every row is followed by a pretty JSON object at column 0 (`{` ... `}`, its
+/// nested lines indented) whose `variants` are the model's reasoning levels.
 fn parse_opencode_models(output: &str) -> Vec<WorkspaceModel> {
     // The ACP bridge and the host's remembered catalog already keep 500 rows.
     const MAX_CATALOG_MODELS: usize = 500;
     let mut seen = HashSet::new();
-    output
-        .split_inclusive('\n')
-        .filter_map(|line| {
-            // Native stdout terminates every row. A bounded capture can end
-            // inside the next ID, so only accept complete LF or CRLF rows.
-            let id = line.strip_suffix('\n')?.trim_end_matches('\r');
-            let (provider, name) = id.split_once('/')?;
-            if provider.trim().is_empty()
-                || name.trim().is_empty()
-                || id.chars().any(char::is_control)
-                || !seen.insert(id)
-            {
-                return None;
+    let mut models: Vec<WorkspaceModel> = Vec::new();
+    // The model the next JSON block describes: the accepted row right before it.
+    let mut owner: Option<usize> = None;
+    // The JSON block being read; a block cut off by the capture is dropped.
+    let mut block: Option<String> = None;
+    for line in output.split_inclusive('\n') {
+        // Native stdout terminates every row. A bounded capture can end
+        // inside the next ID, so only accept complete LF or CRLF rows.
+        let Some(line) = line.strip_suffix('\n') else {
+            break;
+        };
+        let line = line.trim_end_matches('\r');
+        if let Some(text) = &mut block {
+            text.push_str(line);
+            text.push('\n');
+            if line == "}" {
+                if let Some(index) = owner.take()
+                    && let Ok(value) = serde_json::from_str::<serde_json::Value>(text)
+                    && let Some(model) = models.get_mut(index)
+                {
+                    model.thinking_levels = opencode_levels(&value);
+                }
+                block = None;
             }
-            Some(WorkspaceModel {
-                id: id.to_owned(),
-                provider: Some(provider.to_owned()),
-                name: name.to_owned(),
-                thinking_levels: None,
-            })
-        })
-        .take(MAX_CATALOG_MODELS)
-        .collect()
+            continue;
+        }
+        if line == "{" {
+            block = Some("{\n".to_owned());
+            continue;
+        }
+        // A rejected row owns no block.
+        owner = None;
+        let Some((provider, name)) = line.split_once('/') else {
+            continue;
+        };
+        if models.len() >= MAX_CATALOG_MODELS
+            || provider.trim().is_empty()
+            || name.trim().is_empty()
+            || line.chars().any(char::is_control)
+            || !seen.insert(line)
+        {
+            continue;
+        }
+        owner = Some(models.len());
+        models.push(WorkspaceModel {
+            id: line.to_owned(),
+            provider: Some(provider.to_owned()),
+            name: name.to_owned(),
+            thinking_levels: None,
+        });
+    }
+    models
 }
 
 #[cfg(test)]
@@ -1768,6 +1833,65 @@ mod tests {
     }
 
     #[test]
+    fn open_code_verbose_rows_carry_reasoning_levels() {
+        let models = parse_opencode_models(concat!(
+            "vendor/deep\n",
+            "{\n",
+            "  \"id\": \"deep\",\n",
+            "  \"limit\": {\n",
+            "    \"context\": 1000\n",
+            "  },\n",
+            "  \"variants\": {\n",
+            "    \"max\": {\n",
+            "      \"effort\": \"max\"\n",
+            "    },\n",
+            "    \"low\": {\n",
+            "      \"effort\": \"low\"\n",
+            "    },\n",
+            "    \"default\": {\n",
+            "      \"effort\": \"default\"\n",
+            "    },\n",
+            "    \"high\": {\n",
+            "      \"effort\": \"high\"\n",
+            "    }\n",
+            "  }\n",
+            "}\r\n",
+            "vendor/plain\n",
+            "{\n",
+            "  \"variants\": {}\n",
+            "}\n",
+            // A rejected row (a repeat) owns no block: it cannot give levels to another model.
+            "vendor/plain\n",
+            "{\n",
+            "  \"variants\": {\n",
+            "    \"low\": {\n",
+            "    }\n",
+            "  }\n",
+            "}\n",
+            "vendor/odd\n",
+            "{\n",
+            "  \"variants\": {\n",
+            "    \"high\": {\n",
+            "    }\n",
+            "  }\n",
+        ));
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| (model.id.as_str(), model.thinking_levels.clone()))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "vendor/deep",
+                    Some(vec!["low".to_owned(), "high".to_owned(), "max".to_owned()])
+                ),
+                ("vendor/plain", None),
+                ("vendor/odd", None),
+            ]
+        );
+    }
+
+    #[test]
     fn open_code_catalog_probes_stdout_in_the_authorized_directory() {
         let Ok(node) = resolve_node() else {
             return;
@@ -1777,7 +1901,7 @@ mod tests {
         std::fs::write(
             &script,
             r#"import { existsSync } from 'node:fs';
-if (process.argv.slice(2).join() !== 'models' || !existsSync('agent.mjs')) process.exit(2);
+if (process.argv.slice(2).join() !== 'models,--verbose' || !existsSync('agent.mjs')) process.exit(2);
 console.error('diagnostic/not-a-model');
 console.log('nano/local');"#,
         )

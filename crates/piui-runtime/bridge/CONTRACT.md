@@ -517,6 +517,10 @@ the selected Nano model. A mismatched source or mode fails before inference.
   `session/set_mode`). A requested model or reasoning level that the agent does
   not advertise fails before the first prompt (`invalid-model`,
   `unsupported-settings`); the model id `default` keeps the agent's own model.
+  Reasoning levels belong to the model that was current when the agent listed
+  them: a full option list without `thought_level` means the current model has
+  none, and a model not selected yet shows levels only while every model seen
+  so far had the same ones. The value `default` is never offered as a level.
   `setMode({modeId})` selects an advertised mode; the snapshot reports
   `modes: {current, available}`. Only `permissionMode: 'native'` exists; tool
   allowlists, resource rules, base instructions, speed, network and subagent

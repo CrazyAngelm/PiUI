@@ -6,6 +6,12 @@ Nano Desktop is currently a developer preview. Versions before 1.0 may change wi
 
 ## [Unreleased]
 
+### Fixed
+
+- OpenCode models show their reasoning levels in the model picker, in a new chat and in an open one. Each model offers its own levels, and `default` is no longer listed as a level.
+- The new-chat harness, model, reasoning, speed and permission picks are remembered as soon as they are made, not when a message is sent. A project without its own choice starts from the latest one, and a harness that was still being checked at startup takes over once it is ready.
+- A project that is not trusted yet shows the harness's known models instead of an empty list; the project's own list replaces it after you trust the folder.
+
 ## [0.3.1]
 
 ### Added

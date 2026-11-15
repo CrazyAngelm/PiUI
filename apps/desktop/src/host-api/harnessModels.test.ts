@@ -434,6 +434,20 @@ describe('native harness catalog v19 with v18 catalog data', () => {
     await Promise.race([fresh.cachedHarnessModels({ workspaceId: 'third', harness: 'pi' }, { onProvisional: other }), Promise.resolve()]);
     expect(other, 'another harness has nothing to offer').not.toHaveBeenCalled();
   });
+  it('offers the models a harness listed elsewhere to a project that cannot ask, without asking', async () => {
+    localStorage.clear();
+    const listed = { protocol: 18, harness: 'claude-code', models: [{ id: 'opus', name: 'Opus' }], resources: { items: [{ kind: 'skill', id: 'review', name: 'review', enabled: true, configurable: false }], warnings: [] } };
+    invoke.mockResolvedValueOnce(listed).mockResolvedValueOnce(listed);
+    await harnessModels({ workspaceId: 'first', harness: 'claude-code' });
+    vi.resetModules();
+    const fresh = await import('./harnessModels');
+    invoke.mockClear();
+    expect(fresh.rememberedHarnessModels({ workspaceId: 'second', harness: 'claude-code' }), 'without the other project’s resources').toEqual({ ...listed, resources: { items: [], warnings: [] } });
+    expect(fresh.rememberedHarnessModels({ workspaceId: 'first', harness: 'claude-code' }), 'a project’s own catalog keeps its resources').toEqual(listed);
+    expect(fresh.rememberedHarnessModels({ workspaceId: 'second', harness: 'pi' }), 'another harness has nothing to offer').toBeUndefined();
+    expect(fresh.rememberedHarnessModels({ workspaceId: 'second', harness: 'nano' }), 'Nano is account state, never remembered').toBeUndefined();
+    expect(invoke).not.toHaveBeenCalled();
+  });
   it('shows an old in-memory catalog at once and asks the harness again behind it', async () => {
     localStorage.clear();
     vi.useFakeTimers({ toFake: ['Date'] });

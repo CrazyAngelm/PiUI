@@ -3189,6 +3189,14 @@ async fn runtime_settings(
     if nano_models {
         retain_entitled_nano_models(host, &mut models, record.harness);
     }
+    if !record.nano_connector
+        && let Some(agent) = record.harness.acp_agent()
+    {
+        host.workspace
+            .inner
+            .acp
+            .fill_thinking_levels(agent, &mut models);
+    }
     if let RuntimeSettingsCommand::Set {
         model,
         thinking_level,
@@ -3230,6 +3238,14 @@ async fn runtime_settings(
     retain_external(&mut native.models);
     if nano_models {
         retain_entitled_nano_models(host, &mut native.models, record.harness);
+    }
+    if !record.nano_connector
+        && let Some(agent) = record.harness.acp_agent()
+    {
+        host.workspace
+            .inner
+            .acp
+            .fill_thinking_levels(agent, &mut native.models);
     }
     Ok(RuntimeSettings {
         protocol: 16,

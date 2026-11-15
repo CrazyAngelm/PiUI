@@ -94,6 +94,24 @@ test('session config options drive model, reasoning and mode', async () => {
   await assert.rejects(createAcpAdapter(config([], { thinkingLevel: 'low' }), () => {}), { bridgeCode: 'unsupported-settings' }, 'no reasoning option without the agent');
 });
 
+test('reasoning levels follow the selected model and `default` is not a level', async () => {
+  const a = await createAcpAdapter(config(['--config-options', '--per-model-thought']), () => {});
+  try {
+    const first = a.snapshot();
+    assert.deepEqual(first.models.map(m => m.thinkingLevels), [undefined, undefined], 'the agent lists no levels for the current model, and none are known for the other');
+    assert.equal(first.thinkingLevel, undefined);
+    await assert.rejects(a.setModel({ model: { id: 'fixture-fast' }, thinkingLevel: 'high' }), { bridgeCode: 'unsupported-settings' });
+    const deep = await a.setModel({ model: { id: 'fixture-deep' }, thinkingLevel: 'high' });
+    assert.deepEqual(deep.model.thinkingLevels, ['low', 'high']);
+    assert.equal(deep.thinkingLevel, 'high');
+    await assert.rejects(a.setModel({ model: { id: 'fixture-deep' }, thinkingLevel: 'default' }), { bridgeCode: 'unsupported-settings' });
+    const fast = await a.setModel({ model: { id: 'fixture-fast' } });
+    assert.equal(fast.model.thinkingLevels, undefined);
+    assert.equal(fast.thinkingLevel, undefined);
+    assert.deepEqual(a.snapshot().models.map(m => [m.id, m.thinkingLevels]), [['fixture-fast', undefined], ['fixture-deep', ['low', 'high']]]);
+  } finally { await a.dispose(); }
+});
+
 test('descriptor overrides can switch advertised features off', async () => {
   const a = await createAcpAdapter(config([], { acp: { id: 'fixture-agent', displayName: 'Fixture Agent', disable: { models: true, modes: true } } }), () => {});
   try {

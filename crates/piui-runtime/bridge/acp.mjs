@@ -167,6 +167,9 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
   let turn = 0, sequence = 0, streaming, loading = false, disposed = false, bound = Boolean(config.nativeId), instructionsSent = Boolean(config.nativeId);
   let agentCapabilities = {}, authMethods = [], commands = [];
   let modelControl, models = [], currentModelId, thought, currentThought, modeControl, modes = [], currentModeId;
+  // Reasoning levels by model id, learned while that model was current.
+  const thoughtLevels = new Map();
+  let thoughtVaries = false;
   // Public model id -> the id the agent knows. They differ only on the Nano
   // source, where the public id is the mode (`auto`) and the agent's is `nano/auto`.
   let nativeModelIds = new Map();
@@ -232,21 +235,36 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
   };
   const applyConfigOptions = list => {
     if (!Array.isArray(list)) return;
+    let sawModel = false, sawThought = false;
     for (const option of list) {
       if (option?.type !== 'select' || typeof option.id !== 'string' || typeof option.currentValue !== 'string') continue;
       const values = selectValues(option.options);
       if (option.category === 'model' && !disabled.models) {
         modelControl = { kind: 'config', configId: option.id };
         adoptModels(values, option.currentValue);
+        sawModel = true;
       } else if (option.category === 'mode' && !disabled.modes) {
         modeControl = { kind: 'config', configId: option.id };
         modes = values.filter(item => !gooseNano || item.value === 'approve').map(item => ({ id: item.value, name: item.name, ...(item.description ? { description: item.description } : {}) }));
         currentModeId = option.currentValue;
       } else if (option.category === 'thought_level' && !nanoModes) {
         // Nano modes have no reasoning levels (the server owns the mode's model).
-        thought = { configId: option.id, values: values.map(item => item.value) };
-        currentThought = option.currentValue;
+        // `default` is the agent's own choice, not a level.
+        thought = { configId: option.id, values: values.map(item => item.value).filter(value => value !== 'default') };
+        currentThought = option.currentValue === 'default' ? undefined : option.currentValue;
+        sawThought = true;
       }
+    }
+    // The reasoning option describes the current model. Some agents list it only while that
+    // model has levels: a full list without it means this model has none.
+    if (sawModel && !sawThought) {
+      if (thought) { thought = undefined; currentThought = undefined; }
+      thoughtVaries = true;
+    }
+    if (!nanoModes && currentModelId !== undefined && (sawModel || sawThought)) {
+      const levels = thought?.values ?? [];
+      for (const known of thoughtLevels.values()) if (known.join('\n') !== levels.join('\n')) thoughtVaries = true;
+      thoughtLevels.set(currentModelId, levels);
     }
   };
   const applySessionState = state => {
@@ -265,7 +283,10 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
       currentModeId = typeof state.modes.currentModeId === 'string' ? state.modes.currentModeId : undefined;
     }
   };
-  const workspaceModel = entry => ({ ...entry, ...(thought ? { thinkingLevels: [...thought.values] } : {}) });
+  // A model the session has not selected yet shows the current levels only while every
+  // model seen so far had the same ones (an agent with one reasoning option for all models).
+  const levelsOf = id => thoughtLevels.get(id) ?? (thoughtVaries ? undefined : thought?.values);
+  const workspaceModel = entry => { const levels = levelsOf(entry.id); return { ...entry, ...(levels?.length ? { thinkingLevels: [...levels] } : {}) }; };
   const currentModel = () => models.find(item => item.id === currentModelId);
   const setConfig = async (configId, value) => {
     const result = await request('session/set_config_option', { sessionId, configId, value });

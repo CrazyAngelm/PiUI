@@ -27,7 +27,10 @@ if (nanoModels && process.env.PIUI_NANO_OPENCODE_READY && !flag('--missing-nano-
 }
 const configMode = flag('--config-options') || nanoModels || gooseModels || flag('--nano-group');
 let currentModel = gooseModels ? process.env.GOOSE_MODEL : nanoModels ? 'nano/auto' : 'fixture-fast';
-let currentMode = gooseModels ? 'approve' : 'default', currentThought = 'medium';
+// --per-model-thought: like OpenCode, the reasoning option is listed only while the
+// current model has levels (`fixture-deep`), and `default` is one of its values.
+const perModelThought = flag('--per-model-thought');
+let currentMode = gooseModels ? 'approve' : 'default', currentThought = perModelThought ? 'default' : 'medium';
 const modelOptions = () => nanoModels
   ? [{ value: 'nano/auto', name: 'Nano/Auto' }, { value: 'nano/fast', name: 'Nano/Fast' }, { value: 'nano/smart', name: 'Nano/Smart' }, { value: 'other/gpt', name: 'Other/GPT' }]
   : gooseModels
@@ -35,10 +38,15 @@ const modelOptions = () => nanoModels
   : flag('--nano-group')
     ? [{ group: 'nano', name: 'nano', options: [{ value: 'fixture-fast', name: 'Fixture Fast' }] }]
     : [{ group: 'Fixture', name: 'Fixture', options: [{ value: 'fixture-fast', name: 'Fixture Fast' }, { value: 'fixture-deep', name: 'Fixture Deep', description: 'Slow' }] }];
+const effortOptions = () => perModelThought
+  ? [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }, { value: 'default', name: 'Default' }]
+  : [{ value: 'low', name: 'Low' }, { value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' }];
 const configOptions = () => [
   { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: currentModel, options: modelOptions() },
   { id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: currentMode, options: gooseModels ? [{ value: 'approve', name: 'Approve' }, { value: 'auto', name: 'Automatic' }] : [{ value: 'default', name: 'Default' }, { value: 'plan', name: 'Plan', description: 'Read-only' }] },
-  { id: 'effort', name: 'Reasoning', category: 'thought_level', type: 'select', currentValue: currentThought, options: [{ value: 'low', name: 'Low' }, { value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' }] },
+  ...(!perModelThought || currentModel === 'fixture-deep'
+    ? [{ id: 'effort', name: 'Reasoning', category: 'thought_level', type: 'select', currentValue: currentThought, options: effortOptions() }]
+    : []),
   { id: 'brave', name: 'Brave', type: 'boolean', currentValue: false },
 ];
 const sessionState = () => configMode

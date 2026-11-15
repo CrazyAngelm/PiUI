@@ -5,7 +5,7 @@
   import Brain from '@lucide/svelte/icons/brain';
   import { onMount, tick, untrack } from 'svelte';
   import { t } from '../../features/locale/language';
-  import { cachedHarnessModels, catalogDegraded, isNanoConnectorModel } from '../../host-api/harnessModels';
+  import { cachedHarnessModels, catalogDegraded, isNanoConnectorModel, rememberedHarnessModels } from '../../host-api/harnessModels';
   import ModelPicker, { type ModelOption } from './ModelPicker.svelte';
   import type { HarnessCatalogModel, HarnessModelsResult, HarnessResource } from '../../../../../contracts/harness-models-v18';
   import type { HarnessKind, PermissionMode, WorkspaceSummary } from '../../../../../contracts/workspace-v15';
@@ -31,7 +31,7 @@
   import type { AgentProfile, RunInputValue } from '../../host-api/orchestrationClient';
   import { useWorkspace } from './context';
   import { modelSelectionKey, resolveModelSelection } from '../../host-api/modelSelection';
-  import { reconcileSelection, restoredSelection, type NewChatChoice, type NewChatSelection } from './newChatChoice';
+  import { choiceFor, reconcileSelection, restoredSelection, withChoice, type NewChatChoices, type NewChatSelection } from './newChatChoice';
   import FusionModeBar from '../fusion/FusionModeBar.svelte';
   import { fusionErrorText, refusalCopy, roleLabel } from '../fusion/fusionPair';
   import type { FusionPairV1 } from '../../host-api/fusionClient';
@@ -50,15 +50,25 @@
   const store = useWorkspace();
   const DRAFT_KEY = 'new-chat';
   const CHOICE_KEY = 'piui.shell.newchat.v1';
+  const LAST_CHOICE_KEY = 'piui.shell.newchat.last.v1';
 
-  function readChoices(): Record<string, NewChatChoice> {
-    try {
-      return JSON.parse(localStorage.getItem(CHOICE_KEY) ?? '{}') as Record<string, NewChatChoice>;
-    } catch {
-      return {};
-    }
+  function readChoices(): NewChatChoices {
+    const read = (key: string): unknown => {
+      try {
+        return JSON.parse(localStorage.getItem(key) ?? 'null');
+      } catch {
+        return null;
+      }
+    };
+    const projects = read(CHOICE_KEY);
+    const last = read(LAST_CHOICE_KEY);
+    return {
+      projects: projects && typeof projects === 'object' && !Array.isArray(projects) ? (projects as NewChatChoices['projects']) : {},
+      ...(last && typeof last === 'object' && !Array.isArray(last) ? { last: last as NonNullable<NewChatChoices['last']> } : {}),
+    };
   }
-  const saved = readChoices();
+  // Kept in memory too: a pick stays remembered for this composer even when storage refuses the write.
+  let choices = readChoices();
 
   let text = $state(store.draftFor(DRAFT_KEY));
   let caret = $state(store.draftFor(DRAFT_KEY).length);
@@ -185,7 +195,8 @@
     const kinds = available.map((item) => item.kind);
     untrack(() => {
       const current: NewChatSelection = { harness, modelKey, thinkingLevel, fast, permissionMode };
-      const next = restoredFor === id ? reconcileSelection(current, kinds, saved[id]) : restoredSelection(saved[id], kinds);
+      const choice = choiceFor(choices, id);
+      const next = restoredFor === id ? reconcileSelection(current, kinds, choice) : restoredSelection(choice, kinds);
       restoredFor = id;
       if (next === current) return;
       harness = next.harness;
@@ -222,7 +233,17 @@
     modelsLoading = false;
     if (!id || !kind) return;
     // A boolean, not the workspace: every session event replaces the catalog.
-    if (catalogBlocked) return;
+    if (catalogBlocked) {
+      // A restricted project cannot ask the harness. What the harness listed elsewhere is shown
+      // meanwhile, so the picks carry over; sending asks for trust first, and the project's own
+      // catalog replaces this list once it is trusted.
+      const remembered = rememberedHarnessModels({ workspaceId: id, harness: kind });
+      if (remembered && untrack(() => models.length === 0)) {
+        models = remembered.models;
+        modelsProvisional = true;
+      }
+      return;
+    }
     let cancelled = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
     modelsLoading = true;
@@ -374,11 +395,13 @@
     };
   });
 
+  /** Picks are remembered when they are made, so they survive a project switch without a sent message. */
   function remember(): void {
-    const all = readChoices();
-    all[workspaceId] = { harness: harness || undefined, modelKey, thinkingLevel, fast, permissionMode };
+    if (!workspaceId) return;
+    choices = withChoice(choices, workspaceId, { harness: harness || undefined, modelKey, thinkingLevel, fast, permissionMode });
     try {
-      localStorage.setItem(CHOICE_KEY, JSON.stringify(all));
+      localStorage.setItem(CHOICE_KEY, JSON.stringify(choices.projects));
+      localStorage.setItem(LAST_CHOICE_KEY, JSON.stringify(choices.last));
     } catch {
       // Remembered choices are a convenience only.
     }
@@ -430,6 +453,7 @@
       modelKey = '';
       thinkingLevel = '';
       fast = false;
+      remember();
     }
   }
 
@@ -473,14 +497,15 @@
       Boolean(workspaceId) &&
       !busy &&
       !store.safeMode &&
-      // An explicit model must be present in this project's own catalog.
+      // An explicit model must be present in this project's own catalog. In a restricted
+      // project Send only opens the trust review (`send()` returns after `onTrust`).
       (fusionMode
         ? fusionReady
         : templateChoice
           ? Boolean(draft?.detail.accepts) && available.length > 0
           : pipelineId
             ? Boolean(pipelineDetail?.accepts) && available.length > 0
-            : Boolean(harness) && (modelKey ? explicitModelReady : canUseDefaultModel)),
+            : Boolean(harness) && (modelKey ? explicitModelReady || catalogBlocked : canUseDefaultModel)),
   );
 
   function setText(value: string): void {
@@ -884,9 +909,18 @@
           fastAvailable={Boolean(model?.supportsFast)}
           {fast}
           hint={model ? $t('This model has no reasoning options.') : $t('Pick a model to tune reasoning.')}
-          onModel={(value) => (modelKey = value)}
-          onLevel={(value) => (thinkingLevel = value)}
-          onFast={(value) => (fast = value)}
+          onModel={(value) => {
+            modelKey = value;
+            remember();
+          }}
+          onLevel={(value) => {
+            thinkingLevel = value;
+            remember();
+          }}
+          onFast={(value) => {
+            fast = value;
+            remember();
+          }}
         >
           {#snippet trigger(props)}
             <button type="button" class="chip" {...props} aria-busy={modelsLoading || undefined}>
@@ -911,7 +945,10 @@
         permissionsApply={!fusionMode}
         disabled={store.safeMode}
         onWorkspace={(value) => (workspaceId = value)}
-        onPermission={(value) => (permissionMode = value)}
+        onPermission={(value) => {
+          permissionMode = value;
+          remember();
+        }}
       />
     </div>
     <button type="button" data-nano-composer="send" onclick={() => void send()} disabled={!canSend} aria-label={$t('Start chat')}>
