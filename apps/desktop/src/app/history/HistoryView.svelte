@@ -620,17 +620,21 @@
     min-width: 0;
     min-height: 0;
   }
+  /* The title keeps a line of its own when the badge and buttons leave it no room (details open, narrow window). */
   .reader__head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: var(--piui-space-2);
-    height: var(--piui-header-height);
-    padding: 0 var(--piui-space-3) 0 var(--piui-space-4);
+    gap: var(--piui-space-1) var(--piui-space-2);
+    min-height: var(--piui-header-height);
+    padding: var(--piui-space-1) var(--piui-space-3) var(--piui-space-1) var(--piui-space-4);
     border-bottom: 1px solid var(--piui-border-subtle);
     flex: none;
   }
   .reader__head h2 {
     min-width: 0;
+    /* Leaves room for the read-only badge on the title's line. */
+    max-width: calc(100% - 6rem);
     margin: 0;
     overflow: hidden;
     font-size: var(--piui-text-lg);
