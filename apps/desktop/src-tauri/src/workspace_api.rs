@@ -3189,6 +3189,14 @@ async fn runtime_settings(
     if nano_models {
         retain_entitled_nano_models(host, &mut models, record.harness);
     }
+    if !record.nano_connector
+        && let Some(agent) = record.harness.acp_agent()
+    {
+        host.workspace
+            .inner
+            .acp
+            .fill_thinking_levels(agent, &mut models);
+    }
     if let RuntimeSettingsCommand::Set {
         model,
         thinking_level,
@@ -3230,6 +3238,14 @@ async fn runtime_settings(
     retain_external(&mut native.models);
     if nano_models {
         retain_entitled_nano_models(host, &mut native.models, record.harness);
+    }
+    if !record.nano_connector
+        && let Some(agent) = record.harness.acp_agent()
+    {
+        host.workspace
+            .inner
+            .acp
+            .fill_thinking_levels(agent, &mut native.models);
     }
     Ok(RuntimeSettings {
         protocol: 16,
@@ -3468,12 +3484,27 @@ async fn harness_models(
             {
                 let cwd = directory.canonical_path().to_path_buf();
                 let resolved = launch.clone();
-                if let Ok(Some(native)) = tokio::task::spawn_blocking(move || {
-                    piui_runtime::acp::probe_opencode_native_models(&resolved, &cwd)
-                })
-                .await
-                {
-                    state.workspace.inner.acp.remember_models(agent, &native);
+                let acp = state.workspace.inner.acp.clone();
+                let read_listing = move || {
+                    if let Some(native) =
+                        piui_runtime::acp::probe_opencode_native_models(&resolved, &cwd)
+                    {
+                        acp.remember_models(agent, &native);
+                    }
+                };
+                if state.workspace.inner.acp.has_remembered_models(agent) {
+                    // The listing takes seconds (the CLI starts and reads its
+                    // providers). A picker gets what is already known at once;
+                    // the listing is read again behind it for the next request.
+                    if state.workspace.inner.acp.begin_model_refresh(agent) {
+                        let acp = state.workspace.inner.acp.clone();
+                        tokio::task::spawn_blocking(move || {
+                            read_listing();
+                            acp.end_model_refresh(agent);
+                        });
+                    }
+                } else {
+                    let _ = tokio::task::spawn_blocking(read_listing).await;
                     models = state.workspace.inner.acp.catalog_models(agent);
                 }
             }

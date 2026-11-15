@@ -70,6 +70,15 @@ is shown at once and asked again in the background. A coded refusal
 failure (`RUNTIME_FAILED`, unknown) keeps them. Sign-in checks and preflight
 never read a snapshot.
 
+The new-chat composer prewarms (`prewarmHarnessCatalogs`): once the selected
+harness has answered, it loads this project's catalogs of the harnesses the user
+picked before (in any project) in the background, one at a time. Each project,
+harness and native version is asked once per app session, and a pair the project
+already remembers is skipped, so switching harness shows the project's own list
+at once. For OpenCode the host awaits the native model listing (seconds) only
+while it knows no models of the agent; otherwise the known list answers at once
+and the listing is read again in the background for the next request.
+
 The pipeline inspector and assistant revalidate through this shared cache on
 open or harness/version changes. Their component state does not extend the
 catalog lifetime. New chat preserves an explicit remembered selection while

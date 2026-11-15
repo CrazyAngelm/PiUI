@@ -258,9 +258,12 @@ succeed, and a failed start is never retried with a different set of switches.
   "Older than the oldest version supported by Nano Desktop." (`HarnessUnavailable`);
   unparseable "The installed version could not be recognized." (also refused: the
   version line is part of the identity proof).
-- The bridge checks the running app-server itself: the first token of the
+- The bridge checks the running app-server itself: the product of the
   `initialize` `userAgent` (`<originator>/<version> (<os>; <arch>) <terminal>
-  (<client name>; <client version>)`, originator = our `clientInfo.name`) must
+  (<client name>; <client version>)`, originator = our `clientInfo.name`) is the
+  text before the OS group ` (`, which may contain spaces when the environment
+  overrides the originator (observed: `Codex Desktop/0.165.0 (...)`); without an
+  OS group the first token stands in. Its version must
   parse and be at or above the minimum, else `unsupported-native-version` before
   `initialized`; a newer version passes. The trailing client version is never
   read. The `userAgent` carries our own originator, so it is not identity proof by
@@ -517,6 +520,10 @@ the selected Nano model. A mismatched source or mode fails before inference.
   `session/set_mode`). A requested model or reasoning level that the agent does
   not advertise fails before the first prompt (`invalid-model`,
   `unsupported-settings`); the model id `default` keeps the agent's own model.
+  Reasoning levels belong to the model that was current when the agent listed
+  them: a full option list without `thought_level` means the current model has
+  none, and a model not selected yet shows levels only while every model seen
+  so far had the same ones. The value `default` is never offered as a level.
   `setMode({modeId})` selects an advertised mode; the snapshot reports
   `modes: {current, available}`. Only `permissionMode: 'native'` exists; tool
   allowlists, resource rules, base instructions, speed, network and subagent

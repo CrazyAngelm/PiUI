@@ -35,7 +35,7 @@ use piui_runtime::workspace_runtime::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
@@ -223,6 +223,8 @@ struct State {
     sign_in: HashMap<AcpAgentId, Vec<String>>,
     /// Models the agent advertised in its last session in this host process.
     models: HashMap<AcpAgentId, Vec<WorkspaceModel>>,
+    /// Agents whose native model listing is being re-read in the background.
+    model_refreshes: HashSet<AcpAgentId>,
     /// Descriptors of enabled plugins; never persisted here.
     plugin_agents: Vec<PluginAgent>,
 }
@@ -326,6 +328,7 @@ impl AcpAgents {
                 discovery: HashMap::new(),
                 sign_in: HashMap::new(),
                 models: HashMap::new(),
+                model_refreshes: HashSet::new(),
                 plugin_agents: Vec::new(),
             })),
             builtins: Arc::new(builtin_acp_descriptors()),
@@ -829,7 +832,7 @@ impl AcpAgents {
     /// state (entitlements), served live by the host: it is never kept here,
     /// so a later catalog cannot offer a mode of an earlier account.
     pub(crate) fn remember_models(&self, id: AcpAgentId, models: &[WorkspaceModel]) {
-        let own: Vec<WorkspaceModel> = models
+        let mut own: Vec<WorkspaceModel> = models
             .iter()
             .filter(|model| {
                 model.provider.as_deref() != Some(GOOSE_NANO_SOURCE_PROVIDER)
@@ -844,7 +847,60 @@ impl AcpAgents {
             return;
         }
         if let Ok(mut state) = self.lock() {
+            // A session knows the levels of the models it selected; the native listing
+            // knows them all. Neither forgets what the other learned.
+            if let Some(known) = state.models.get(&id) {
+                Self::carry_thinking_levels(known, &mut own);
+            }
             state.models.insert(id, own);
+        }
+    }
+
+    /// Whether the catalog already has models of this agent to show.
+    pub(crate) fn has_remembered_models(&self, id: AcpAgentId) -> bool {
+        self.lock().is_ok_and(|state| {
+            state
+                .models
+                .get(&id)
+                .is_some_and(|models| !models.is_empty())
+        })
+    }
+
+    /// Claims the background re-read of an agent's native model listing.
+    /// `false` while one is already running.
+    pub(crate) fn begin_model_refresh(&self, id: AcpAgentId) -> bool {
+        self.lock()
+            .is_ok_and(|mut state| state.model_refreshes.insert(id))
+    }
+
+    pub(crate) fn end_model_refresh(&self, id: AcpAgentId) {
+        if let Ok(mut state) = self.lock() {
+            state.model_refreshes.remove(&id);
+        }
+    }
+
+    /// Adds the reasoning levels the catalog knows to session models that carry
+    /// none: a session learns a model's levels only once that model is selected.
+    pub(crate) fn fill_thinking_levels(&self, id: AcpAgentId, models: &mut [WorkspaceModel]) {
+        let Ok(state) = self.lock() else {
+            return;
+        };
+        if let Some(known) = state.models.get(&id) {
+            Self::carry_thinking_levels(known, models);
+        }
+    }
+
+    /// Levels by model id only: the native listing and a session name the
+    /// provider of the same model differently.
+    fn carry_thinking_levels(known: &[WorkspaceModel], models: &mut [WorkspaceModel]) {
+        for model in models
+            .iter_mut()
+            .filter(|model| model.thinking_levels.is_none())
+        {
+            model.thinking_levels = known
+                .iter()
+                .find(|candidate| candidate.id == model.id)
+                .and_then(|candidate| candidate.thinking_levels.clone());
         }
     }
 
@@ -1929,6 +1985,71 @@ mod tests {
             registry.require_nano_source(gemini),
             Err(AcpRefusal::NanoSourceUnavailable)
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_background_listing_read_is_claimed_once_and_known_models_answer_at_once() {
+        let root = root("refresh");
+        let registry = AcpAgents::open(&root).expect("registry");
+        let opencode = AcpAgentId::new("opencode").expect("id");
+        let gemini = AcpAgentId::new("gemini-cli").expect("id");
+        assert!(!registry.has_remembered_models(opencode));
+        registry.remember_models(
+            opencode,
+            &[WorkspaceModel {
+                id: "vendor/model".into(),
+                provider: None,
+                name: "model".into(),
+                thinking_levels: None,
+            }],
+        );
+        assert!(registry.has_remembered_models(opencode));
+        assert!(!registry.has_remembered_models(gemini));
+        assert!(registry.begin_model_refresh(opencode));
+        assert!(
+            !registry.begin_model_refresh(opencode),
+            "one read at a time"
+        );
+        assert!(registry.begin_model_refresh(gemini), "per agent");
+        registry.end_model_refresh(opencode);
+        assert!(registry.begin_model_refresh(opencode));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn known_reasoning_levels_survive_a_listing_without_them() {
+        let root = root("levels");
+        let registry = AcpAgents::open(&root).expect("registry");
+        let opencode = AcpAgentId::new("opencode").expect("id");
+        let model = |id: &str, levels: Option<&[&str]>| WorkspaceModel {
+            id: id.into(),
+            provider: None,
+            name: id.into(),
+            thinking_levels: levels
+                .map(|levels| levels.iter().map(|&level| level.to_owned()).collect()),
+        };
+        let levels = |registry: &AcpAgents, id: &str| {
+            registry
+                .catalog_models(opencode)
+                .into_iter()
+                .find(|model| model.id == id)
+                .and_then(|model| model.thinking_levels)
+        };
+        let known = Some(vec!["low".to_owned(), "high".to_owned()]);
+        registry.remember_models(
+            opencode,
+            &[model("a", Some(&["low", "high"])), model("b", None)],
+        );
+        // A later listing without levels (a session that never selected `a`) keeps them.
+        registry.remember_models(opencode, &[model("a", None), model("b", None)]);
+        assert_eq!(levels(&registry, "a"), known);
+        assert_eq!(levels(&registry, "b"), None);
+        // A session's own models gain the catalog's levels by id; unknown models stay without.
+        let mut listing = [model("a", None), model("c", None)];
+        registry.fill_thinking_levels(opencode, &mut listing);
+        assert_eq!(listing[0].thinking_levels, known);
+        assert_eq!(listing[1].thinking_levels, None);
         let _ = fs::remove_dir_all(root);
     }
 

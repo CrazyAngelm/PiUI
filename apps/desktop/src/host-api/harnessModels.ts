@@ -308,6 +308,20 @@ function readSnapshot(key: string, request: HarnessModelsRequest): HarnessModels
   }
 }
 
+/**
+ * What a picker can show without asking the harness (a restricted project):
+ * this project's last catalog, else the models this harness listed for any
+ * project. Provisional, like `onProvisional`: never an answer for sending.
+ */
+export function rememberedHarnessModels(request: HarnessModelsRequest): HarnessModelsResult | undefined {
+  return readSnapshot(catalogKey(request), request) ?? readSnapshot(harnessSnapshotKey(request), request);
+}
+
+/** Whether this project already remembers a catalog of this harness (its picker opens with it at once). */
+export function hasCatalogSnapshot(request: HarnessModelsRequest): boolean {
+  return readSnapshot(catalogKey(request), request) !== undefined;
+}
+
 export interface CachedCatalogHandlers {
   /** The probe answered after a snapshot was shown. */
   onFresh?: (result: HarnessModelsResult) => void;

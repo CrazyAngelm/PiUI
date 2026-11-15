@@ -6,6 +6,15 @@ Nano Desktop is currently a developer preview. Versions before 1.0 may change wi
 
 ## [Unreleased]
 
+### Fixed
+
+- OpenCode models show their reasoning levels in the model picker, in a new chat and in an open one. Each model offers its own levels, and `default` is no longer listed as a level.
+- The new-chat harness, model, reasoning, speed and permission picks are remembered as soon as they are made, not when a message is sent. A project without its own choice starts from the latest one, and a harness that was still being checked at startup takes over once it is ready.
+- A project that is not trusted yet shows the harness's known models instead of an empty list; the project's own list replaces it after you trust the folder.
+- Codex starts when its originator is overridden in the environment (`CODEX_INTERNAL_ORIGINATOR_OVERRIDE`); its version was not recognized and Codex was refused.
+- The OpenCode model list no longer waits five seconds for the native listing on every request: known models answer at once and the listing is read again in the background.
+- Harnesses you used before load their model lists for the current project in the background, so switching harness shows them at once.
+
 ## [0.3.1]
 
 ### Added
