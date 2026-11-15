@@ -175,11 +175,6 @@
 {/if}
 
 <nav class="sidebar" aria-label={$t('Workspace navigation')}>
-  <div class="brand">
-    <span class="brand__mark" role="img" aria-label="Nano Desktop">N</span>
-    <span class="brand__name" aria-hidden="true">Nano Desktop</span>
-  </div>
-
   <WorkLocation />
 
   <div class="primary">
@@ -402,31 +397,6 @@
     padding: 0 var(--piui-space-2);
     background: var(--piui-bg-raised);
     border-right: 1px solid var(--piui-border-subtle);
-  }
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: var(--piui-space-2);
-    height: var(--piui-header-height);
-    padding: 0 var(--piui-space-2);
-    flex: none;
-  }
-  .brand__mark {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border-radius: 6px;
-    background: var(--piui-action);
-    color: var(--piui-action-ink);
-    font-size: 14px;
-    font-weight: var(--piui-weight-semibold);
-  }
-  .brand__name {
-    font-size: var(--piui-text-lg);
-    font-weight: var(--piui-weight-semibold);
-    letter-spacing: -0.01em;
   }
   .primary,
   .footer {
