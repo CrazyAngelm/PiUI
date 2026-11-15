@@ -1,15 +1,19 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { PassThrough } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createClaudeAdapter } from "./claude.mjs";
+import { runBridge } from "./runner.mjs";
 
 const fixture = fileURLToPath(new URL("./claude.test-fixture.mjs", import.meta.url));
 const SUBSCRIPTION_MESSAGE = "Sign in to Claude Code with your Claude subscription. API keys and cloud providers are not used by PiUI.";
 const FAST_MODE_MESSAGE = "Claude Code fast mode is not available in PiUI because it can use paid extra usage. PiUI runs Claude Code only on your base Claude subscription.";
 const FAST_MODE_ACTIVE_MESSAGE = "Claude Code reported fast mode as active, so PiUI did not start the session. PiUI runs Claude Code only on your base Claude subscription.";
+
 const EXTRA_USAGE_MESSAGE = "Claude Code started using paid extra usage, so PiUI stopped this session. PiUI runs Claude Code only on your base Claude subscription.";
 // Fixture transcripts and the adapter's native history lookups stay in a
 // temporary Claude config directory, never in the user's ~/.claude.
@@ -33,6 +37,52 @@ function setup(overrides = {}, fixtureArgs = []) {
   };
   const records = () => (existsSync(recordPath) ? readFileSync(recordPath, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : []);
   return { config, records, dir };
+}
+
+// The existing CLI fake predates --fork-session and prefers --resume's id.
+// Record the bridge's exact invocation, then let that same fake run the child
+// id; native history copying itself is proven by the read-only fork spike.
+function forkSetup(overrides = {}, fixtureArgs = []) {
+  const prepared = setup(overrides, fixtureArgs);
+  const wrapper = join(prepared.dir, "fork-launcher.mjs");
+  const launchLog = join(prepared.dir, "fork-launches.jsonl");
+  writeFileSync(wrapper, [
+    'import { spawn } from "node:child_process";',
+    'import { appendFileSync } from "node:fs";',
+    'const args = process.argv.slice(2);',
+    `appendFileSync(${JSON.stringify(launchLog)}, JSON.stringify(args) + String.fromCharCode(10));`,
+    'const forwarded = [];',
+    'for (let index = 0; index < args.length; index += 1) {',
+    '  if (args.includes("--fork-session") && (args[index] === "--resume" || args[index] === "--resume-session-at")) { index += 1; continue; }',
+    '  if (args[index] !== "--fork-session") forwarded.push(args[index]);',
+    '}',
+    `const child = spawn(process.execPath, [${JSON.stringify(fixture)}, ...forwarded], { stdio: "inherit", windowsHide: true });`,
+    'child.once("error", () => process.exit(1));',
+    'child.once("exit", code => process.exit(code ?? 1));',
+  ].join("\n"));
+  prepared.config.runtimeArgs = [wrapper, ...prepared.config.runtimeArgs.slice(1)];
+  return { ...prepared, starts: () => existsSync(launchLog) ? readFileSync(launchLog, "utf8").trim().split("\n").map(line => JSON.parse(line)) : [] };
+}
+
+async function branchSource() {
+  const nativeId = randomUUID();
+  const sourcePath = join(projectDir, `${nativeId}.jsonl`);
+  const ids = Object.fromEntries(["firstUser", "firstAnswer", "hook", "secondUser", "secondAnswer"].map(name => [name, randomUUID()]));
+  const entry = value => JSON.stringify({ sessionId: nativeId, timestamp: "2026-11-16T12:00:00.000Z", ...value });
+  const raw = [
+    entry({ type: "user", uuid: ids.firstUser, parentUuid: null, message: { role: "user", content: "ALPHA" } }),
+    entry({ type: "assistant", uuid: ids.firstAnswer, parentUuid: ids.firstUser, message: { id: "first-api-message", role: "assistant", content: [{ type: "text", text: "First answer" }] } }),
+    entry({ type: "system", subtype: "stop_hook_summary", uuid: ids.hook, parentUuid: ids.firstAnswer }),
+    entry({ type: "user", uuid: ids.secondUser, parentUuid: ids.hook, message: { role: "user", content: "BETA" } }),
+    entry({ type: "assistant", uuid: ids.secondAnswer, parentUuid: ids.secondUser, message: { id: "second-api-message", role: "assistant", content: [{ type: "text", text: "Second answer" }] } }),
+  ].join("\n");
+  mkdirSync(projectDir, { recursive: true });
+  writeFileSync(sourcePath, raw);
+  const source = await createClaudeAdapter(setup({ nativeId, nativePath: sourcePath }).config, () => {});
+  try {
+    const snapshot = await source.snapshot();
+    return { nativeId, sourcePath, ids, raw, blocks: snapshot.blocks };
+  } finally { await source.dispose(); }
 }
 
 // Every emitted event must match the Rust NativeEvent contract, which denies
@@ -106,6 +156,66 @@ async function runTurn(adapter, log, text, mode = "prompt") {
   await adapter.prompt({ text, mode });
   await waitFor(() => log.of("turnCompleted").length > before && log.events.at(-1)?.type === "status");
 }
+
+test("sessions MCP is opt-in and round-trips through runner validation before the host", async () => {
+  const { config, records } = setup({ hostTools: ["board", "sessions"], allowedTools: ["Read", "sessions"] });
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const frames = [];
+  let buffered = "";
+  output.on("data", chunk => {
+    buffered += chunk.toString("utf8");
+    let end;
+    while ((end = buffered.indexOf("\n")) >= 0) {
+      const line = buffered.slice(0, end); buffered = buffered.slice(end + 1);
+      if (line) frames.push(JSON.parse(line));
+    }
+  });
+  const send = (id, method, params) => input.write(`${JSON.stringify({ id, method, params })}\n`);
+  runBridge(createClaudeAdapter, input, output);
+  send("init", "initialize", config);
+  try {
+    assert.equal((await waitFor(() => frames.find(frame => frame.id === "init"))).ok, true);
+    const args = startRecord(records).args;
+    assert.equal(argValue(args, "--allowed-tools"), "mcp__piui-workspace__board,mcp__piui-workspace__sessions");
+    assert.equal(argValue(args, "--tools"), "Read");
+    assert.ok(!args.includes("--disallowed-tools"));
+    const server = JSON.parse(readFileSync(argValue(args, "--mcp-config"), "utf8")).mcpServers["piui-workspace"];
+    const rpc = async body => (await fetch(server.url, { method: "POST", headers: { ...server.headers, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...body }) })).json();
+    const tools = (await rpc({ method: "tools/list" })).result.tools;
+    assert.deepEqual(tools.map(tool => tool.name), ["board", "sessions"]);
+    assert.deepEqual(tools[1].inputSchema.oneOf.map(shape => shape.properties.op.const), ["start", "list", "message", "read", "wait", "stop"]);
+    const pending = rpc({ method: "tools/call", params: { name: "sessions", arguments: { op: "list" } } });
+    const request = await waitFor(() => frames.find(frame => frame.event?.type === "sessionsRequest"));
+    const result = { ok: true, chats: [] };
+    send("answer", "sessionsResponse", { requestId: request.event.requestId, result });
+    assert.deepEqual(JSON.parse((await pending).result.content[0].text), result);
+    const invalid = await rpc({ method: "tools/call", params: { name: "sessions", arguments: { op: "list", sessionId: "spoofed" } } });
+    assert.equal(invalid.result.isError, true);
+    assert.equal(JSON.parse(invalid.result.content[0].text).code, "invalid-operation");
+    assert.equal(frames.filter(frame => frame.event?.type === "sessionsRequest").length, 1, "invalid operations never reach the host");
+  } finally {
+    send("dispose", "dispose", {});
+    await waitFor(() => frames.find(frame => frame.id === "dispose"));
+    input.end();
+  }
+  const plain = setup({ hostTools: ["board"] });
+  const adapter = await createClaudeAdapter(plain.config, () => {}, undefined, async () => ({ ok: true }), undefined, async () => ({ ok: true, chats: [] }));
+  try {
+    const server = JSON.parse(readFileSync(argValue(startRecord(plain.records).args, "--mcp-config"), "utf8")).mcpServers["piui-workspace"];
+    const result = await (await fetch(server.url, { method: "POST", headers: { ...server.headers, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) })).json();
+    assert.deepEqual(result.result.tools.map(tool => tool.name), ["board"], "a callback alone does not enable sessions");
+  } finally { await adapter.dispose(); }
+  const missing = setup({ hostTools: ["sessions"] });
+  const log = recorder();
+  const without = await createClaudeAdapter(missing.config, log.emit);
+  try {
+    assert.deepEqual(log.of("notice"), [{ type: "notice", code: "unsupported-sessions-tool" }]);
+    assert.ok(!startRecord(missing.records).args.includes("--mcp-config"));
+    assert.equal((await without.snapshot()).status, "idle");
+    assert.deepEqual(log.problems, []);
+  } finally { await without.dispose(); }
+});
 
 test("catalog mode maps native models and skills, never offers fast mode, then stops the CLI", async () => {
   const { config, records } = setup({ catalogOnly: true });
@@ -764,6 +874,87 @@ test("resume rebuilds the active branch of the native transcript without replay"
 
   await assert.rejects(createClaudeAdapter(setup({ nativeId: "99999999-2222-4333-8444-555555555555" }).config, () => {}), { bridgeCode: "invalid-session" });
   await assert.rejects(createClaudeAdapter(setup({ nativeId, nativePath: join(tmpdir(), `${nativeId}.jsonl`) }).config, () => {}), { bridgeCode: "invalid-session" });
+});
+
+test("Claude forks use native flags, the selected message's parent, and the shared active history reader", async () => {
+  const source = await branchSource();
+  const first = source.blocks.find(block => block.kind === "user" && block.text === "ALPHA");
+  const second = source.blocks.find(block => block.kind === "user" && block.text === "BETA");
+  for (const [beforeBlockId, expectedText, at] of [
+    [undefined, ["ALPHA", "First answer", "BETA", "Second answer"], undefined],
+    [second.id, ["ALPHA", "First answer"], source.ids.hook],
+    [first.id, [], undefined],
+  ]) {
+    const prepared = forkSetup({ fork: { nativeId: source.nativeId, nativePath: source.sourcePath, ...(beforeBlockId ? { beforeBlockId } : {}) } });
+    const log = recorder();
+    const adapter = await createClaudeAdapter(prepared.config, log.emit);
+    try {
+      const snapshot = await adapter.snapshot();
+      const [args] = prepared.starts();
+      assert.notEqual(snapshot.nativeId, source.nativeId);
+      assert.equal(argValue(args, "--session-id"), snapshot.nativeId);
+      assert.deepEqual(snapshot.blocks.map(block => block.text), expectedText);
+      assert.equal(snapshot.materialized, false, "the fork is not written until a prompt is sent");
+      assert.equal(log.of("binding").at(-1).nativeId, snapshot.nativeId);
+      assert.equal(snapshot.nativePath, join(projectDir, `${snapshot.nativeId}.jsonl`));
+      if (beforeBlockId === first.id) {
+        assert.ok(!args.includes("--resume"));
+        assert.ok(!args.includes("--fork-session"));
+      } else {
+        assert.equal(argValue(args, "--resume"), source.nativeId);
+        assert.ok(args.includes("--fork-session"));
+        assert.equal(argValue(args, "--resume-session-at"), at);
+        assert.deepEqual(snapshot.blocks.map(block => block.id), source.blocks.slice(0, expectedText.length).map(block => block.id));
+      }
+      assert.equal(readFileSync(source.sourcePath, "utf8"), source.raw, "the source transcript is never written");
+      assert.deepEqual(log.problems, []);
+    } finally { await adapter.dispose(); }
+  }
+});
+
+test("an unsent Claude fork keeps its fork arguments on settings restart, then resumes its own materialized transcript", async () => {
+  const source = await branchSource();
+  const beforeBlockId = source.blocks.find(block => block.kind === "user" && block.text === "BETA").id;
+  const prepared = forkSetup({ fork: { nativeId: source.nativeId, beforeBlockId } }, ["--fixture-no-flag-settings"]);
+  const log = recorder();
+  const adapter = await createClaudeAdapter(prepared.config, log.emit);
+  try {
+    const { nativeId } = await adapter.snapshot();
+    await adapter.setModel({ model: { id: "default", name: "Default" }, thinkingLevel: "low" });
+    const starts = prepared.starts();
+    assert.equal(starts.length, 2);
+    for (const args of starts) {
+      assert.equal(argValue(args, "--resume"), source.nativeId);
+      assert.ok(args.includes("--fork-session"));
+      assert.equal(argValue(args, "--session-id"), nativeId);
+      assert.equal(argValue(args, "--resume-session-at"), source.ids.hook);
+    }
+    await runTurn(adapter, log, "Continue this branch");
+    await adapter.setModel({ model: { id: "default", name: "Default" }, thinkingLevel: "max" });
+    const resumed = prepared.starts()[2];
+    assert.equal(argValue(resumed, "--resume"), nativeId);
+    assert.ok(!resumed.includes("--fork-session"));
+    assert.equal(readFileSync(source.sourcePath, "utf8"), source.raw);
+    assert.deepEqual(log.problems, []);
+  } finally { await adapter.dispose(); }
+});
+
+test("Claude branch shapes, missing sources and unknown branch points fail without a native launch", async () => {
+  const source = await branchSource();
+  for (const fork of [null, {}, { nativeId: "not-a-uuid" }, { nativeId: source.nativeId, nativePath: 1 }, { nativeId: source.nativeId, beforeBlockId: "" }, { nativeId: source.nativeId, beforeBlockId: "x".repeat(257) }, { nativeId: source.nativeId, extra: true }]) {
+    await assert.rejects(createClaudeAdapter(setup({ fork, runtimeProgram: "must-not-launch" }).config, () => {}), { bridgeCode: "invalid-session" });
+  }
+  await assert.rejects(createClaudeAdapter(setup({ nativeId: source.nativeId, fork: { nativeId: source.nativeId } }).config, () => {}), { bridgeCode: "invalid-session" });
+  await assert.rejects(createClaudeAdapter(setup({ coordination: true, fork: { nativeId: source.nativeId } }).config, () => {}), { bridgeCode: "invalid-session" });
+  for (const [fork, code, safeMessage] of [
+    [{ nativeId: source.nativeId, beforeBlockId: "unknown-user" }, "branch-point-not-found", "That message is no longer in the chat this one branches from."],
+    [{ nativeId: randomUUID() }, "branch-unsupported", "This chat cannot be branched natively."],
+    [{ nativeId: source.nativeId, nativePath: join(tmpdir(), "wrong-source.jsonl") }, "branch-unsupported", "This chat cannot be branched natively."],
+  ]) {
+    const prepared = forkSetup({ fork });
+    await assert.rejects(createClaudeAdapter(prepared.config, () => {}), { bridgeCode: code, safeMessage });
+    assert.deepEqual(prepared.starts(), []);
+  }
 });
 
 test("a conversation written by the CLI reopens with stable block ids", async () => {

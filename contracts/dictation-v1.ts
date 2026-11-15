@@ -12,9 +12,16 @@
  *   still answers from the local file.
  * - The Nano source keeps using `nano_dictation_v1` (nano-account-v1).
  *
+ * - An unsent recording stays in the WebView's local storage for at most 24
+ *   hours (ADR-066). `dictation_save_recording_v1` writes one to a file the
+ *   person picks in the host's native save dialog; it carries audio and a MIME
+ *   type only, never a path.
+ *
  * Commands: `dictation_settings_v1` ({ request: DictationSettingsRequestV1 } ->
- * DictationSettingsV1) and `dictation_transcribe_v1`
- * ({ request: DictationTranscribeRequestV1 } -> DictationAnswerV1).
+ * DictationSettingsV1), `dictation_transcribe_v1`
+ * ({ request: DictationTranscribeRequestV1 } -> DictationAnswerV1) and
+ * `dictation_save_recording_v1` ({ request: DictationSaveRecordingRequestV1 } ->
+ * DictationSaveRecordingAnswerV1).
  * Requests reject unknown fields; failures reject with
  * `{ code: DictationErrorCodeV1 }`.
  */
@@ -71,6 +78,17 @@ export interface DictationTranscribeRequestV1 {
 
 export interface DictationAnswerV1 {
   text: string;
+}
+
+/** Audio up to 32 MiB with an `audio/webm`, `audio/ogg` or `audio/mp4` type; the file name and place are the person's choice. */
+export interface DictationSaveRecordingRequestV1 {
+  audioBase64: string;
+  mimeType: string;
+}
+
+export interface DictationSaveRecordingAnswerV1 {
+  /** False when the person closed the dialog without saving. */
+  saved: boolean;
 }
 
 export type DictationErrorCodeV1 =

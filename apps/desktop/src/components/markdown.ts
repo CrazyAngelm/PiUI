@@ -30,7 +30,7 @@ const WIDGET_FENCE = /^[ \t]{0,3}```hermes-ui[^\n]*$/iu;
 const WIDGET_CLOSE = /^[ \t]{0,3}`{3,}[ \t]*$/u;
 
 /** A deliberately small, non-HTML Markdown projection for chat prose. */
-export function parseMarkdown(source: string, rich = false): MarkdownBlock[] {
+export function parseMarkdown(source: string, rich = false, widgets = rich): MarkdownBlock[] {
   const lines = source.replace(/\r\n?/gu, '\n').split('\n');
   const blocks: MarkdownBlock[] = [];
   let index = 0;
@@ -42,7 +42,7 @@ export function parseMarkdown(source: string, rich = false): MarkdownBlock[] {
       continue;
     }
 
-    const widget = rich && WIDGET_FENCE.test(line);
+    const widget = widgets && WIDGET_FENCE.test(line);
     const fence = widget ? ['', 'hermes-ui'] : line.match(/^```\s*([^`]*)$/u);
     if (fence) {
       const content: string[] = [];
@@ -109,7 +109,7 @@ export function parseMarkdown(source: string, rich = false): MarkdownBlock[] {
     index += 1;
     while (index < lines.length) {
       const next = lines[index] ?? '';
-      if (next.trim().length === 0 || BLOCK_START.test(next) || (rich && WIDGET_FENCE.test(next)) || isTableStart(lines, index)) break;
+      if (next.trim().length === 0 || BLOCK_START.test(next) || (widgets && WIDGET_FENCE.test(next)) || isTableStart(lines, index)) break;
       paragraph.push(next);
       index += 1;
     }

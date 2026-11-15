@@ -1,12 +1,14 @@
 // Hermes owns inference, tools, authentication and SQLite history. This adapter
 // translates ACP messages only; the containing host Job owns every child.
-export async function createHermesAdapter(config, emit, coordinatorRequest, boardRequest, _sidekickRequest, spawnChild) {
+export async function createHermesAdapter(config, emit, coordinatorRequest, boardRequest, _sidekickRequest, spawnChild, sessionsRequest) {
   const spawn = spawnChild ?? (await import('node:child_process')).spawn;
   const { realpath } = await import('node:fs/promises');
   const { join, isAbsolute } = await import('node:path');
   const { createServer } = await import('node:http');
   const { randomUUID } = await import('node:crypto');
   const fail = (code, message = 'Hermes could not complete the operation.') => Object.assign(new Error(code), { bridgeCode: code, safeMessage: message });
+  const sessionsRequested = Array.isArray(config.hostTools) && config.hostTools.includes('sessions');
+  const sessionsEnabled = sessionsRequested && typeof sessionsRequest === 'function';
   // Minimum supported Hermes ACP agent, mirrored by the host (native_version.rs).
   // Only the minimum is enforced: a newer agent starts, and the handshake and
   // session responses below stay the fail-closed compatibility gate. A
@@ -141,7 +143,32 @@ print(json.dumps({'items':items,'warnings':warnings}))`;
   // Board host tool: optional, independent of coordination.
   const boardEnabled = Array.isArray(config.hostTools) && config.hostTools.includes('board') && typeof boardRequest === 'function';
   if (Array.isArray(config.hostTools) && config.hostTools.includes('board') && !boardEnabled) emit({ type: 'notice', code: 'unsupported-board-tool' });
+  if (sessionsRequested && !sessionsEnabled) emit({ type: 'notice', code: 'unsupported-sessions-tool' });
   const boardStatuses = ['backlog', 'todo', 'inProgress', 'inReview', 'blocked', 'done', 'cancelled'];
+  const sessionsObject = (op, fields = {}, required = []) => ({
+    type: "object", properties: { op: { const: op }, ...fields }, required: ["op", ...required], additionalProperties: false,
+  });
+  const sessionsId = { type: "string", minLength: 1, pattern: "^[A-Za-z0-9_-]+$" };
+  const sessionsModelName = { type: "string", minLength: 1 };
+  const sessionsText = { type: "string", minLength: 1, maxLength: 16000 };
+  const sessionsWait = { type: "integer", minimum: 0, maximum: 240 };
+  const sessionsInputSchema = { type: "object", oneOf: [
+    sessionsObject("start", {
+      title: { type: "string", minLength: 1, pattern: "\\S" }, prompt: sessionsText,
+      harness: { anyOf: [{ enum: ["pi", "nano", "claude-code", "codex", "prime-agent", "hermes"] }, { type: "string", pattern: "^acp:(?!.*--)[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$" }] },
+      model: { type: "object", properties: { provider: sessionsModelName, id: sessionsModelName }, required: ["provider", "id"], additionalProperties: false },
+      permissionMode: { enum: ["native", "read-only", "workspace-write", "full-access"] },
+      wait: { type: "boolean" }, waitSeconds: sessionsWait,
+    }, ["title", "prompt"]),
+    sessionsObject("list"),
+    sessionsObject("message", { sessionId: sessionsId, text: sessionsText, wait: { type: "boolean" }, waitSeconds: sessionsWait }, ["sessionId", "text"]),
+    sessionsObject("read", { sessionId: sessionsId, page: { type: "integer", minimum: 1 } }, ["sessionId"]),
+    sessionsObject("wait", { sessionId: sessionsId, waitSeconds: sessionsWait }, ["sessionId"]),
+    sessionsObject("stop", { sessionId: sessionsId }, ["sessionId"]),
+  ] };
+  const sessionsTool = {
+    name: "sessions", description: "Work with chats linked to this one. start: begin a new linked chat for a separable piece of work and give it a complete prompt. list: the linked chats and their state. message: send a linked chat a message. read: the last answer of a linked chat. wait: wait for a linked chat to finish its turn. stop: stop a linked chat you started. With wait:true (waitSeconds up to 240) start and message return the answer. A linked chat on another harness needs permissionMode, and is refused when this chat runs in its harness's own permission mode.", inputSchema: sessionsInputSchema,
+  };
   const boardTool = {
     name: 'board',
     description: "Manage this project's PiUI board: the cards the person tracks. Call op context before create and prefer updating, commenting on or moving the active or a similar card. Moving to done or cancelled only proposes it to the person. Do not retry ALREADY_CLAIMED or FORBIDDEN. The result is JSON.",
@@ -158,7 +185,7 @@ print(json.dumps({'items':items,'warnings':warnings}))`;
       additionalProperties: false,
     },
   };
-  if (config.coordination || boardEnabled) {
+  if (config.coordination || boardEnabled || sessionsEnabled) {
     const token = randomUUID();
     const workspaceTool = { name: 'workspace', description: 'Read roster before delegating. It describes when each allowed helper is useful, its required input and expected result. Use only authorized routes.', inputSchema: { type: 'object', properties: { type: { type: 'string', enum: ['roster', 'send', 'observe', 'wait', 'spawn', 'spawnAgent'] }, recipientMemberId: { type: 'string' }, targetMemberId: { type: 'string' }, body: { type: 'string' }, stepId: { type: 'string' }, profileId: { type: 'string' }, name: { type: 'string' }, instructions: { type: 'string' } }, required: ['type'], additionalProperties: false } };
     server = createServer(async (req, res) => {
@@ -167,7 +194,17 @@ print(json.dumps({'items':items,'warnings':warnings}))`;
         let raw = ''; for await (const chunk of req) { raw += chunk; if (Buffer.byteLength(raw) > frameLimit) throw fail('frame-too-large'); }
         const message = JSON.parse(raw); let result;
         if (message.method === 'initialize') result = { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'piui-workspace', version: '1' } };
-        else if (message.method === 'tools/list') result = { tools: [...(config.coordination ? [workspaceTool] : []), ...(boardEnabled ? [boardTool] : [])] };
+        else if (message.method === 'tools/list') result = { tools: [...(config.coordination ? [workspaceTool] : []), ...(boardEnabled ? [boardTool] : []), ...(sessionsEnabled ? [sessionsTool] : [])] };
+        else if (message.method === 'tools/call' && message.params?.name === 'sessions' && sessionsEnabled) {
+          try {
+            const value = await sessionsRequest(message.params.arguments, {});
+            result = { ...(value?.ok === false ? { isError: true } : {}), content: [{ type: 'text', text: JSON.stringify(value) }] };
+          } catch (error) {
+            const code = typeof error?.bridgeCode === 'string' ? error.bridgeCode : 'unavailable';
+            const text = typeof error?.safeMessage === 'string' ? error.safeMessage : 'Linked chats could not complete this operation.';
+            result = { isError: true, content: [{ type: 'text', text: JSON.stringify({ ok: false, code, message: text }) }] };
+          }
+        }
         else if (message.method === 'tools/call' && message.params?.name === 'board' && boardEnabled) {
           try {
             const value = await boardRequest(message.params.arguments, {});

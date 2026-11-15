@@ -56,7 +56,7 @@ pub mod avatar;
 /// thread; `Err(())` reports `browser-failed`.
 pub type OpenBrowser = Box<dyn FnOnce(&Url) -> Result<(), ()> + Send + 'static>;
 
-const DICTATION_TIMEOUT: Duration = Duration::from_secs(120);
+const DICTATION_TIMEOUT: Duration = Duration::from_secs(300);
 const SIGN_OUT_NETWORK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The account generation a relay session, a launch or a request started

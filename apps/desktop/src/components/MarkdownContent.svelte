@@ -3,15 +3,15 @@
   const t = useTranslation();
   import { parseMarkdown, type InlineNode } from './markdown';
 
-  let { source, compact = false, rich = false, printMode = false }: { source: string; compact?: boolean; rich?: boolean; printMode?: boolean } = $props();
+  let { source, compact = false, rich = false, widgets = rich, printMode = false }: { source: string; compact?: boolean; rich?: boolean; widgets?: boolean; printMode?: boolean } = $props();
 
   let copiedCode = $state<string | undefined>();
   const parsed = $derived.by(() => {
     let widget = 0;
-    return parseMarkdown(source, rich).map((block, index) => ({ block,
+    return parseMarkdown(source, rich, widgets).map((block, index) => ({ block,
       // Final owner cleanup can remove prose before an unchanged widget. Its
       // DOM (and focused controls) belongs to its widget ordinal, not that prose.
-      key: rich && block.kind === 'code' && block.language === 'hermes-ui' ? `widget:${widget++}` : `block:${index}`,
+      key: widgets && block.kind === 'code' && block.language === 'hermes-ui' ? `widget:${widget++}` : `block:${index}`,
     }));
   });
 
@@ -69,7 +69,7 @@
     {:else if block.kind === 'code'}
       <figure class="code-block">
         <figcaption><span>{languageLabel(block.language)}</span>{#if !printMode}<button type="button" onclick={() => void copyCode(block.text)} aria-label={$t("Copy {0} code", [languageLabel(block.language)])}>{copiedCode === block.text ? $t('Copied') : $t('Copy')}</button>{/if}</figcaption>
-        {#if rich && block.language === 'hermes-ui'}
+        {#if widgets && block.language === 'hermes-ui'}
           <!-- Widgets append their own container but do not replace this source node. -->
           <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
           <pre tabindex={printMode ? undefined : 0} role="region" aria-label={`${languageLabel(block.language)} code`}><code class="language-hermes-ui">{block.text}</code></pre>

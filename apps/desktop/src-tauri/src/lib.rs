@@ -12,6 +12,7 @@ mod agent_api;
 mod api;
 #[doc(hidden)]
 pub mod app_update;
+mod attention;
 mod automation_paths;
 mod autostart;
 mod background;
@@ -25,6 +26,7 @@ mod fusion;
 mod harness_configuration;
 mod harness_connect_api;
 mod harness_registry_api;
+mod interactive_answers;
 mod nano;
 mod navigation_guard;
 mod orchestration_api;
@@ -40,6 +42,7 @@ mod pipeline_library;
 mod placement_api;
 mod plugins;
 mod review_api;
+mod session_links;
 mod session_placement;
 #[cfg(test)]
 mod session_tools_contract_tests;
@@ -878,6 +881,19 @@ pub fn run() -> Result<(), tauri::Error> {
             state.workspace.set_board_hooks(std::sync::Arc::new(
                 board_sessions::BoardSessions::new(app.handle().clone()),
             ));
+            let interactive_answers_enabled = if safe_mode {
+                false
+            } else {
+                state
+                    .index
+                    .lock()
+                    .map_err(|_| std::io::Error::other("Could not load interactive answers"))?
+                    .interactive_answers()
+                    .map_err(|_| std::io::Error::other("Could not load interactive answers"))?
+            };
+            state
+                .workspace
+                .set_interactive_answers(interactive_answers_enabled);
             app.manage(board_service);
             // Fusion pairs (ADR-043): the lead's sidekick tool and the
             // broker-owned sidekick sessions.
@@ -885,6 +901,21 @@ pub fn run() -> Result<(), tauri::Error> {
                 .map_err(|_| std::io::Error::other("Could not open the Fusion pairs"))?;
             state.workspace.set_fusion_hooks(fusion_service.hooks());
             app.manage(fusion_service.clone());
+            let session_links_service =
+                session_links::SessionLinksService::open(app.handle(), &app_data_dir)
+                    .map_err(|_| std::io::Error::other("Could not open the linked chats"))?;
+            let linked_chats_enabled = !safe_mode
+                && state
+                    .index
+                    .lock()
+                    .map_err(|_| std::io::Error::other("Could not load linked chats"))?
+                    .linked_chats()
+                    .map_err(|_| std::io::Error::other("Could not load linked chats"))?;
+            session_links_service.set_enabled(linked_chats_enabled);
+            state
+                .workspace
+                .set_session_links_hooks(session_links_service.hooks());
+            app.manage(session_links_service.clone());
             let board_run_engine = board_runs::BoardRunEngine::default();
             app.manage(board_run_engine.clone());
             // Completes sub-pipeline steps when their child runs end (v6.7).
@@ -947,6 +978,7 @@ pub fn run() -> Result<(), tauri::Error> {
                 trigger_engine.start(app.handle().clone());
                 board_run_engine.start(app.handle().clone());
                 fusion_service.resume();
+                session_links_service.resume();
                 subpipeline_engine.start(app.handle().clone());
                 harness_registry_api::start_background_discovery(app.handle().clone());
             }
@@ -970,6 +1002,7 @@ pub fn run() -> Result<(), tauri::Error> {
             pipeline_library::pipeline_library_v1,
             board::board_command_v1,
             fusion::fusion_command_v1,
+            session_links::session_links_command_v1,
             teammates_api::teammates_command_v1,
             harness_registry_api::harness_registry_v1,
             harness_connect_api::harness_connect_v1,
@@ -993,6 +1026,7 @@ pub fn run() -> Result<(), tauri::Error> {
             nano::commands::nano_dictation_v1,
             nano::dictation_commands::dictation_settings_v1,
             nano::dictation_commands::dictation_transcribe_v1,
+            nano::dictation_commands::dictation_save_recording_v1,
             nano::remote::nano_remote_status_v1,
             nano::remote::nano_remote_set_enabled_v1,
             nano::remote::nano_remote_decide_v1,
@@ -1047,6 +1081,9 @@ pub fn run() -> Result<(), tauri::Error> {
             background::background_settings_v1,
             background::background_update_v1,
             background::background_tray_labels_v1,
+            interactive_answers::interactive_answers_settings_v1,
+            interactive_answers::interactive_answers_update_v1,
+            attention::attention_set_v1,
             orchestration_api::orchestration_list_runs_v6,
             orchestration_api::orchestration_get_run_v6,
             orchestration_api::orchestration_start_run_v6,

@@ -1996,3 +1996,69 @@ passed to agents started from a desktop launcher. Passing them is a separate
 decision, since it widens what a desktop launch gives agents. asdf and mise
 shims are directories on the path, not symlinks, so `PIUI_PI_CLI` and
 `PIUI_NODE` stay the override there.
+
+## ADR-064 — Chat and project marks, and a chat menu in the sidebar
+
+**Status:** Accepted 2026-11-16.
+
+Chats get the same three-dots menu in the sidebar as projects: rename, mark, delete. A chat or a
+project can carry a mark, an emoji or a coloured shape, kept as local interface metadata on this
+device and never sent to a harness. See [the decision](adr/064-chat-and-project-marks.md).
+
+## ADR-065 — Attention: a sound and a taskbar badge when a chat needs you
+
+**Status:** Accepted 2026-11-16.
+
+When a chat finishes a turn, fails or asks for a decision while the person is not looking at it,
+the application plays a short synthesized sound and shows the number of waiting chats as a red
+badge on the taskbar button. The sound is chosen in Settings; nothing is sent anywhere. See [the decision](adr/065-attention-sound-and-taskbar-badge.md).
+
+## ADR-066 — Unsent dictation recordings are kept locally until sent, saved or deleted
+
+**Status:** Accepted 2026-11-16.
+
+A dictation recording that could not be sent (a failed or empty transcription,
+a too large clip, a cut-short recording) stays in the WebView's local storage for
+at most 24 hours until the person retries, saves or deletes it; the limit is ten
+minutes. See [the decision](adr/066-unsent-dictation-recordings.md).
+
+## ADR-067 — Interactive answers in desktop chats
+
+**Status:** Accepted 2026-11-16.
+
+A desktop chat renders a fenced `hermes-ui` block of an assistant answer as an interactive form,
+table or chart with the renderer ported from Nano Web, without media, raw HTML or network access.
+A setting adds the instruction that teaches agents the format; rendering does not depend on it,
+and safe mode shows the plain block. See [the decision](adr/067-interactive-answers.md).
+
+## ADR-068 — Chat tabs, split panes and a collapsible sidebar
+
+**Status:** Accepted 2026-11-16.
+
+Open chats are tabs above the chat area, and up to four chats can be on screen at once in
+resizable split panes. The sidebar can be hidden. The layout is local interface state; no host
+contract changes. See [the decision](adr/068-chat-tabs-and-split-panes.md).
+
+## ADR-069 — Linked chats and the sessions host tool
+
+**Status:** Accepted 2026-11-16.
+
+A chat can have linked chats: children an agent starts with the `sessions` host tool, branches
+and peers a person links. Text that crosses chats is framed as information from another agent, a
+child never has more authority than its parent, and automatic wake-ups are bounded. See [the decision](adr/069-linked-chats.md).
+
+## ADR-070 — Chat branches through native forks and linked-chat metadata
+
+**Status:** Accepted 2026-11-16.
+
+A chat can be branched at its end or before one of its user messages. Claude Code and Codex fork their own native history; every other harness gets a linked branch, an ordinary chat that records where it came from. Branch origins live in the linked-chat store, so the placement file format is unchanged. A branch on its source's harness inherits the source's permission mode.
+
+See [the decision](adr/070-chat-branches.md).
+
+## ADR-071 — A turn's work folds behind one control
+
+**Status:** Accepted 2026-11-16.
+
+Reasoning no longer splits tool calls into separate rows: one group holds a whole stretch of work and, while it runs, names the current action. A finished turn with several groups folds them behind one control; replies stay visible.
+
+See [the decision](adr/071-turn-work-folding.md).

@@ -4,12 +4,17 @@
   import Pencil from '@lucide/svelte/icons/pencil';
   import Square from '@lucide/svelte/icons/square';
   import Trash from '@lucide/svelte/icons/trash-2';
+  import SmilePlus from '@lucide/svelte/icons/smile-plus';
+  import X from '@lucide/svelte/icons/x';
   import Power from '@lucide/svelte/icons/power';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
-  import { untrack } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import { t } from '../../features/locale/language';
+  import { composerRequest } from '../../host-api/composerClient';
   import { statusLabel } from '../../features/workspace/workspaceState';
-  import { Badge, Button, EmptyState, IconButton, Menu, Skeleton, Spinner, matchesShortcut } from '../../lib/ui';
+  import { Badge, Button, EmptyState, IconButton, Menu, Skeleton, Spinner, matchesShortcut, toasts } from '../../lib/ui';
+  import type { ConversationMessageAction } from '../../../../../contracts/conversation-presentation-v1';
+  import { readWorkspaceHistory } from '../../host-api/workspaceHistory';
   import { harnessMeta } from '../harnessMeta';
   import ApprovalCard from './ApprovalCard.svelte';
   import HarnessMark from './HarnessMark.svelte';
@@ -24,9 +29,16 @@
   import SearchIcon from '@lucide/svelte/icons/search';
   import GitCompare from '@lucide/svelte/icons/git-compare';
   import ArrowRightLeft from '@lucide/svelte/icons/arrow-right-left';
+  import Link2 from '@lucide/svelte/icons/link-2';
+  import Send from '@lucide/svelte/icons/send';
+  import { sessionLinks } from '../links/sessionLinks.svelte';
   import { composerInserts } from '../review/composerInserts.svelte';
   import { placements } from '../worktrees/placements.svelte';
   import { startHandoff } from '../handoff/startHandoff';
+  import { startBranch } from '../branch/branchChat';
+  import { announceBranch } from '../branch/branchFeedback';
+  import { branchCutAfter, buildMessageControls, editDraft } from '../branch/messageActions';
+  import { CopyFeedback } from '../branch/copyFeedback.svelte';
   import { useWorkspace } from './context';
   import ChatRunCard from '../chatPipelines/ChatRunCard.svelte';
   import { chatPipelines } from '../chatPipelines/chatPipelines.svelte';
@@ -40,6 +52,8 @@
   import { fusionMembership } from '../fusion/fusionMembership.svelte';
   import NanoPetStatus from '../nano/NanoPetStatus.svelte';
   import { remoteMode } from '../nano/remoteMode';
+  import Mark from '../marks/Mark.svelte';
+  import { marks } from '../marks/marks.svelte';
 
   // Loaded on first use; a script-level import lets the dev server see its dependencies.
   const loadReviewPanel = () => import('../review/ReviewPanel.svelte');
@@ -47,12 +61,30 @@
   interface Props {
     sessionId: string;
     onDelete: (sessionId: string) => void;
+    /** False for a chat in a split pane that is not the selected one: no shortcuts, no page landmark. */
+    active?: boolean;
+    /** Present when several panes are open: closes this one (the tab stays). */
+    onClosePane?: () => void;
   }
-  let { sessionId, onDelete }: Props = $props();
+  let { sessionId, onDelete, active = true, onClosePane = undefined }: Props = $props();
   const store = useWorkspace();
 
   const session = $derived(store.catalog.sessions.find((item) => item.id === sessionId));
   const snapshot = $derived(store.snapshots[sessionId]);
+  // The selected chat reports through the store's single fields, a chat in a pane through its own.
+  const loadingNow = $derived(store.loadingFor(sessionId));
+  const loadError = $derived(store.errorFor(sessionId));
+  // A pane opened beside the selected chat loads itself.
+  // It reads the derived `snapshot`, which changes only with this chat's own snapshot: `store.snapshots` is replaced on every
+  // event of any chat, and a failed load would otherwise be asked again, and its error redrawn, each time.
+  $effect(() => {
+    if (!active && !snapshot) untrack(() => void store.showSession(sessionId));
+  });
+  // A narrow pane drops the inspector and the header extras instead of overflowing.
+  let width = $state(0);
+  let mainWidth = $state(0);
+  const roomy = $derived(width === 0 || width >= 720);
+  const compact = $derived(mainWidth !== 0 && mainWidth < 560);
   // A message steered into a running turn stays in the chat until the agent's runtime reports it.
   const turnActive = $derived(snapshot?.session.status === 'running' || snapshot?.session.status === 'stopping');
   const echoes = $derived(snapshot && turnActive ? waitingEchoes(steerEchoes.list(sessionId), snapshot.blocks) : []);
@@ -76,6 +108,13 @@
   });
   const isSidekick = $derived(fusion?.role === 'sidekick');
   const isLead = $derived(fusion?.role === 'lead');
+  // Linked chats (ADR-069): the menu offers "Send to chat…" only once this chat has links.
+  $effect(() => {
+    const id = sessionId;
+    untrack(() => void sessionLinks.load(id));
+  });
+  const hasLinks = $derived((sessionLinks.peek(sessionId)?.length ?? 0) > 0);
+  let linkDialog = $state<'link' | 'send' | undefined>(undefined);
   // Only the sidekick in use is the broker's: a retired one's chat may be deleted.
   const currentSidekick = $derived(fusionMembership.isCurrentSidekick(sessionId));
   // Pipeline runs started from this chat, shown among its messages by time.
@@ -91,6 +130,8 @@
   let reviewOpen = $state(false);
   let searchOpen = $state(false);
   let renaming = $state(false);
+  let marking = $state(false);
+  const sessionMark = $derived(marks.session(sessionId));
   let titleDraft = $state('');
   let titleInput = $state<HTMLInputElement | null>(null);
 
@@ -127,14 +168,15 @@
   }
 
   function keydown(event: KeyboardEvent): void {
+    if (!active) return;
     if (remoteMode && matchesShortcut(event, 'Mod+Shift+G')) return;
-    if (matchesShortcut(event, 'Mod+Alt+B')) {
+    if (roomy && matchesShortcut(event, 'Mod+Alt+B')) {
       event.preventDefault();
       toggleDetails();
     } else if (matchesShortcut(event, 'Mod+F')) {
       event.preventDefault();
       searchOpen = true;
-    } else if (matchesShortcut(event, 'Mod+Shift+G')) {
+    } else if (roomy && matchesShortcut(event, 'Mod+Shift+G')) {
       event.preventDefault();
       toggleReview();
     }
@@ -148,6 +190,59 @@
   );
   const composerStops = $derived(composerShown && (session?.status === 'running' || session?.status === 'stopping'));
 
+  async function reply(text: string): Promise<boolean> {
+    if (!composerShown || running) return false;
+    try {
+      await composerRequest({ type: 'send', sessionId, requestId: crypto.randomUUID(), text, mode: 'prompt' });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // Message controls: copy everywhere; edit and branch where this chat can start another one.
+  const copied = new CopyFeedback();
+  onDestroy(() => copied.dispose());
+  let branching = $state(false);
+  const branchable = $derived(!remoteMode && !isSidekick && !session?.runId);
+  const messageControls = $derived(
+    snapshot ? buildMessageControls(snapshot.blocks, { readOnly: !branchable, running, locked: store.safeMode || branching, copiedId: copied.id }) : [],
+  );
+
+  async function messageAction(id: string, action: ConversationMessageAction): Promise<void> {
+    const current = snapshot;
+    const block = current?.blocks.find((item) => item.id === id);
+    if (!current || !block) return;
+    if (action === 'copy') {
+      await copied.copy(block, () => readWorkspaceHistory(current.session.id));
+      return;
+    }
+    if ((action !== 'edit' && action !== 'branch') || !branchable || branching || store.safeMode) return;
+    const cut = action === 'edit' ? { at: 'before' as const, blockId: id } : branchCutAfter(current.blocks, id);
+    if (!cut) return;
+    branching = true;
+    try {
+      // A long prompt is shown cut short: the draft is the whole message, read from the saved history like Copy does.
+      let draft: string | undefined = '';
+      if (action === 'edit') {
+        draft = await editDraft(block, () => readWorkspaceHistory(current.session.id));
+        if (draft === undefined) {
+          toasts.error($t('The whole message could not be read. No branch was created.'));
+          return;
+        }
+      }
+      const result = await startBranch(store, current, cut, { open: 'here', translate: $t, ...(draft ? { draft } : {}) });
+      if (!result.ok) {
+        toasts.error($t(result.error));
+        return;
+      }
+      if (result.error) toasts.error($t(result.error));
+      announceBranch(result, $t, (id) => void store.openSession(id));
+    } finally {
+      branching = false;
+    }
+  }
+
   const statusTone = $derived(
     session?.status === 'failed' ? 'danger' : running ? 'accent' : session?.status === 'closed' ? 'neutral' : undefined,
   );
@@ -156,10 +251,11 @@
 <svelte:window onkeydown={keydown} />
 
 {#if session}
-  <div class="chat" class:chat--details={detailsOpen && !reviewOpen} class:chat--review={reviewOpen}>
-    <section class="chat__main" aria-labelledby="chat-title">
+  <div class="chat" class:chat--details={roomy && detailsOpen && !reviewOpen} class:chat--review={roomy && reviewOpen} bind:clientWidth={width}>
+    <section class="chat__main" aria-labelledby={active ? 'chat-title' : undefined} aria-label={active ? undefined : session.title} bind:clientWidth={mainWidth}>
       <header class="chat__head">
         <HarnessMark kind={session.harness} size={20} decorative={false} />
+        {#if sessionMark}<Mark mark={sessionMark} size={18} />{/if}
         {#if renaming}
           <input
             bind:this={titleInput}
@@ -173,15 +269,15 @@
             }}
           />
         {:else}
-          <h1 id="chat-title" ondblclick={beginRename} title={session.title}>{session.title}</h1>
+          <h1 id={active ? 'chat-title' : undefined} ondblclick={beginRename} title={session.title}>{session.title}</h1>
         {/if}
-        {#if statusTone}
+        {#if statusTone && !compact}
           <Badge tone={statusTone}>
             {#if running}<Spinner size={10} />{/if}
             {$t(statusLabel(session.status))}
           </Badge>
         {/if}
-        {#if workspace}
+        {#if workspace && !compact}
           <span class="chat__meta">{workspace.personal ? $t('Personal chats') : workspace.name}</span>
         {/if}
         {#if boardProject}
@@ -211,17 +307,26 @@
             </Button>
           {/if}
           <IconButton label={$t('Search this chat')} shortcut="Mod+F" active={searchOpen} onclick={() => (searchOpen = !searchOpen)}><SearchIcon /></IconButton>
-          {#if !remoteMode}
+          {#if !remoteMode && roomy}
             <IconButton label={$t('Review changes')} shortcut="Mod+Shift+G" active={reviewOpen} onclick={toggleReview}><GitCompare /></IconButton>
           {/if}
-          <IconButton label={$t('Details')} shortcut="Mod+Alt+B" active={detailsOpen && !reviewOpen} onclick={toggleDetails}><PanelRight /></IconButton>
+          {#if roomy}
+            <IconButton label={$t('Details')} shortcut="Mod+Alt+B" active={detailsOpen && !reviewOpen} onclick={toggleDetails}><PanelRight /></IconButton>
+          {/if}
           <Menu
             align="end"
             items={[
               { label: $t('Rename'), icon: Pencil, onSelect: beginRename },
+              { label: $t('Mark…'), icon: SmilePlus, onSelect: () => (marking = true) },
               { label: $t('Refresh from history'), icon: RefreshCw, onSelect: () => void store.reconcileSession(session.id) },
               ...(snapshot && !session.runId && !remoteMode
                 ? [{ label: $t('Continue in another harness…'), icon: ArrowRightLeft, disabled: store.safeMode, onSelect: () => void startHandoff(store, snapshot, $t) }]
+                : []),
+              ...(!session.runId && !isSidekick && !remoteMode
+                ? [
+                    { label: $t('Link chat…'), icon: Link2, disabled: store.safeMode, onSelect: () => (linkDialog = 'link') },
+                    ...(hasLinks ? [{ label: $t('Send to chat…'), icon: Send, disabled: store.safeMode, onSelect: () => (linkDialog = 'send') }] : []),
+                  ]
                 : []),
               ...(session.status !== 'closed'
                 ? [{ label: currentSidekick ? $t('Stop sidekick process and its round') : $t('Stop agent process'), icon: Power, disabled: store.sessionActionBusy, onSelect: () => void store.close(session.id) }]
@@ -236,12 +341,29 @@
               <IconButton label={$t('Chat actions')} tooltip={false} {...props}><Ellipsis /></IconButton>
             {/snippet}
           </Menu>
+          {#if linkDialog === 'link'}
+            {#await import('../links/LinkChatDialog.svelte') then dialog}
+              <dialog.default sessionId={session.id} onClose={() => (linkDialog = undefined)} />
+            {/await}
+          {:else if linkDialog === 'send'}
+            {#await import('../links/SendToChatDialog.svelte') then dialog}
+              <dialog.default sessionId={session.id} onClose={() => (linkDialog = undefined)} />
+            {/await}
+          {/if}
+          {#if marking}
+            {#await import('../marks/MarkPicker.svelte') then picker}
+              <picker.default target={{ kind: 'session', id: session.id }} onClose={() => (marking = false)} />
+            {/await}
+          {/if}
+          {#if onClosePane}
+            <IconButton label={$t('Close pane')} onclick={() => onClosePane?.()}><X /></IconButton>
+          {/if}
         </div>
       </header>
 
-      {#if store.sessionError && store.selectedSessionId === session.id}
+      {#if loadError}
         <div class="banner" role="alert">
-          <span>{$t(store.sessionError)}</span>
+          <span>{$t(loadError)}</span>
           <Button size="sm" variant="ghost" onclick={() => void store.reconcileSession(session.id)}>{$t('Check status')}</Button>
         </div>
       {/if}
@@ -249,10 +371,15 @@
       {#if snapshot}
           <Transcript
             blocks={shownBlocks}
-            loading={store.sessionLoading}
+            interactive={!store.safeMode}
+            onReply={reply}
+            {messageControls}
+            onMessageAction={messageAction}
+            loading={loadingNow}
             sessionKey={snapshot.session.id}
             historySessionId={snapshot.session.id}
             agentLabel={harnessMeta(snapshot.session.harness).label}
+            {running}
             bind:searchOpen
             inserts={runInserts}
             emptyText={fusion?.role === 'sidekick' ? $t('No briefs yet. The lead sends one when it delegates work.') : undefined}
@@ -316,24 +443,27 @@
                   interrupt={() => store.interrupt(snapshot.session.id)}
                   interruptBusy={store.interruptBusy}
                   safeMode={store.safeMode}
+                  {active}
                   onEditMacro={(id) => { macros.requestEdit(id); store.navigate({ name: 'settings', section: 'macros' }); }}
                 />
               {/key}
             {/if}
             <ExtensionSurface sessionId={snapshot.session.id} status={snapshot.session.status} placement="below" agentLabel={harnessMeta(snapshot.session.harness).label} />
           </div>
-        {:else if store.sessionLoading}
+        {:else if loadingNow}
           <div class="loading"><Skeleton lines={6} /></div>
         {:else}
-          <EmptyState title={$t('The chat could not be opened')} description={store.sessionError ? $t(store.sessionError) : undefined}>
+          <EmptyState title={$t('The chat could not be opened')} description={loadError ? $t(loadError) : undefined}>
             {#snippet actions()}
-              <Button size="sm" onclick={() => void store.openSession(session.id)} disabled={store.safeMode}>{$t('Try again')}</Button>
+              <Button size="sm" onclick={() => void (active ? store.openSession(session.id) : store.showSession(session.id))} disabled={store.safeMode}>{$t('Try again')}</Button>
             {/snippet}
           </EmptyState>
         {/if}
     </section>
 
-    {#if reviewOpen}
+    {#if !roomy}
+      <!-- A narrow pane has no room for an inspector. -->
+    {:else if reviewOpen}
       <!-- Loaded on first use; keyed so each chat gets its own review state. -->
       {#await loadReviewPanel() then review}
         {#key session.id}

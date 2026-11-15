@@ -3,6 +3,7 @@
   import Bot from '@lucide/svelte/icons/bot';
   import FolderCog from '@lucide/svelte/icons/folder-cog';
   import Keyboard from '@lucide/svelte/icons/keyboard';
+  import Bell from '@lucide/svelte/icons/bell';
   import Mic from '@lucide/svelte/icons/mic';
   import SquareSlash from '@lucide/svelte/icons/square-slash';
   import Info from '@lucide/svelte/icons/info';
@@ -14,13 +15,17 @@
   import Power from '@lucide/svelte/icons/power';
   import GitBranch from '@lucide/svelte/icons/git-branch';
   import WorktreesSettings from '../worktrees/WorktreesSettings.svelte';
+  import AttentionSettings from '../settings/AttentionSettings.svelte';
   import BackgroundSettings from '../settings/BackgroundSettings.svelte';
   import DictationSettings from '../settings/DictationSettings.svelte';
   import MacrosSettings from '../settings/MacrosSettings.svelte';
   import { t, language, setLanguage, type Language } from '../../features/locale/language';
   import type { Preferences } from '../../host-api/types';
   import type { WorkspaceSummary } from '../../../../../contracts/workspace-v15';
-  import { Badge, Button, Kbd, Segmented } from '../../lib/ui';
+  import { Badge, Button, Kbd, Segmented, Switch } from '../../lib/ui';
+  import { interactiveAnswers } from '../interactive/interactiveAnswers.svelte';
+  import { sessionLinks } from '../links/sessionLinks.svelte';
+  import { remoteMode } from '../nano/remoteMode';
   import type { SettingsSection } from '../workspaceStore.svelte';
   import ExtensionsSettings from '../settings/ExtensionsSettings.svelte';
   import HarnessesSettings from '../settings/HarnessesSettings.svelte';
@@ -38,6 +43,7 @@
   }
   let { section, onTrust }: Props = $props();
   const store = useWorkspace();
+  $effect(() => { if (section === 'general') { void interactiveAnswers.load(); void sessionLinks.loadSettings(); } });
 
   const sections: { id: SettingsSection; label: string; icon: typeof Info }[] = [
     { id: 'general', label: 'General', icon: SlidersHorizontal },
@@ -48,6 +54,7 @@
     { id: 'projects', label: 'Projects', icon: FolderCog },
     { id: 'worktrees', label: 'Worktrees', icon: GitBranch },
     { id: 'background', label: 'Background', icon: Power },
+    { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'macros', label: 'Macros', icon: SquareSlash },
     { id: 'dictation', label: 'Dictation', icon: Mic },
     { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard },
@@ -75,6 +82,10 @@
         { keys: ['Mod+F'], label: 'Search this chat' },
         { keys: ['Mod+Shift+G'], label: 'Review changes' },
         { keys: ['Mod+Alt+B'], label: 'Toggle chat details' },
+        { keys: ['Mod+B'], label: 'Hide or show the sidebar' },
+        { keys: ['Mod+W'], label: 'Close tab' },
+        { keys: ['Ctrl+Tab'], label: 'Next tab' },
+        { keys: ['F6'], label: 'Next pane' },
         { keys: ['Mod+.'], label: 'Stop the running turn' },
         { keys: ['Enter'], label: 'Send message' },
         { keys: ['Shift+Enter'], label: 'New line in a message' },
@@ -125,6 +136,36 @@
             onValueChange={(value: Language) => setLanguage(value)}
           />
         </div>
+        <div class="row">
+          <div>
+            <strong>{$t('Interactive answers')}</strong>
+            <small>{$t('Forms, tables and charts in agent answers. Applies to chats started after the change.')}</small>
+            {#if interactiveAnswers.error}<small role="alert">{$t(interactiveAnswers.error)}</small>{/if}
+          </div>
+          <Switch
+            label={$t('Interactive answers')}
+            hideLabel
+            checked={interactiveAnswers.enabled}
+            disabled={!interactiveAnswers.loaded || interactiveAnswers.readOnly}
+            onCheckedChange={(enabled) => void interactiveAnswers.set(enabled)}
+          />
+        </div>
+        {#if !remoteMode}
+          <div class="row">
+            <div>
+              <strong>{$t('Linked chats')}</strong>
+              <small>{$t('Agents can start other chats and exchange messages with them.')}</small>
+              {#if sessionLinks.settings.error}<small role="alert">{$t(sessionLinks.settings.error)}</small>{/if}
+            </div>
+            <Switch
+              label={$t('Linked chats')}
+              hideLabel
+              checked={sessionLinks.settings.enabled}
+              disabled={!sessionLinks.settings.loaded || sessionLinks.settings.readOnly}
+              onCheckedChange={(enabled) => void sessionLinks.setEnabled(enabled)}
+            />
+          </div>
+        {/if}
         <div class="row">
           <div>
             <strong>{$t('Visual style')}</strong>
@@ -248,6 +289,8 @@
       <WorktreesSettings />
     {:else if section === 'background'}
       <BackgroundSettings />
+    {:else if section === 'notifications'}
+      <AttentionSettings />
     {:else if section === 'macros'}
       <MacrosSettings />
     {:else if section === 'dictation'}

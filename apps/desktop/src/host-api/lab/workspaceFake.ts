@@ -245,8 +245,7 @@ function workspaceCommand(runtime: LabSessions, command: WorkspaceCommand): Work
       const record = authorizeLive(state, command.sessionId);
       const title = normalizedTitle(command.title);
       if (title === undefined) throw workspaceFailure('INVALID_ARGUMENT');
-      const live = requireLive(record);
-      if (live.status === 'failed') throw workspaceFailure('RUNTIME_FAILED');
+      if (record.live?.status === 'failed') throw workspaceFailure('RUNTIME_FAILED');
       record.title = title;
       runtime.touch(record);
       runtime.publishSession(record);

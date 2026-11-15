@@ -25,6 +25,7 @@
   import { Button, IconButton, Input, Skeleton, Spinner } from '../../lib/ui';
   import ActivityGroupView from '../../app/chat/transcript/ActivityGroupView.svelte';
   import ReasoningView from '../../app/chat/transcript/ReasoningView.svelte';
+  import TurnProcessView from '../../app/chat/transcript/TurnProcessView.svelte';
   import { createReasoningClock } from '../../app/chat/transcript/reasoningClock';
   import { interleave, timeOf, type TimedInsert } from '../../app/chatPipelines/interleave';
   import { splitPipelineContext } from '../../app/chatPipelines/chatPipeline';
@@ -43,12 +44,15 @@
       write(key: string, value: { top: number; following: boolean }): void;
     };
     language?: 'en' | 'ru';
+    /** Whether the conversation's agent is working. Omitted when the owner cannot tell: the last turn then stays open. */
+    running?: boolean;
     attachments?: readonly ConversationAttachment[];
     onOpenAttachment?: (id: string) => Promise<void>;
     onDownloadAttachment?: (id: string) => Promise<void>;
     resolveAttachment?: (id: string) => Promise<ConversationMedia>;
     messagePresentation?: readonly ConversationMessagePresentation[];
     decorateMessage?: ConversationOwner['decorateMessage'];
+    richMarkdown?: boolean;
     decorateMessageHeader?: ConversationOwner['decorateMessageHeader'];
     printMode?: boolean;
     announceMessages?: boolean;
@@ -75,12 +79,14 @@
     nativeMarkers = false,
     positionStore,
     language = 'en',
+    running = undefined,
     attachments = [],
     onOpenAttachment,
     onDownloadAttachment,
     resolveAttachment,
     messagePresentation = [],
     decorateMessage,
+    richMarkdown,
     decorateMessageHeader,
     printMode = false,
     announceMessages = false,
@@ -120,7 +126,7 @@
   // Unchanged rows keep their identity while a reply streams.
   const groupBlocks = createTimelineGrouper();
   const reasoningClock = createReasoningClock();
-  const items = $derived<TimelineViewItem[]>(printMode ? blocks.map(block => ({ type: 'block', block })) : groupBlocks(blocks));
+  const items = $derived<TimelineViewItem[]>(printMode ? blocks.map(block => ({ type: 'block', block })) : groupBlocks(blocks, running ?? 'unknown'));
   const controlsByBlock = $derived(new Map(messageControls?.map(item => [item.blockId, item])));
   const appearanceByBlock = $derived(new Map(messagePresentation.map(item => [item.blockId, item])));
   const decorator = untrack(() => decorateMessage);
@@ -181,6 +187,10 @@
   const shown = $derived<TimelineViewItem[]>(
     searching ? (matches[currentMatch] ? [{ type: 'block', block: matches[currentMatch] }] : []) : visible,
   );
+  // A turn's groups stay shown when the page window cut its control off.
+  const turnControls = $derived(new Set(visible.flatMap(item => (item.type === 'turn-process' ? [item.id] : []))));
+  const folded = (turnId: string | undefined): boolean => turnId !== undefined && turnControls.has(turnId) && !openState[turnId];
+  // A turn's control takes the time of its first block, like the first group it folds.
   const itemTime = (item: TimelineViewItem): number => timeOf(item.type === 'block' ? item.block.createdAt : item.blocks[0]?.createdAt);
   // Runs before the first shown message wait until earlier messages are shown.
   const placed = $derived.by(() => {
@@ -462,19 +472,25 @@
         </div>
       {/if}
 
-      {#each rows as row (row.type === 'insert' ? `insert:${row.id}` : row.item.type === 'activity-group' ? row.item.id : row.item.block.id)}
+      {#each rows as row (row.type === 'insert' ? `insert:${row.id}` : row.item.type === 'block' ? row.item.block.id : row.item.id)}
         {#if row.type === 'insert'}
           <div class="item item--insert">{@render insert?.(row.id)}</div>
         {:else}
         {@const item = row.item}
-        {#if item.type === 'activity-group'}
-          <div class="item">
-            <ActivityGroupView group={item} {language} {openState} onOpenChange={setOpen} />
-            {#each item.blocks as block (block.id)}
-              {@render attachmentList(attachmentsByBlock.get(block.id) ?? [])}
-              {@render messageFooter(block)}
-            {/each}
+        {#if item.type === 'turn-process'}
+          <div class="item item--turn">
+            <TurnProcessView {item} {language} open={openState[item.id] ?? false} onToggle={(open) => setOpen(item.id, open)} />
           </div>
+        {:else if item.type === 'activity-group'}
+          {#if !folded(item.turnId)}
+            <div class="item">
+              <ActivityGroupView group={item} {language} {openState} onOpenChange={setOpen} />
+              {#each item.blocks as block (block.id)}
+                {@render attachmentList(attachmentsByBlock.get(block.id) ?? [])}
+                {@render messageFooter(block)}
+              {/each}
+            </div>
+          {/if}
         {:else}
           {@const block = item.block}
           {@const appearance = appearanceByBlock.get(block.id)}
@@ -496,7 +512,7 @@
               <div class="user" class:user--pending={block.status === 'streaming'}>
                 {#if user.text || !user.images}
                   <div class="message-markdown" use:decorate={block}>
-                    {#if appearance?.literal}<p class="literal">{user.text}</p>{:else}<MarkdownContent source={user.text} rich={!!decorator} {printMode} />{/if}
+                    {#if appearance?.literal}<p class="literal">{user.text}</p>{:else}<MarkdownContent source={user.text} rich={richMarkdown ?? !!decorator} widgets={!!decorator} {printMode} />{/if}
                   </div>
                 {/if}
                 {#if user.images}
@@ -513,26 +529,26 @@
               <article class="assistant" class:assistant--end={turnEnds.has(block.id)} class:assistant--failed={block.status === 'failed'} class:assistant--stopped={block.status === 'interrupted'}>
                 {#if block.text}
                   <div class="message-markdown" use:decorate={block}>
-                    {#if appearance?.literal}<p class="literal">{block.text}</p>{:else}<MarkdownContent source={fullAnswers[block.id] ?? block.text} rich={!!decorator} {printMode} />{/if}
+                    {#if appearance?.literal}<p class="literal">{block.text}</p>{:else}<MarkdownContent source={fullAnswers[block.id] ?? block.text} rich={richMarkdown ?? !!decorator} widgets={!!decorator} {printMode} />{/if}
                   </div>
                 {:else if block.safeSummary}
                   <p class="muted">{block.safeSummary}</p>
                 {/if}
                 {#if block.status === 'streaming' && !printMode}<span class="caret" aria-hidden="true"></span>{/if}
-                {#if block.status === 'failed' || block.status === 'interrupted' || (messageControls === undefined && turnEnds.has(block.id) && block.status !== 'streaming' && block.text)}
+                {#if block.status === 'failed' || block.status === 'interrupted' || (turnEnds.has(block.id) && block.status !== 'streaming' && block.text && (messageControls === undefined || (block.truncated && !fullAnswers[block.id] && readHistory)))}
                 <div class="assistant__meta">
                   {#if block.status === 'failed'}<span class="warn">{$t('The turn failed')}</span>{/if}
                   {#if block.status === 'interrupted'}<span class="warn">{$t('Stopped')}</span>{/if}
-                  {#if block.text && messageControls === undefined && !printMode}
+                  {#if block.text && !printMode}
                     <span class="assistant__actions">
-                      <IconButton size="sm" label={$t('Copy answer')} onclick={() => void answerAction(block, true)} disabled={busyAnswers[block.id]}><Copy /></IconButton>
+                      {#if messageControls === undefined}<IconButton size="sm" label={$t('Copy answer')} onclick={() => void answerAction(block, true)} disabled={busyAnswers[block.id]}><Copy /></IconButton>{/if}
                       {#if block.truncated && !fullAnswers[block.id] && readHistory}
                         <Button size="sm" variant="ghost" onclick={() => void answerAction(block, false)} loading={busyAnswers[block.id]}>
                           {#snippet leading()}<Expand />{/snippet}
                           {$t('Show full answer')}
                         </Button>
                       {/if}
-                      {#if block.createdAt}<time datetime={block.createdAt}>{time(block.createdAt)}</time>{/if}
+                      {#if block.createdAt && messageControls === undefined}<time datetime={block.createdAt}>{time(block.createdAt)}</time>{/if}
                     </span>
                   {/if}
                 </div>
@@ -646,6 +662,9 @@
   }
   .item--insert {
     content-visibility: visible;
+  }
+  .item--turn {
+    contain-intrinsic-size: auto 32px;
   }
   .handed {
     width: fit-content;

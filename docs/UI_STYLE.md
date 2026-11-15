@@ -91,6 +91,22 @@ does not prove that a setting reaches the harness.
   properties with `style:` directives because the CSP forbids inline `style`
   attributes.
 
+## Chat activity
+
+- A turn reads as replies with one line of work between them (ADR-071). Every
+  adjacent reasoning and tool block is one group. Only a reply, a message, an
+  error or a compatibility block ends it. Reasoning is a row inside its group,
+  never a control of its own.
+- A group that is working names the action and its detail ("Running a
+  command · pnpm test"). A finished group names what was done, with counts
+  and diff totals. Failed and stopped calls are marked on the group.
+- A finished turn with two or more groups folds behind one control ("Worked
+  for 2m 14s · edited 1 file, ran 4 commands"). Replies stay visible. A turn
+  that is running, failed or stopped stays open.
+- An opened group is capped at `min(420px, 55vh)` and scrolls inside the
+  transcript. A new kind of call gets an icon in `toolIcons.ts` and its
+  phrases in `toolKinds.ts`; an unknown tool stays generic.
+
 ## Execution workbench
 
 Use dependency levels for graph layout and group parallel work in the same column.

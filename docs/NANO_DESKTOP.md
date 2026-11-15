@@ -382,7 +382,7 @@ on the Nano web app (`meta.links.cloud`, default `https://hermes.nanoagents.ru/`
   Signed-out and safe-mode screens make no avatar request and have no empty
   avatar slot or unavailable avatar preference.
 - Dictation: a composer feature that works for every harness. The WebView
-  records with `MediaRecorder` (push-to-talk, at most two minutes, visible
+  records with `MediaRecorder` (push-to-talk, at most ten minutes, visible
   recording state) and sends the bytes to the host. With the Nano source the
   host posts them to `media/dictation` (`nano_dictation_v1`, only when
   `capabilities.dictation` and `features.dictation` are both true). With
@@ -390,8 +390,10 @@ on the Nano web app (`meta.links.cloud`, default `https://hermes.nanoagents.ru/`
   `<base>/audio/transcriptions` (`dictation_transcribe_v1`, ADR-061) using its
   own settings and the key from the OS credential store. The host returns text
   for the composer. The WebView makes no network request, so the CSP is
-  unchanged. The recording stays in memory for one retry and is never written
-  to disk. WebView2's own microphone prompt applies; whether the host can
+  unchanged. The recording stays in memory while it runs. A clip that could not be
+  sent (failed or empty transcription, too large, cut short) is kept in the
+  WebView's own storage for at most 24 hours, one per composer, until the person
+  retries it, saves it as a file or deletes it (ADR-066). WebView2's own microphone prompt applies; whether the host can
   answer it is unverified.
 
 ## 11. Safe mode

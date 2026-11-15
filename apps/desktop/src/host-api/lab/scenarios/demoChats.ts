@@ -71,6 +71,19 @@ function lisbon(): LabSeed['sessions'][number] {
   });
 }
 
+function cacheSizing(): LabSeed['sessions'][number] {
+  // Kept verbatim from interactive_answers_instruction.md so the demo shows the taught format.
+  const example = '{"title":"Cache sizing","state":{"rps":400,"hit":80},"computed":{"miss":"=round(rps * (100 - hit) / 100, 0)"},"body":[{"type":"grid","columns":2,"children":[{"type":"slider","bind":"rps","label":"Requests per second","min":50,"max":5000,"step":50,"format":"integer"},{"type":"slider","bind":"hit","label":"Cache hit rate","min":0,"max":100,"step":1,"format":"percent"}]},{"type":"row","children":[{"type":"stat","label":"Reach the database","value":"=miss","format":"integer","suffix":"per second","tone":"accent"},{"type":"stat","label":"Served from cache","value":"=rps - miss","format":"integer","suffix":"per second"}]},{"type":"callout","tone":"warning","text":"More than 500 requests per second reach the database.","when":"miss > 500"},{"type":"button","label":"Plan for this load","action":{"type":"send","text":"Plan the cache for {{rps}} requests per second at a {{hit}} % hit rate"}}]}';
+  const transcript = new TranscriptBuilder('pi', 'cache-sizing', LAB_BASE_TIME - HOUR)
+    .user('Help me size a cache for 400 requests per second at an 80 percent hit rate.')
+    .assistant('Adjust the load and hit rate to estimate database traffic.\n\n```hermes-ui\n' + example + '\n```');
+  return sessionRecord({
+    id: demoSessionId('cache-sizing'), workspaceId: DEMO_PROJECTS.chats, harness: 'pi', title: 'Cache sizing',
+    blocks: transcript.build(), updatedAt: transcript.lastInstant(), model: model('pi', 'anthropic-lab', 'claude-lab-haiku'),
+    live: 'idle',
+  });
+}
+
 function lifetimes(): LabSeed['sessions'][number] {
   const transcript = new TranscriptBuilder('hermes', 'lifetimes', LAB_BASE_TIME - 5 * HOUR)
     .user(LIFETIMES_PROMPT)
@@ -88,6 +101,7 @@ function transport(): LabSeed['sessions'][number] {
     .thinking(TRANSPORT_PLAN)
     .search(RG_COMMAND, RG_OUTPUT)
     .fileChange('apps/desktop/src/host-api/transport.ts', TRANSPORT_DIFF)
+    .assistant('The edits are in place. Running the checks next.')
     .command(CHECK_COMMAND, CHECK_OUTPUT, 'complete', 40)
     .command(TEST_COMMAND, vitestReport(47, 'transport'), 'complete', 25)
     .command('cargo build -p piui-desktop', cargoBuildLog(420), 'complete', 160)
@@ -358,14 +372,14 @@ function extensionPlayground(): LabSeed['sessions'][number] {
   });
 }
 
-/** Thirteen chat sessions across all five harnesses, every block kind, an MCP form request and an extension playground. */
+/** Demo chats across all five harnesses, every block kind, an MCP form request and interactive answers. */
 export function demoChats(): { sessions: LabSeed['sessions']; activity: SeedActivity[] } {
   const pending = scheduler();
   const streaming = renderer();
   const triage = issueTriage();
   return {
     sessions: [
-      lisbon(), lifetimes(), transport(), pending.record, streaming.record,
+      lisbon(), cacheSizing(), lifetimes(), transport(), pending.record, streaming.record,
       crash(), compaction(), storyboard(), renderFarm(), audit(), keymap(), extensionPlayground(), triage.record,
     ],
     activity: [pending.activity, streaming.activity, triage.activity],

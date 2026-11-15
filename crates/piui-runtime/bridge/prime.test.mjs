@@ -308,6 +308,20 @@ test("Prime reports a missing or reshaped SDK export as a typed protocol mismatc
   try { assert.ok(events.values.some((event) => event.type === "notice" && event.code === "unsupported-board-tool")); } finally { await board.dispose(); }
 });
 
+test("optional sessions support leaves Prime usable with a notice when the callback or tool builder is missing", async () => {
+  for (const overrides of [
+    { options: {}, callback: undefined },
+    { options: { packageRoot: await installedPackage("0.9.5", { omit: ["defineTool"], typebox: true }) }, callback: async () => ({ ok: true, chats: [] }) },
+  ]) {
+    const e = eventCollector();
+    const adapter = await createPrimeAdapter(await config({ hostTools: ["sessions"], ...overrides.options }), e.emit, undefined, undefined, overrides.callback);
+    try {
+      assert.ok(e.values.some(event => event.type === "notice" && event.code === "unsupported-sessions-tool"));
+      assert.ok(!(await adapter.resources()).items.some(item => item.id === "sessions"));
+    } finally { await adapter.dispose(); }
+  }
+});
+
 test("Prime shows one safe fallback per unknown SDK event type and survives a throwing event", async () => {
   const events = eventCollector();
   const adapter = await createPrimeAdapter(await config(), events.emit);

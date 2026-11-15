@@ -1,18 +1,34 @@
 /**
- * Composer dictation, the pure rules (ADR-047: the clip is sent to Nano and
- * kept nowhere). The recording itself lives in `dictationSession.svelte.ts`.
+ * Composer dictation, the pure rules (ADR-047, ADR-066: a clip is sent to the
+ * chosen source; one that could not be sent is kept locally until it is sent,
+ * saved or deleted). The recording itself lives in `dictationSession.svelte.ts`.
  */
 
 /** The recording format the host sends on as is. */
 export const DICTATION_MIME_PREFERENCE: readonly string[] = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
-/** A clip never runs longer than two minutes. */
-export const DICTATION_MAX_MS = 120_000;
+/** A clip never runs longer than ten minutes. */
+export const DICTATION_MAX_MS = 600_000;
+/** The clock turns to the warning colour this long before the limit. */
+export const DICTATION_WARNING_MS = 30_000;
+/** Esc keeps a recording that is at least this long as a pending one; a shorter one is dropped. */
+export const DICTATION_KEEP_ON_ESCAPE_MS = 5_000;
+/** From then on, a recording in progress is saved to the pending store this often, so an app that dies mid-speech loses little. */
+export const DICTATION_CHECKPOINT_MS = 5_000;
+/** Speech needs little: 32 kbps keeps a full ten minute clip near 2.4 MB. */
+export const DICTATION_BITS_PER_SECOND = 32_000;
 /** Chunks arrive this often, so the size limit is checked while recording. */
 export const DICTATION_TIMESLICE_MS = 1_000;
 /** Used when the server did not say how large a clip may be (20 MiB, as the Nano web app). */
 export const DICTATION_DEFAULT_MAX_BYTES = 20 * 1024 * 1024;
 
 export type DictationErrorKind = 'unsupported' | 'denied' | 'no-device' | 'failed' | 'too-large' | 'empty';
+
+/** English source strings of the locale catalog: what a recording says besides an error. */
+export const DICTATION_NOTICE_COPY = {
+  'limit-reached': 'Recording limit reached.',
+  'previous-recording': 'Send, save or delete the previous recording first.',
+} as const;
+export type DictationNotice = keyof typeof DICTATION_NOTICE_COPY;
 
 /** English source strings of the locale catalog. */
 export const DICTATION_ERROR_COPY: Readonly<Record<DictationErrorKind, string>> = {
@@ -94,6 +110,16 @@ export function insertAtCaret(text: string, caret: number, inserted: string): { 
 export function dictationClock(elapsedMs: number): string {
   const seconds = Math.max(0, Math.floor(elapsedMs / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+/** `m:ss / m:ss`: the running time against the limit. */
+export function dictationClockWithLimit(elapsedMs: number): string {
+  return `${dictationClock(elapsedMs)} / ${dictationClock(DICTATION_MAX_MS)}`;
+}
+
+/** True in the last stretch before the time limit. */
+export function dictationNearLimit(elapsedMs: number): boolean {
+  return elapsedMs >= DICTATION_MAX_MS - DICTATION_WARNING_MS;
 }
 
 /** Standard base64 of a clip; chunked, so a long recording never overflows the call stack. */

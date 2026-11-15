@@ -13,6 +13,7 @@ import {
   sidekickOperationHash,
   validateBoardOperation,
   validateSidekickOperation,
+  validateSessionsOperation,
 } from "./runner.mjs";
 
 function harness(factory) {
@@ -44,6 +45,87 @@ function harness(factory) {
 }
 
 const config = { id: "init", method: "initialize", params: { harness: "pi", cwd: "C:/trusted" } };
+
+test("sessions contract examples agree with strict bridge operation validation", () => {
+  const contract = readFileSync(new URL("../../../contracts/session-links-v1.ts", import.meta.url), "utf8");
+  const json = contract.split("export const SESSION_LINKS_TOOL_EXAMPLES_V1 = ")[1]?.split("] satisfies")[0] + "]";
+  const examples = JSON.parse(json);
+  assert.deepEqual(new Set(examples.map(operation => operation.op)), new Set(["start", "list", "message", "read", "wait", "stop"]));
+  for (const operation of examples) assert.equal(validateSessionsOperation(operation), true, JSON.stringify(operation));
+});
+
+test("sessions operations reject unknown keys, wrong types and out-of-contract lengths", () => {
+  const valid = [
+    { op: "start", title: "Task", prompt: " ", harness: "acp:gemini-cli", model: { provider: "a/b", id: "model/v1" }, permissionMode: "native" },
+    { op: "message", sessionId: "chat-1", text: "😀".repeat(16000), wait: false, waitSeconds: 240 },
+    { op: "read", sessionId: "chat-1", page: 1 },
+    { op: "wait", sessionId: "chat-1", waitSeconds: 0 },
+    { op: "stop", sessionId: "chat-1" },
+    { op: "list" },
+  ];
+  for (const operation of valid) assert.equal(validateSessionsOperation(operation), true);
+  const invalid = [
+    null, [], {}, { op: "unknown" }, { op: "list", caller: "spoofed" },
+    { op: "start", title: "Task" }, { op: "start", title: " ", prompt: "task" },
+    { op: "start", title: "Task", prompt: "" }, { op: "start", title: "Task", prompt: "😀".repeat(16001) },
+    { op: "start", title: "Task", prompt: "task", harness: "acp:bad--id" },
+    { op: "start", title: "Task", prompt: "task", harness: "acp:with_underscore" },
+    { op: "start", title: "Task", prompt: "task", harness: "acp:" + "a".repeat(33) },
+    { op: "start", title: "Task", prompt: "task", model: { id: "only-id" } },
+    { op: "start", title: "Task", prompt: "task", model: { provider: "p", id: "m", extra: true } },
+    { op: "start", title: "Task", prompt: "task", permissionMode: "admin" },
+    { op: "message", sessionId: "chat-1", text: "text", waitSeconds: 241 },
+    { op: "message", sessionId: "chat-1", text: "text", wait: "true" },
+    { op: "message", sessionId: "../other", text: "text" },
+    { op: "read", sessionId: "chat-1", page: 0 }, { op: "read", sessionId: "chat-1", page: 1.5 },
+    { op: "wait", sessionId: "chat-1", waitSeconds: -1 }, { op: "wait", sessionId: "chat-1", waitSeconds: 1.5 },
+    { op: "stop", sessionId: "" },
+  ];
+  for (const operation of invalid) assert.equal(validateSessionsOperation(operation), false, JSON.stringify(operation));
+});
+
+test("sessions requests are opt-in, validated before the host and round-trip once", async () => {
+  let answer;
+  let invalid;
+  const bridge = harness(async (_config, emit, _coordinator, _board, _sidekick, sessions) => ({
+    prompt() {
+      void sessions({ op: "list", extra: true }).catch(error => { invalid = error.bridgeCode; });
+      void sessions({ op: "list" }).then(result => { answer = result; emit({ type: "status", status: "idle" }); });
+      return { accepted: true };
+    }, dispose() {},
+  }));
+  bridge.send({ ...config, params: { ...config.params, hostTools: ["sessions"] } });
+  await bridge.wait(1);
+  bridge.send({ id: "prompt", method: "prompt", params: {} });
+  await bridge.wait(3);
+  const event = bridge.frames.find(frame => frame.event?.type === "sessionsRequest").event;
+  assert.deepEqual(event.operation, { op: "list" });
+  assert.equal(invalid, "invalid-operation");
+  assert.equal(bridge.frames.filter(frame => frame.event?.type === "sessionsRequest").length, 1);
+  bridge.send({ id: "bad", method: "sessionsResponse", params: { requestId: event.requestId, result: { chats: [] } } });
+  await bridge.wait(4);
+  assert.equal(bridge.frames.find(frame => frame.id === "bad").error.code, "invalid-sessions-response");
+  const result = { ok: true, chats: [] };
+  bridge.send({ id: "answer", method: "sessionsResponse", params: { requestId: event.requestId, result } });
+  await bridge.wait(6);
+  assert.deepEqual(answer, result);
+  bridge.send({ id: "again", method: "sessionsResponse", params: { requestId: event.requestId, result } });
+  await bridge.wait(7);
+  assert.equal(bridge.frames.find(frame => frame.id === "again").error.code, "stale-sessions-request");
+  bridge.input.end();
+  let refused;
+  const off = harness(async (_config, _emit, _coordinator, _board, _sidekick, sessions) => ({
+    prompt() { void sessions({ op: "list" }).catch(error => { refused = error.bridgeCode; }); return { accepted: true }; }, dispose() {},
+  }));
+  off.send({ ...config, params: { ...config.params, hostTools: ["board"] } });
+  await off.wait(1);
+  off.send({ id: "prompt", method: "prompt", params: {} });
+  await off.wait(2);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(refused, "not-allowed");
+  assert.ok(!off.frames.some(frame => frame.event?.type === "sessionsRequest"));
+  off.input.end();
+});
 
 test("initializes once and rejects a duplicate", async () => {
   let created = 0;

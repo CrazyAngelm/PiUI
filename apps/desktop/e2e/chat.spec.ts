@@ -85,12 +85,13 @@ test.describe('new chat', () => {
     await expect(page.getByRole('region', { name: 'Conversation messages' })).toContainText('Does anything still import Tauri directly');
     await expect(page.getByText('Runtime actions are disabled in safe mode. Your draft is preserved.')).toBeVisible();
     await expect(page.getByRole('textbox', { name: 'Message' })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Copy answer', exact: true }).last().focus();
+    await page.getByRole('button', { name: 'Copy message', exact: true }).last().focus();
     await page.keyboard.press('Enter');
     await expect.poll(() => page.evaluate(() => (window as Window & { nativeCopyProof?: string }).nativeCopyProof ?? '')).not.toBe('');
-    await expect(lab.toast('Answer copied')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Edit and send again', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Branch into a new chat', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Copied', exact: true })).toBeVisible();
+    // Editing and branching start agents: they are offered but disabled in safe mode.
+    await expect(page.getByRole('button', { name: 'Edit and send again', exact: true }).first()).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Branch into a new chat', exact: true }).first()).toBeDisabled();
   });
 
   test('a signed-out Claude Code refuses the chat with a sign-in hint', async ({ lab, page }) => {

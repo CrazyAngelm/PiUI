@@ -40,6 +40,11 @@ use tokio::time::timeout;
 
 // These are the established live runtime watchdogs from real_rpc.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+/// Resource discovery waits for the harness's own MCP servers to start (Codex:
+/// every configured server, each up to its own startup timeout), so it gets
+/// far longer than an ordinary request. It never blocks a model picker: the
+/// models are answered first.
+const RESOURCES_TIMEOUT: Duration = Duration::from_secs(90);
 const INTERRUPT_TIMEOUT: Duration = Duration::from_secs(10);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(6);
 const READ_BUFFER_BYTES: usize = 16 * 1024;
@@ -258,6 +263,18 @@ impl HarnessKind {
     #[must_use]
     pub const fn supports_board_tool(self) -> bool {
         !matches!(self, Self::Pi | Self::Nano)
+    }
+
+    /// A new session can fork native history without translating its chat format.
+    #[must_use]
+    pub const fn supports_native_branch(self) -> bool {
+        matches!(self, Self::ClaudeCode | Self::Codex)
+    }
+
+    /// Linked chats use the same per-session host-tool transport as the board.
+    #[must_use]
+    pub const fn supports_sessions_tool(self) -> bool {
+        self.supports_board_tool()
     }
 
     /// Whether a resumed session restores its model and reasoning level from
@@ -881,6 +898,8 @@ pub enum HostTool {
     Board,
     /// The Fusion lead's tool (`SidekickToolOperationV1`, contracts/fusion-v1.ts).
     Sidekick,
+    /// Linked chats (`SessionsToolOperationV1`, contracts/session-links-v1.ts).
+    Sessions,
 }
 
 /// Who asked for one `sidekick` call, added by the bridge
@@ -1027,6 +1046,10 @@ pub enum NativeNoticeCode {
     UnsupportedSidekickTool,
     /// A resumed Codex thread was started without the `sidekick` tool.
     UnsupportedSidekickToolResume,
+    /// The harness (or this agent) cannot receive the linked-chat `sessions` tool.
+    UnsupportedSessionsTool,
+    /// A resumed Codex thread was started without the `sessions` tool.
+    UnsupportedSessionsToolResume,
     /// Host-decided: the settings remembered for a reopened chat could not be
     /// re-applied; the chat runs with the harness's own settings.
     SettingsNotRestored,
@@ -1089,6 +1112,13 @@ pub enum NativeEvent {
         request_id: String,
         operation: BoardToolOperation,
     },
+    /// An agent's linked-chat tool call, shape-checked by the bridge and parsed
+    /// again by the broker. The caller is the emitting session, never a field
+    /// of `operation`. Answer with [`NativeRuntime::sessions_response`].
+    SessionsRequest {
+        request_id: String,
+        operation: Map<String, Value>,
+    },
     /// A Fusion lead's `sidekick` tool call (shape-checked by the bridge;
     /// the host parses it again). Answer exactly once with
     /// [`NativeRuntime::sidekick_response`]; the lead comes from the emitting
@@ -1131,6 +1161,17 @@ pub struct SessionMcpServer {
 /// Most plugin MCP servers one session receives.
 pub const MAX_SESSION_MCP_SERVERS: usize = 16;
 
+/// A host-private native fork performed before the new chat's first turn.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeFork {
+    pub native_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_block_id: Option<String>,
+}
+
 /// Exact host-owned native session configuration. It is never serialized to a
 /// WebView and its Debug output omits paths, instructions and native ids.
 #[derive(Clone, Serialize)]
@@ -1143,6 +1184,8 @@ pub struct NativeRuntimeConfig {
     pub native_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork: Option<NativeFork>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1180,7 +1223,7 @@ pub struct NativeRuntimeConfig {
     /// [`HarnessKind::accepts_session_mcp`]; empty everywhere else.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugin_mcp_servers: Vec<SessionMcpServer>,
-    /// Host tools for this session (the board, the Fusion sidekick), independent of
+    /// Host tools for this session (board, Fusion and linked chats), independent of
     /// `coordination`: they never disable native subagents. A harness that
     /// cannot take one starts without it and emits [`NativeEvent::Notice`]
     /// (see [`HarnessKind::supports_board_tool`]).
@@ -1203,6 +1246,7 @@ impl fmt::Debug for NativeRuntimeConfig {
             .field("harness", &self.harness)
             .field("has_native_id", &self.native_id.is_some())
             .field("has_native_path", &self.native_path.is_some())
+            .field("has_fork", &self.fork.is_some())
             .field("has_title", &self.title.is_some())
             .field("has_model", &self.model.is_some())
             .field("has_thinking_level", &self.thinking_level.is_some())
@@ -1292,6 +1336,10 @@ pub enum BridgeFailureCode {
     /// The harness or its current model does not accept an input kind of the
     /// prompt (images). Nothing was sent.
     UnsupportedInput,
+    /// This harness cannot create the requested native history branch.
+    BranchUnsupported,
+    /// The requested source message is no longer available to fork from.
+    BranchPointNotFound,
     OperationFailed,
 }
 
@@ -2141,7 +2189,7 @@ impl NativeRuntime {
 
     pub async fn resources(&self) -> Result<NativeResourceCatalog, NativeRuntimeError> {
         let value = self
-            .request("resources", json!({}), REQUEST_TIMEOUT, false)
+            .request("resources", json!({}), RESOURCES_TIMEOUT, false)
             .await?;
         serde_json::from_value(value).map_err(|_| NativeRuntimeError::Protocol)
     }
@@ -2242,6 +2290,27 @@ impl NativeRuntime {
         }
         self.request(
             "boardResponse",
+            json!({ "requestId": request_id, "result": result }),
+            REQUEST_TIMEOUT,
+            false,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Resolves one origin-bound linked-chat tool request with the host's
+    /// `SessionsToolResultV1` JSON. An object with boolean `ok` is required;
+    /// refusals remain ordinary tool results. Host-private, never WebView IPC.
+    pub async fn sessions_response(
+        &self,
+        request_id: String,
+        result: Value,
+    ) -> Result<(), NativeRuntimeError> {
+        if !result.get("ok").is_some_and(Value::is_boolean) {
+            return Err(NativeRuntimeError::InvalidConfiguration);
+        }
+        self.request(
+            "sessionsResponse",
             json!({ "requestId": request_id, "result": result }),
             REQUEST_TIMEOUT,
             false,
@@ -2441,7 +2510,7 @@ impl NativeRuntime {
     ) -> Result<(Self, NativeEventReceiver), NativeRuntimeError> {
         let node = resolve_node()?;
         let source = format!(
-            "export async function createTestAdapter(config,emit,coordinatorRequest){{{factory_body}}}\nglobalThis.__PIUI_BRIDGE_FACTORY__=createTestAdapter;\n{RUNNER_SOURCE}"
+            "export async function createTestAdapter(config,emit,coordinatorRequest,boardRequest,sidekickRequest,sessionsRequest){{{factory_body}}}\nglobalThis.__PIUI_BRIDGE_FACTORY__=createTestAdapter;\n{RUNNER_SOURCE}"
         )
         .into_bytes();
         Self::spawn_resolved(
@@ -2757,6 +2826,8 @@ fn map_bridge_failure(code: &str) -> BridgeFailureCode {
         | "unsupported-protocol" => BridgeFailureCode::Incompatible,
         "claude-subscription-required" => BridgeFailureCode::SubscriptionRequired,
         "unsupported-input" => BridgeFailureCode::UnsupportedInput,
+        "branch-unsupported" => BridgeFailureCode::BranchUnsupported,
+        "branch-point-not-found" => BridgeFailureCode::BranchPointNotFound,
         _ => BridgeFailureCode::OperationFailed,
     }
 }
@@ -2919,7 +2990,7 @@ fn valid_prime_nano_options(config: &NativeRuntimeConfig) -> bool {
         && config
             .host_tools
             .iter()
-            .all(|tool| *tool == HostTool::Board)
+            .all(|tool| matches!(tool, HostTool::Board | HostTool::Sessions))
         && config
             .resource_rules
             .as_ref()
@@ -2928,6 +2999,7 @@ fn valid_prime_nano_options(config: &NativeRuntimeConfig) -> bool {
             tools.iter().all(|tool| match tool.as_str() {
                 "bash" | "edit" => true,
                 "board" => config.host_tools.contains(&HostTool::Board),
+                "sessions" => config.host_tools.contains(&HostTool::Sessions),
                 _ => false,
             })
         })
@@ -2942,6 +3014,21 @@ fn valid_prime_nano_options(config: &NativeRuntimeConfig) -> bool {
 }
 
 fn validate_config(config: &NativeRuntimeConfig) -> Result<(), NativeRuntimeError> {
+    if let Some(fork) = config.fork.as_ref()
+        && (!config.harness.supports_native_branch()
+            || config.native_id.is_some()
+            || config.coordination
+            || fork.native_id.trim().is_empty()
+            || fork
+                .native_path
+                .as_ref()
+                .is_some_and(|path| !path.is_absolute())
+            || fork.before_block_id.as_ref().is_some_and(|id| {
+                id.is_empty() || id.chars().count() > 256 || id.chars().any(char::is_control)
+            }))
+    {
+        return Err(NativeRuntimeError::InvalidConfiguration);
+    }
     if config.harness == HarnessKind::Nano || config.nano.is_some() {
         validate_nano_config(config)?;
     }
@@ -3066,19 +3153,28 @@ fn is_isolated_daemon(socket: Option<&str>) -> bool {
 
 fn bridge_source(kind: HarnessKind) -> Result<Vec<u8>, NativeRuntimeError> {
     if kind == HarnessKind::Codex {
-        return Ok(format!("{CODEX_SOURCE}\n{CODEX_POOL_SOURCE}\nglobalThis.__PIUI_BRIDGE_FACTORY__=(config,emit,coordinator,board,sidekick)=>config.poolHost?createCodexPool(config,emit):createCodexAdapter(config,emit,coordinator,undefined,board,sidekick);\n{RUNNER_SOURCE}").into_bytes());
+        return Ok(format!("{CODEX_SOURCE}\n{CODEX_POOL_SOURCE}\nglobalThis.__PIUI_BRIDGE_FACTORY__=(config,emit,coordinator,board,sidekick,sessions)=>config.poolHost?createCodexPool(config,emit):createCodexAdapter(config,emit,coordinator,undefined,board,sidekick,{{}},sessions);\n{RUNNER_SOURCE}").into_bytes());
     }
     let (factory, name) = match kind {
         // The Pi bridge serves both: it selects the nano lane from
         // `config.harness`.
         HarnessKind::Pi | HarnessKind::Nano => (PI_SOURCE, "createPiAdapter"),
-        HarnessKind::PrimeAgent => (PRIME_SOURCE, "createPrimeAdapter"),
+        HarnessKind::PrimeAgent => (
+            PRIME_SOURCE,
+            "(config,emit,coordinator,board,_sidekick,sessions)=>createPrimeAdapter(config,emit,coordinator,board,sessions)",
+        ),
         HarnessKind::Codex => (CODEX_SOURCE, "createCodexAdapter"),
-        HarnessKind::Hermes => (HERMES_SOURCE, "createHermesAdapter"),
+        HarnessKind::Hermes => (
+            HERMES_SOURCE,
+            "(config,emit,coordinator,board,sidekick,sessions)=>createHermesAdapter(config,emit,coordinator,board,sidekick,undefined,sessions)",
+        ),
         HarnessKind::ClaudeCode => (CLAUDE_SOURCE, "createClaudeAdapter"),
         // One generic adapter; the agent itself comes from a host-resolved
         // descriptor (`NativeRuntime::spawn_acp`).
-        HarnessKind::Acp(_) => (ACP_SOURCE, "createAcpAdapter"),
+        HarnessKind::Acp(_) => (
+            ACP_SOURCE,
+            "(config,emit,coordinator,board,_sidekick,sessions)=>createAcpAdapter(config,emit,coordinator,board,sessions)",
+        ),
     };
     if factory.trim().is_empty() {
         return Err(NativeRuntimeError::HarnessUnavailable);
@@ -4488,6 +4584,7 @@ mod tests {
             session_dir: cwd,
             native_id: None,
             native_path: None,
+            fork: None,
             title: None,
             model: None,
             thinking_level: None,
@@ -4508,6 +4605,142 @@ mod tests {
             host_tools: Vec::new(),
             nano: None,
         }
+    }
+
+    #[test]
+    fn fork_configuration_matches_the_native_wire_shape_and_redacts_debug() {
+        let mut config = test_config();
+        assert!(
+            serde_json::to_value(&config)
+                .expect("config")
+                .get("fork")
+                .is_none()
+        );
+        config.harness = HarnessKind::ClaudeCode;
+        let fork = NativeFork {
+            native_id: "private-source-id".into(),
+            native_path: Some(config.cwd.join("source.jsonl")),
+            before_block_id: Some("source-message-id".into()),
+        };
+        let value = serde_json::to_value(&fork).expect("native fork");
+        assert_eq!(value["nativeId"], json!("private-source-id"));
+        assert_eq!(value["beforeBlockId"], json!("source-message-id"));
+        assert_eq!(
+            serde_json::from_value::<NativeFork>(value.clone()).expect("fork round trip"),
+            fork
+        );
+        config.fork = Some(fork);
+        let initialize = serde_json::to_value(&config).expect("fork config");
+        assert_eq!(initialize["fork"], value);
+        assert!(initialize.get("nativeId").is_none());
+        let debug = format!("{config:?}");
+        assert!(debug.contains("has_fork: true"));
+        assert!(!debug.contains("private-source-id"));
+        assert!(!debug.contains("source-message-id"));
+        assert!(!debug.contains("source.jsonl"));
+        assert_eq!(
+            serde_json::to_value(NativeFork {
+                native_id: "source-id".into(),
+                native_path: None,
+                before_block_id: None,
+            })
+            .expect("fork at end"),
+            json!({"nativeId": "source-id"})
+        );
+    }
+
+    #[test]
+    fn fork_validation_allows_only_unbound_standalone_claude_and_codex() {
+        let mut config = test_config();
+        config.fork = Some(NativeFork {
+            native_id: "source-id".into(),
+            native_path: None,
+            before_block_id: None,
+        });
+        for harness in [HarnessKind::ClaudeCode, HarnessKind::Codex] {
+            config.harness = harness;
+            assert!(harness.supports_native_branch());
+            assert_eq!(validate_config(&config), Ok(()));
+            config.fork.as_mut().expect("fork").before_block_id = Some(" ".into());
+            assert_eq!(
+                validate_config(&config),
+                Ok(()),
+                "a non-control id may contain spaces"
+            );
+            config.fork.as_mut().expect("fork").before_block_id = None;
+            config.native_id = Some("already-bound".into());
+            assert_eq!(
+                validate_config(&config),
+                Err(NativeRuntimeError::InvalidConfiguration)
+            );
+            config.native_id = None;
+            config.coordination = true;
+            assert_eq!(
+                validate_config(&config),
+                Err(NativeRuntimeError::InvalidConfiguration)
+            );
+            config.coordination = false;
+        }
+        for harness in [
+            HarnessKind::Pi,
+            HarnessKind::Nano,
+            HarnessKind::PrimeAgent,
+            HarnessKind::Hermes,
+            HarnessKind::Acp(AcpAgentId::new("opencode").expect("agent id")),
+        ] {
+            config.harness = harness;
+            assert!(!harness.supports_native_branch());
+            assert_eq!(
+                validate_config(&config),
+                Err(NativeRuntimeError::InvalidConfiguration)
+            );
+        }
+        config.harness = HarnessKind::ClaudeCode;
+        for invalid in [
+            NativeFork {
+                native_id: String::new(),
+                native_path: None,
+                before_block_id: None,
+            },
+            NativeFork {
+                native_id: "source".into(),
+                native_path: Some(PathBuf::from("relative.jsonl")),
+                before_block_id: None,
+            },
+            NativeFork {
+                native_id: "source".into(),
+                native_path: None,
+                before_block_id: Some(String::new()),
+            },
+            NativeFork {
+                native_id: "source".into(),
+                native_path: None,
+                before_block_id: Some("cut\npoint".into()),
+            },
+            NativeFork {
+                native_id: "source".into(),
+                native_path: None,
+                before_block_id: Some("x".repeat(257)),
+            },
+        ] {
+            config.fork = Some(invalid);
+            assert_eq!(
+                validate_config(&config),
+                Err(NativeRuntimeError::InvalidConfiguration)
+            );
+        }
+    }
+
+    #[test]
+    fn fork_refusals_keep_the_native_branch_failure_codes() {
+        assert_eq!(
+            map_bridge_failure("branch-unsupported"),
+            BridgeFailureCode::BranchUnsupported
+        );
+        assert_eq!(
+            map_bridge_failure("branch-point-not-found"),
+            BridgeFailureCode::BranchPointNotFound
+        );
     }
 
     #[test]
@@ -5829,7 +6062,9 @@ mod tests {
         let source = String::from_utf8(bridge_source(gemini).expect("ACP bridge source"))
             .expect("bridge source is UTF-8");
         assert!(source.contains("export async function createAcpAdapter"));
-        assert!(source.contains("globalThis.__PIUI_BRIDGE_FACTORY__=createAcpAdapter;"));
+        assert!(source.contains(
+            "globalThis.__PIUI_BRIDGE_FACTORY__=(config,emit,coordinator,board,_sidekick,sessions)=>createAcpAdapter(config,emit,coordinator,board,sessions);"
+        ));
         assert!(source.contains("export function runBridge"));
         assert!(resolve_harness_launch(gemini).is_err());
         assert!(!harness_version_supported(gemini, Some("1.0.0")));
@@ -6749,6 +6984,200 @@ mod tests {
         assert!(!HarnessKind::Pi.supports_sidekick_tool());
         assert!(!HarnessKind::Hermes.supports_sidekick_tool());
         assert!(!HarnessKind::PrimeAgent.supports_sidekick_tool());
+    }
+
+    #[test]
+    fn sessions_notice_codes_match_bridge_spellings() {
+        for (code, expected) in [
+            (
+                "unsupported-sessions-tool",
+                NativeNoticeCode::UnsupportedSessionsTool,
+            ),
+            (
+                "unsupported-sessions-tool-resume",
+                NativeNoticeCode::UnsupportedSessionsToolResume,
+            ),
+        ] {
+            assert_eq!(
+                serde_json::to_value(expected).expect("notice code"),
+                json!(code)
+            );
+            let event: NativeEvent =
+                serde_json::from_value(json!({"type": "notice", "code": code}))
+                    .expect("sessions tool notice");
+            assert_eq!(event, NativeEvent::Notice { code: expected });
+        }
+    }
+
+    #[test]
+    fn sessions_request_events_keep_the_caller_out_of_the_payload() {
+        let operation = json!({"op": "message", "sessionId": "child", "text": "Review this."});
+        let value = json!({
+            "type": "sessionsRequest", "requestId": "piui-sessions-1",
+            "operation": operation
+        });
+        let event: NativeEvent = serde_json::from_value(value.clone()).expect("sessions request");
+        assert!(matches!(
+            &event,
+            NativeEvent::SessionsRequest { request_id, operation }
+                if request_id == "piui-sessions-1" && operation.get("op") == Some(&json!("message"))
+        ));
+        assert_eq!(serde_json::to_value(event).expect("sessions event"), value);
+        for invalid in [
+            json!({"type": "sessionsRequest", "operation": {"op": "list"}}),
+            json!({"type": "sessionsRequest", "requestId": "r", "operation": []}),
+            json!({"type": "sessionsRequest", "requestId": "r", "operation": {"op": "list"}, "sessionId": "other"}),
+        ] {
+            assert!(serde_json::from_value::<NativeEvent>(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn sessions_host_tool_is_independent_of_coordination_and_other_tools() {
+        assert_eq!(
+            serde_json::to_value(HostTool::Sessions).expect("sessions tool"),
+            json!("sessions")
+        );
+        let mut config = test_config();
+        config.harness = HarnessKind::ClaudeCode;
+        config.host_tools = vec![HostTool::Board, HostTool::Sessions];
+        let value = serde_json::to_value(InitializeConfig {
+            config: &config,
+            runtime_program: "claude".into(),
+            runtime_args: Vec::new(),
+            pool_host: false,
+            catalog_only: false,
+            acp: None,
+        })
+        .expect("initialize with sessions");
+        assert_eq!(value["hostTools"], json!(["board", "sessions"]));
+        assert_eq!(value["coordination"], json!(false));
+        assert!(value.get("nativeSubagents").is_none());
+    }
+
+    #[test]
+    fn sessions_tool_support_matches_the_board_transports() {
+        let acp = HarnessKind::Acp(AcpAgentId::new("opencode").expect("agent id"));
+        for harness in [
+            HarnessKind::ClaudeCode,
+            HarnessKind::Codex,
+            HarnessKind::PrimeAgent,
+            HarnessKind::Hermes,
+            acp,
+        ] {
+            assert!(harness.supports_sessions_tool(), "{harness}");
+            assert_eq!(
+                harness.supports_sessions_tool(),
+                harness.supports_board_tool()
+            );
+        }
+        assert!(!HarnessKind::Pi.supports_sessions_tool());
+        assert!(!HarnessKind::Nano.supports_sessions_tool());
+    }
+
+    #[test]
+    fn sessions_prime_nano_admission_requires_the_explicit_host_tool() {
+        let mut config = test_config();
+        config.harness = HarnessKind::PrimeAgent;
+        config.allowed_tools = Some(vec!["sessions".to_owned()]);
+        assert!(!valid_prime_nano_options(&config));
+        config.host_tools = vec![HostTool::Sessions];
+        assert!(valid_prime_nano_options(&config));
+        config.host_tools.push(HostTool::Board);
+        assert!(valid_prime_nano_options(&config));
+        config.host_tools.push(HostTool::Sidekick);
+        assert!(!valid_prime_nano_options(&config));
+    }
+
+    #[test]
+    fn sessions_embedded_factories_preserve_adapter_test_seams() {
+        for (harness, expected) in [
+            (
+                HarnessKind::ClaudeCode,
+                "globalThis.__PIUI_BRIDGE_FACTORY__=createClaudeAdapter;",
+            ),
+            (
+                HarnessKind::Codex,
+                "createCodexAdapter(config,emit,coordinator,undefined,board,sidekick,{},sessions)",
+            ),
+            (
+                HarnessKind::Hermes,
+                "createHermesAdapter(config,emit,coordinator,board,sidekick,undefined,sessions)",
+            ),
+            (
+                HarnessKind::PrimeAgent,
+                "createPrimeAdapter(config,emit,coordinator,board,sessions)",
+            ),
+            (
+                HarnessKind::Acp(AcpAgentId::new("opencode").expect("agent id")),
+                "createAcpAdapter(config,emit,coordinator,board,sessions)",
+            ),
+        ] {
+            let source = String::from_utf8(bridge_source(harness).expect("bridge source"))
+                .expect("UTF-8 bridge source");
+            assert!(source.contains(expected), "{harness}");
+        }
+    }
+
+    #[tokio::test]
+    async fn sessions_response_validates_and_round_trips_through_the_runner() {
+        let mut config = test_config();
+        config.harness = HarnessKind::ClaudeCode;
+        config.host_tools = vec![HostTool::Sessions];
+        let factory = r#"return {
+            prompt() {
+                sessionsRequest({op:'list'}).then(result => emit({type:'block',block:{
+                    id:'sessions-answer',kind:'assistant',label:'Sessions',status:'complete',
+                    text:JSON.stringify(result)
+                }}));
+                return {accepted:true};
+            },
+            dispose() {}
+        }"#;
+        let (runtime, mut events) = NativeRuntime::spawn_test_adapter(config, factory)
+            .await
+            .expect("synthetic sessions bridge");
+        for result in [
+            json!({"ok": true, "chats": []}),
+            json!({"ok": false, "code": "not-allowed", "message": "This operation is not allowed."}),
+        ] {
+            runtime
+                .prompt("list linked chats".into(), PromptMode::Prompt)
+                .await
+                .expect("synthetic prompt");
+            let request = timeout(REQUEST_TIMEOUT, events.recv())
+                .await
+                .expect("sessions request arrived")
+                .expect("sessions request event");
+            let NativeEvent::SessionsRequest {
+                request_id,
+                operation,
+            } = request
+            else {
+                panic!("expected the sessions request");
+            };
+            assert_eq!(operation.get("op"), Some(&json!("list")));
+            for invalid in [Value::Null, json!({}), json!({"ok": "true"})] {
+                assert_eq!(
+                    runtime.sessions_response(request_id.clone(), invalid).await,
+                    Err(NativeRuntimeError::InvalidConfiguration)
+                );
+            }
+            runtime
+                .sessions_response(request_id, result.clone())
+                .await
+                .expect("sessions result");
+            let answer = timeout(REQUEST_TIMEOUT, events.recv())
+                .await
+                .expect("sessions result arrived")
+                .expect("sessions answer event");
+            assert!(matches!(
+                answer,
+                NativeEvent::Block { block }
+                    if block.text.as_deref() == Some(result.to_string().as_str())
+            ));
+        }
+        runtime.dispose().await.expect("dispose synthetic bridge");
     }
 
     #[test]

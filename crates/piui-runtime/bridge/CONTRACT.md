@@ -5,7 +5,7 @@ This is HOST-PRIVATE, not WebView IPC. Runtime-owned session paths/native ids ar
 ## Embedding and ownership
 Rust embeds factory source bytes and common runner, concatenates them into one ESM source, and launches a fixed small `node --input-type=module -e <bootstrap>` inside a Windows Job assigned before resume or Unix process group. To avoid Windows' command-line limit, Rust writes an exact checked 4-byte little-endian source length followed by those trusted source bytes to stdin; the bootstrap reads exactly that prefix and imports it as an in-memory data module, leaving subsequent LF JSON untouched. No writable temp JavaScript files. Each adapter file exports ONLY its unique top-level function; put imports/constants/helpers inside the factory to avoid collisions in concatenation. Native children inherit containment. Script modules must not print to stdout except common runner protocol. Do not expose raw errors, environment, auth or raw native protocol to UI/logs.
 
-Factories: `export async function createPrimeAdapter(config, emit)`, `createCodexAdapter`, `createPiAdapter`, `createClaudeAdapter` (see Claude Code below), `createHermesAdapter`, `createAcpAdapter` (see ACP agents below). Config: `{cwd: absolute trusted workspace, sessionDir: host-owned native storage directory, nativeId?: string, nativePath?: string, title?: string, model?: {id,provider?,name}, thinkingLevel?:string, instructions?:string, permissionMode:'native'|'read-only'|'workspace-write'|'full-access', networkAccess?:boolean, allowedTools?:string[], nativeSubagents?:boolean, daemonSocket:explicit nondefault reserved endpoint}`. `networkAccess` is an explicit Codex-only native capability for `read-only` or `workspace-write`; omission is network-denied and child admission cannot widen it. Runtime resolution is host-side/system install; no arbitrary executable/path from frontend. Prime must avoid default daemon. Do not silently accept unsupported mandatory instructions/tools/permissions.
+Factories: `export async function createPrimeAdapter(config, emit)`, `createCodexAdapter`, `createPiAdapter`, `createClaudeAdapter` (see Claude Code below), `createHermesAdapter`, `createAcpAdapter` (see ACP agents below). Config: `{cwd: absolute trusted workspace, sessionDir: host-owned native storage directory, nativeId?: string, nativePath?: string, fork?: {nativeId:string,nativePath?:string,beforeBlockId?:string}, title?: string, model?: {id,provider?,name}, thinkingLevel?:string, instructions?:string, permissionMode:'native'|'read-only'|'workspace-write'|'full-access', networkAccess?:boolean, allowedTools?:string[], nativeSubagents?:boolean, daemonSocket:explicit nondefault reserved endpoint}`. `networkAccess` is an explicit Codex-only native capability for `read-only` or `workspace-write`; omission is network-denied and child admission cannot widen it. Runtime resolution is host-side/system install; no arbitrary executable/path from frontend. Prime must avoid default daemon. Do not silently accept unsupported mandatory instructions/tools/permissions.
 
 Factory returns adapter:
 - `snapshot()` -> NativeSnapshot
@@ -35,11 +35,62 @@ Pi tool blocks and Codex MCP/dynamic tool blocks are built from arbitrary native
 - `{type:'binding',nativeId,nativePath?}` (host-private only)
 - `{type:'error',message:safeFixedSummary}`
 - `{type:'notice',code:'unsupported-board-tool'|'unsupported-board-tool-resume'|'unsupported-sidekick-tool'|'unsupported-sidekick-tool-resume'}` (non-fatal; see hostTools)
-- `{type:'boardRequest',requestId,operation}` / `{type:'sidekickRequest',requestId,operation,identity}` / `{type:'coordinatorRequest',requestId,operation}` (runner-emitted, host-private)
+- `{type:'boardRequest',requestId,operation}` / `{type:'sidekickRequest',requestId,operation,identity}` / `{type:'sessionsRequest',requestId,operation}` / `{type:'coordinatorRequest',requestId,operation}` (runner-emitted, host-private)
 
 Runner request LF JSON: `{id:string,method:'initialize'|'snapshot'|'prompt'|'interrupt'|'models'|'setModel'|'setMode'|'respond'|'rename'|'dispose',params:object}`. Initialize params add `harness:'pi'|'nano'|'prime-agent'|'codex'|'hermes'|'claude-code'|'acp:<descriptor id>'` to config; exactly once. Return `{id,ok:true,result}` or `{id,ok:false,error:{code,message,details?}}` (`details`: optional bounded plain data an adapter sets as `safeDetails`, today only an ACP sign-in refusal's method names); event `{event:NativeEvent}`. Buffer raw bytes, split only LF. Pending native operations must not serialize interruption/approval behind an active turn. EOF closes admission, calls dispose, then exits; Rust handles hung descendants. No generic evaluate/exec/file method.
 
 Fixtures may inject fake adapters/transport only via separate test module imports; never production env switches. Runtime proofs use native installed harness with synthetic provider where supported, not a replacement agent loop. Missing package/auth/platform behavior is explicit.
+
+## Native branches (Claude Code and Codex)
+
+The host-private `fork` reference is distinct from resuming an existing child.
+It accepts only `nativeId`, optional string `nativePath`, and optional
+`beforeBlockId` (1..256 characters). A top-level `nativeId` cannot accompany it,
+and a managed coordinator cannot fork. The common runner forwards initialize
+configuration unchanged. Neither adapter writes the source history or converts
+it into another format; native branching was verified with Claude Code 2.1.325
+and Codex 0.165.0 on 2026-11-16.
+
+Claude Code requires a UUID source ID and its existing transcript in the native
+project directory. When supplied, `nativePath` must name that same transcript.
+The adapter allocates a new UUID and launches `--resume <source> --fork-session
+--session-id <child>`. A cut finds the selected user block in the active native
+UUID chain and adds `--resume-session-at <parentUuid>` (falling back to
+`logicalParentUuid`). The shared history reader starts from that parent,
+including system hook entries in traversal, so inherited block UUIDs stay
+stable. Cutting before the first user entry starts with `--session-id <child>`
+and no inherited history. Claude Code materializes the child transcript on its
+first prompt. A settings restart repeats the fork arguments while that file
+does not exist; once it exists, the child is reopened with `--resume <child>`.
+
+Codex accepts a nonempty source ID of at most 200 characters. For a cut the
+adapter reads `thread/turns/list` in ascending order with `itemsView:'full'`,
+following at most 200 pages. It finds the turn containing the selected
+`userMessage` item and uses the preceding turn's ID as `lastTurnId` on
+`thread/fork`; it never sends `beforeTurnId`. Cutting before the first turn
+uses a fresh `thread/start`. A full fork omits `lastTurnId`. Fork requests send
+`threadId`, `excludeTurns:true`, and only these requested settings:
+`cwd`, `serviceTier`, `model`, `modelProvider`, `baseInstructions`,
+`developerInstructions`, `config`, `approvalPolicy`, `sandbox`, `permissions`.
+They send no `dynamicTools`, `initialTurnsPage`, `personality`, `path`,
+`ephemeral`, `attachToSource`, or `prediction`.
+
+After a Codex fork, one descending `thread/turns/list` page with
+`itemsView:'full'` supplies the child's initial history through the same
+projection used by resume. Effective cwd and permission checks still apply.
+The returned child ID and rollout path become its binding. Native forks are
+materialized; a first-turn cut remains a draft until its first prompt. A fork
+never registers board, sidekick or sessions dynamic tools, including on a
+fresh first-turn cut. Their availability is checked from the child's own
+rollout, with the same optional-tool resume notices as `thread/resume`.
+
+An unknown cut point, an exhausted source-page bound, or a native error whose
+message starts with `turn not found` yields `branch-point-not-found` with
+`That message is no longer in the chat this one branches from.` Missing Claude
+source history and unsupported native fork operations yield
+`branch-unsupported` with `This chat cannot be branched natively.` Malformed
+references fail with `invalid-session` before launching a native child. Native
+error details never reach the host-facing error message.
 
 
 ## Authenticated coordinator tool (optional)
@@ -91,6 +142,62 @@ Runner emits `{type:'sidekickRequest',requestId:'piui-sidekick-<epoch>-<N>',oper
 | Claude Code | the session HTTP MCP server `piui-workspace`, pre-approved with `--allowed-tools` | `mcp__piui-workspace__sidekick` |
 | Codex | dynamic tool namespace `piui`, function `sidekick`, registered on `thread/start` only (a Fusion lead starts a fresh thread) | `piui` / `sidekick` |
 | others | none; notice `unsupported-sidekick-tool` | — |
+
+## hostTools / sessions tool (linked chats, ADR-069)
+
+A qualifying direct chat carries `hostTools: ["sessions"]`, independently of
+board and Fusion. Claude Code exposes `mcp__piui-workspace__sessions` on its
+session-scoped HTTP MCP server; Codex exposes `piui/sessions` beside its other
+dynamic tools. Prime registers a native custom tool, and Hermes and ACP expose
+it on the same per-session HTTP MCP server as board. ACP requires its advertised
+MCP HTTP capability. Pi and Nano receive no sessions tool.
+
+The literal description is:
+
+> Work with chats linked to this one. start: begin a new linked chat for a separable piece of work and give it a complete prompt. list: the linked chats and their state. message: send a linked chat a message. read: the last answer of a linked chat. wait: wait for a linked chat to finish its turn. stop: stop a linked chat you started. With wait:true (waitSeconds up to 240) start and message return the answer. A linked chat on another harness needs permissionMode, and is refused when this chat runs in its harness's own permission mode.
+
+The runner appends `sessionsRequest(operation, {toolCallId?, signal?})` as its
+sixth factory argument, after sidekickRequest. Embedded wrappers preserve adapter
+test seams: Claude receives it sixth; Codex eighth, after openChild, board,
+sidekick and probeHooks; Hermes seventh, after its spawnChild seam; ACP and Prime
+fifth, after board. Adapter files still export only their factory.
+
+`SessionsToolOperationV1` from `contracts/session-links-v1.ts` is an exact op
+union: start, list, message, read, wait and stop. Every operation rejects unknown
+keys. Start requires title and prompt and optionally takes harness, model,
+permissionMode, wait and waitSeconds; model has exactly provider and id.
+Message requires sessionId and text, with optional wait and waitSeconds. Read
+requires sessionId and optionally page; wait requires sessionId and optionally
+waitSeconds; stop requires sessionId; list has no other fields. Prompt and text
+contain 1–16000 Unicode scalar characters. Title is nonblank and the host
+sanitizes and cuts it to 80 characters when framing it. Session IDs use the
+existing nonempty ASCII ID syntax. Harnesses follow harness-identity-v3,
+including its ACP slug grammar. Wait seconds are integers 0–240; pages are
+positive integers. The runner validates before emitting anything; the host
+parses and checks authority again. Schemas advertise the same exact union.
+
+Runner emits `{type:"sessionsRequest",requestId:"piui-sessions-<epoch>-<N>",operation}`.
+The emitting session binding is the caller; no caller ID is accepted in an
+operation. The host answers with Rust-only
+`NativeRuntime::sessions_response(request_id, result)`, writing
+`sessionsResponse` with exactly `{requestId,result}`. The result is an object
+with boolean ok: an `{ok:false,code,message}` refusal is still JSON the agent
+reads. A malformed response fails with invalid-sessions-response; a retired,
+unknown or reused request ID fails with stale-sessions-request. Interrupt,
+turn completion, EOF, dispose or signal abort cancel pending requests with
+unavailable. Cancellation does not stop a linked chat's already admitted work.
+
+Missing host callbacks or optional native support leave the chat usable without
+the tool and emit `unsupported-sessions-tool`, like board. ACP disables the
+tool when HTTP MCP is absent or disabled. Claude uses the
+existing 600000 ms host-tool MCP wait allowance when sessions is enabled, which
+covers the contract's 240-second wait. Codex can add dynamic tools only on
+thread/start: a resumed thread retains sessions only when its first rollout
+session_meta frame proves that piui/sessions was registered. A missing or
+unprovable saved tool does not fail the chat's start: after opening the thread
+the adapter emits `unsupported-sessions-tool-resume`, registers no new tool,
+and refuses sessions calls without invoking the host. A saved sessions tool
+continues to work normally. Board and Fusion resume behavior is unchanged.
 
 ## Terminal turn outcome
 `idle` is a session readiness state, NOT proof of task success. Native providers may end failed/interrupted turns by returning to idle. Each adapter MUST emit `{type:'turnCompleted',outcome:'succeeded'|'failed'|'interrupted'}` exactly once after an admitted turn reaches its native terminal outcome, before final idle. Native stop reasons/turn status determine outcome, not absence of transport errors. A failed command that was never admitted rejects normally; a transport loss with no terminal proof stays uncertain. Host tracks outcome with turn generation; initial idle or later idle cannot overwrite it. Scheduler success requires explicit succeeded, never status-only idle. Pi: `agent_end` fires once per low-level run and may be followed by an automatic retry (`willRetry:true`), a compaction retry or a queued follow-up run, so the turn completes on `agent_settled` (Pi >= 0.80.4); the last assistant `stopReason` of the whole turn decides the outcome. Settlement support is decided when the adapter starts, before any work is admitted, from the `@earendil-works/pi-coding-agent` package of the entry script (walking up from it) or of a launcher's global install (`node_modules` beside it, or `../lib/node_modules`), and is otherwise learned from the first `agent_settled`. There are three modes. Version known and >= 0.80.4: only `agent_settled` completes a turn. Version known and < 0.80.4 (a positively identified legacy runtime): the first `agent_end` whose `willRetry` is not `true` completes it. Version unknown (a launcher or wrapper with no discoverable package): a bare `agent_end(willRetry:false)` never completes the turn, because compaction recovery or a queued continuation may follow it. The adapter waits for `agent_settled`, and otherwise arms a 250 ms quiet timer that any `agent_start`, `auto_retry_start` or compaction event cancels; when it fires the adapter reads `get_state`, and only a runtime that is not streaming, not compacting and holds no queued messages completes the turn (a busy answer re-arms the timer; a failed probe counts as quiet). The first `agent_settled` seen switches the adapter to the settled mode. A failed assistant message does not emit its `error` event when it ends: Pi may retry it, and the host pauses its composer queue on an `error`. The adapter holds the safe summary and emits it, immediately before `turnCompleted:"failed"`, only if the settled turn's last assistant message still failed; a retried failure that succeeds emits no `error`. This is host-private metadata, not a persisted replacement transcript.
@@ -336,7 +443,9 @@ Requests 167 -> 172, notifications 83 -> 85, server requests unchanged (11).
 | `thread/prediction/updated` | New; only after `thread/prediction/request` | Never triggered (generic fallback) |
 | `CodexErrorInfo` | Open since 0.161 (any string or object); 0.163 adds `flexUnavailable` and `tooManyDenials` (Guardian strict circuit breaker: the turn is *interrupted* with this error) | **Added**: fixed summaries for both; an interrupted turn with an error reports it |
 | `MessagePhase` | Adds `partial_answer` | Phase is not read |
-| `ThreadItem` | `subAgentActivity` adds `model`, `reasoningEffort` | Generic fallback, unchanged |
+| `ThreadItem` | `subAgentActivity` adds `model`, `reasoningEffort` | `Agent` / `subagent` tool blocks with the agent path, model and reasoning; interrupted activity stays interrupted |
+| `ThreadItem` | Existing `collabAgentToolCall` | `Agent` / `subagent` tool blocks with action titles, bounded prompt/model/reasoning text and the first eight agent states; thread ids are omitted |
+| `ThreadItem` | Existing `imageView` | `Image` / `read` tool blocks with the image path; other unprojected item types keep the generic fallback |
 | Base instructions (behavior) | 0.162 (openai/codex#51156) sends `baseInstructions` as the first developer input message and leaves the Responses `instructions` empty | Unchanged: Codex's default prompt is still replaced; `codex-prompt-probe.mjs` accepts either channel and reports `baseChannel` |
 | Resume (behavior) | 0.163 restores a saved thread's permissions and network approvals unless overridden | Unchanged: the bridge sends explicit permissions and still verifies the effective ones |
 | Windows `workspace-write` (behavior) | Every command is rejected unless the user's `config.toml` sets `[windows] sandbox`; with `"unelevated"` commands run and writes outside the project fail | Not changed by PiUI (global config is the user's); a known limitation |

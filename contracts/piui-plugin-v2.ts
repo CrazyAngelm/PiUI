@@ -68,7 +68,7 @@ export const PLUGIN_SHORTCUT_PATTERN = /^Mod(?:\+Alt)?(?:\+Shift)?\+(?:[A-Z0-9]|
  * app by `pluginShortcuts.test.ts`.
  */
 export const PLUGIN_RESERVED_SHORTCUTS = [
-  'Mod+N', 'Mod+K', 'Mod+,', 'Mod+.', 'Mod+Shift+I', 'Mod+Alt+B', 'Mod+F', 'Mod+Shift+G', 'Mod+Shift+M',
+  'Mod+N', 'Mod+K', 'Mod+,', 'Mod+.', 'Mod+Shift+I', 'Mod+Alt+B', 'Mod+B', 'Mod+F', 'Mod+Shift+G', 'Mod+Shift+M',
   'Mod+Z', 'Mod+Shift+Z', 'Mod+Y', 'Mod+S', 'Mod+A', 'Mod+C', 'Mod+V', 'Mod+X', 'Mod+Shift+V',
   'Mod+W', 'Mod+Q', 'Mod+R', 'Mod+Shift+R', 'Mod+P', 'Mod+T', 'Mod+Shift+T', 'Mod+0',
 ] as const;

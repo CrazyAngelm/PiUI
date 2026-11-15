@@ -1,7 +1,7 @@
 import fixture from '../../../../../contracts/fixtures/nano-avatars-v1.json';
 import { NANO_AVATAR_EVENT_V1, type NanoAvatarAnswerV1, type NanoAvatarScopeV1 } from '../../../../../contracts/nano-avatars-v1';
 import type { NanoAccountStatusV1 } from '../../../../../contracts/nano-account-v1';
-import { parseAvatarManifest } from '../nanoAvatarClient';
+import { parseAvatarManifest } from '../nanoAvatarManifest';
 import type { LabEventBus } from './labBus';
 
 /** Synthetic geometric test artwork, generated in Lab memory. No bundled avatar or Nano request. */

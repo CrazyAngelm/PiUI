@@ -12,6 +12,8 @@
   import { harnessMeta } from '../harnessMeta';
   import AgentModePicker from './AgentModePicker.svelte';
   import ChatOrigin from '../worktrees/ChatOrigin.svelte';
+  import LinkedChats from '../links/LinkedChats.svelte';
+  import { sessionNotices } from '../../features/workspace/sessionNotices';
   import PluginChatPanels from '../plugins/PluginChatPanels.svelte';
   import { useWorkspace } from './context';
   import { remoteMode } from '../nano/remoteMode';
@@ -78,6 +80,7 @@
 
     <!-- Worktrees, handoff links and review belong to this computer's screen; a remote browser has none. -->
     {#if !remoteMode}<ChatOrigin sessionId={session.id} {onReview} />{/if}
+    {#if !remoteMode}<LinkedChats sessionId={session.id} harness={session.harness} notices={sessionNotices(snapshot)} />{/if}
 
     <section>
       <h3>{$t('What this agent can do here')}</h3>

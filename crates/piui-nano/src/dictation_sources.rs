@@ -29,7 +29,7 @@ use crate::store::{CredentialStore, MemoryStore, dictation_store};
 pub const DICTATION_PROTOCOL: u32 = 1;
 /// Largest clip sent to a provider (20 MiB, the WebView's default limit).
 pub const DICTATION_MAX_BYTES: u64 = 20 * 1024 * 1024;
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_ANSWER_BYTES: usize = 1024 * 1024;
 const MAX_URL_CHARS: usize = 2048;
 const MAX_MODEL_CHARS: usize = 128;

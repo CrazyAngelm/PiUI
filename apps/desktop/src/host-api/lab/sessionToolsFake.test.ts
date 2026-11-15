@@ -5,7 +5,7 @@ import type { WorkspaceAdoptResultV1 } from '../../../../../contracts/workspace-
 import { decodePlacementResult } from '../placementClient';
 import { decodeReviewResult } from '../reviewClient';
 import type { LabHost } from './labHost';
-import { labHost, rejection } from './labTestKit';
+import { labHost, rejection, snapshotOf } from './labTestKit';
 import { DEMO_PROJECTS, demoSessionId } from './scenarios/demoChats';
 import { DEMO_WORKTREE_SESSION } from './sessionToolsFake';
 import { splitHunk } from '../../app/review/review';
@@ -183,6 +183,72 @@ describe('session tools lab fake', () => {
     expect(created.placement.continuedFrom).toBe(TRANSPORT_CHAT);
     const listed = await placement(host, { type: 'list' });
     expect(listed.type === 'placements' && listed.placements.map((item) => item.sessionId)).toContain(created.snapshot.session.id);
+  });
+
+  it('branches a Codex chat natively with the source blocks up to the cut and links the child', async () => {
+    const source = await snapshotOf(host, TRANSPORT_CHAT);
+    const secondUser = source.blocks.filter((block) => block.kind === 'user')[1];
+    if (secondUser === undefined) throw new Error('expected two user messages');
+    const cutIndex = source.blocks.findIndex((block) => block.id === secondUser.id);
+    const base = { type: 'createChat', workspaceId: DEMO_PROJECTS.piui, harness: 'codex', permissionMode: 'native', continuedFrom: TRANSPORT_CHAT };
+
+    const before = await placement(host, { ...base, branch: { mode: 'native', at: 'before', blockId: secondUser.id } });
+    if (before.type !== 'created') throw new Error('expected a created chat');
+    expect(before.snapshot.blocks.map((block) => block.id)).toEqual(source.blocks.slice(0, cutIndex).map((block) => block.id));
+    expect(before.placement).toMatchObject({ continuedFrom: TRANSPORT_CHAT, branch: 'native' });
+    const stored = await snapshotOf(host, before.snapshot.session.id);
+    expect(stored.blocks.map((block) => block.id)).toEqual(before.snapshot.blocks.map((block) => block.id));
+
+    const end = await placement(host, { ...base, branch: { mode: 'native', at: 'end' } });
+    if (end.type !== 'created') throw new Error('expected a created chat');
+    expect(end.snapshot.blocks.map((block) => block.id)).toEqual(source.blocks.map((block) => block.id));
+    expect((await snapshotOf(host, TRANSPORT_CHAT)).blocks).toHaveLength(source.blocks.length);
+
+    const links = await host.invoke<{ chats: { sessionId: string; kind: string; relation: string }[] }>('session_links_command_v1', {
+      command: { op: 'find', sessionId: TRANSPORT_CHAT },
+    });
+    expect(links.chats.filter((chat) => chat.kind === 'branch' && chat.relation === 'child').map((chat) => chat.sessionId)).toEqual([
+      before.snapshot.session.id,
+      end.snapshot.session.id,
+    ]);
+    const listed = await placement(host, { type: 'list' });
+    expect(listed.type === 'placements' && listed.placements.find((item) => item.sessionId === end.snapshot.session.id)?.branch).toBe('native');
+  });
+
+  it('refuses a native branch it cannot make and does not create a chat', async () => {
+    const source = await snapshotOf(host, TRANSPORT_CHAT);
+    const answer = source.blocks.find((block) => block.kind === 'assistant');
+    const chatCount = async () => (await host.invoke<{ catalog: { sessions: unknown[] } }>('workspace_command_v15', { command: { type: 'catalog' } })).catalog.sessions.length;
+    const before = await chatCount();
+    const base = { type: 'createChat', workspaceId: DEMO_PROJECTS.piui, permissionMode: 'native' };
+    const refused = (command: Record<string, unknown>) => host.invoke('workspace_placement_v1', { command: { ...base, ...command } });
+    await expect(refused({ harness: 'codex', continuedFrom: TRANSPORT_CHAT, branch: { mode: 'native', at: 'before', blockId: answer?.id } }))
+      .rejects.toMatchObject({ code: 'BRANCH_POINT_NOT_FOUND' });
+    await expect(refused({ harness: 'codex', continuedFrom: TRANSPORT_CHAT, branch: { mode: 'native', at: 'before', blockId: 'missing' } }))
+      .rejects.toMatchObject({ code: 'BRANCH_POINT_NOT_FOUND' });
+    await expect(refused({ harness: 'pi', continuedFrom: demoSessionId('compaction'), branch: { mode: 'native', at: 'end' } }))
+      .rejects.toMatchObject({ code: 'BRANCH_UNSUPPORTED' });
+    await expect(refused({ harness: 'codex', branch: { mode: 'native', at: 'end' }, worktree: { type: 'shared', sessionId: DEMO_WORKTREE_SESSION } }))
+      .rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    await expect(refused({ harness: 'codex', continuedFrom: TRANSPORT_CHAT, branch: { mode: 'native', at: 'end' }, worktree: { type: 'shared', sessionId: DEMO_WORKTREE_SESSION } }))
+      .rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    await expect(refused({ harness: 'claude-code', continuedFrom: TRANSPORT_CHAT, branch: { mode: 'native', at: 'end' } }))
+      .rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    expect(await chatCount()).toBe(before);
+  });
+
+  it('records a linked branch on any agent as an ordinary chat', async () => {
+    const created = await placement(host, {
+      type: 'createChat', workspaceId: DEMO_PROJECTS.piui, harness: 'pi', permissionMode: 'native', continuedFrom: TRANSPORT_CHAT, branch: { mode: 'linked' },
+    });
+    if (created.type !== 'created') throw new Error('expected a created chat');
+    expect(created.snapshot.blocks).toEqual([]);
+    expect(decodePlacementResult({ protocol: 1, type: 'placements', placements: [{ sessionId: 'a', branch: 'bogus' }] })).toBeUndefined();
+    expect(created.placement).toMatchObject({ continuedFrom: TRANSPORT_CHAT, branch: 'linked' });
+    const links = await host.invoke<{ chats: { sessionId: string; kind: string }[] }>('session_links_command_v1', {
+      command: { op: 'find', sessionId: created.snapshot.session.id },
+    });
+    expect(links.chats.map((chat) => `${chat.sessionId}:${chat.kind}`)).toEqual([`${TRANSPORT_CHAT}:branch`]);
   });
 
   it('adopts a terminal Pi session once and refuses one still open in the terminal', async () => {

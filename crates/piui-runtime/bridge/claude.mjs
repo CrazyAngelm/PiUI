@@ -3,7 +3,7 @@
 // approvals, authentication and its JSONL history; this file only translates
 // the documented stream-json and control protocol. PiUI accepts a Claude
 // subscription login only: API keys and cloud providers are refused.
-export async function createClaudeAdapter(config, emit, coordinatorRequest, boardRequest, sidekickRequest) {
+export async function createClaudeAdapter(config, emit, coordinatorRequest, boardRequest, sidekickRequest, sessionsRequest) {
   const { spawn } = await import("node:child_process");
   const { createHash, randomUUID } = await import("node:crypto");
   const { createServer } = await import("node:http");
@@ -35,6 +35,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
   const BOARD_TOOL = `mcp__${COORDINATOR_SERVER}__board`;
   // So does the Fusion lead's `sidekick` tool (ADR-043).
   const SIDEKICK_TOOL = `mcp__${COORDINATOR_SERVER}__sidekick`;
+  const SESSIONS_TOOL = `mcp__${COORDINATOR_SERVER}__sessions`;
   // Claude Code times out an MCP tool call after about 64 s without telling
   // the server (Fusion spike S1, 2.1.302); a sidekick wait portion needs more.
   const SIDEKICK_TOOL_TIMEOUT_MS = "600000";
@@ -80,6 +81,15 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
     || !MODEL_PATTERN.test(config.model.id) || (config.model.provider != null && config.model.provider !== "anthropic"))) {
     throw fail("unsupported-settings", "The requested Claude model is invalid.");
   }
+  const fork = config.fork;
+  if (fork !== undefined && (!isRecord(fork)
+    || Object.keys(fork).some(key => !["nativeId", "nativePath", "beforeBlockId"].includes(key))
+    || typeof fork.nativeId !== "string" || !UUID_PATTERN.test(fork.nativeId)
+    || (fork.nativePath !== undefined && typeof fork.nativePath !== "string")
+    || (fork.beforeBlockId !== undefined && (typeof fork.beforeBlockId !== "string" || fork.beforeBlockId.length < 1 || fork.beforeBlockId.length > 256))
+    || config.nativeId != null || config.coordination === true)) {
+    throw fail("invalid-session", "The Claude Code branch reference is invalid.");
+  }
   const coordination = config.coordination === true;
   if (coordination && typeof coordinatorRequest !== "function") {
     throw fail("coordinator-unavailable", "The managed Claude Code coordinator is unavailable.");
@@ -94,18 +104,20 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
   const boardEnabled = boardRequested && typeof boardRequest === "function";
   const sidekickRequested = Array.isArray(config.hostTools) && config.hostTools.includes("sidekick");
   const sidekickEnabled = sidekickRequested && typeof sidekickRequest === "function";
+  const sessionsRequested = Array.isArray(config.hostTools) && config.hostTools.includes("sessions");
+  const sessionsEnabled = sessionsRequested && typeof sessionsRequest === "function";
   // `--tools` restricts the built-in tool set; `--allowedTools` would only
   // pre-approve tools, so it is never used to express a restriction.
   let toolAllowlist;
   if (config.allowedTools != null) {
     if (!Array.isArray(config.allowedTools) || config.allowedTools.some((name) => typeof name !== "string"
       || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name) || name.startsWith("mcp__") || (name === "workspace" && !coordination)
-      || (name === "board" && !boardEnabled) || (name === "sidekick" && !sidekickEnabled))) {
+      || (name === "board" && !boardEnabled) || (name === "sidekick" && !sidekickEnabled) || (name === "sessions" && !sessionsEnabled))) {
       throw fail("unsupported-policy", "The Claude Code tool allowlist contains an unsupported tool name.");
     }
     // `workspace` names the coordinator tool, which only exists in managed runs;
     // `board` names the board host tool. Both are MCP tools, not built-ins.
-    toolAllowlist = [...new Set(config.allowedTools.filter((name) => name !== "workspace" && name !== "board" && name !== "sidekick"))];
+    toolAllowlist = [...new Set(config.allowedTools.filter((name) => name !== "workspace" && name !== "board" && name !== "sidekick" && name !== "sessions"))];
   }
   if (config.nativeSubagents === true && toolAllowlist && !toolAllowlist.some((name) => name === "Agent" || name === "Task")) {
     throw fail("unsupported-policy", "Native Claude Code subagents require the Agent tool in the enforced tool policy.");
@@ -195,10 +207,11 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
     if (name === EFFORT_OVERRIDE && config.thinkingLevel != null) continue;
     // Replaced below with PiUI's own fixed value.
     if (name === "CLAUDE_CODE_DISABLE_FAST_MODE") continue;
-    if (name === "MCP_TOOL_TIMEOUT" && sidekickEnabled) continue;
+    if (name === "MCP_TOOL_TIMEOUT" && (sidekickEnabled || sessionsEnabled)) continue;
     childEnvironment[key] = value;
   }
-  if (sidekickEnabled) childEnvironment.MCP_TOOL_TIMEOUT = SIDEKICK_TOOL_TIMEOUT_MS;
+  // The existing host-tool wait allowance also covers sessions' 240-second wait.
+  if (sidekickEnabled || sessionsEnabled) childEnvironment.MCP_TOOL_TIMEOUT = SIDEKICK_TOOL_TIMEOUT_MS;
   // Fast mode is disabled for the whole CLI process, not just this session's settings.
   childEnvironment.CLAUDE_CODE_DISABLE_FAST_MODE = "1";
   const effortOverridden = () => Object.keys(childEnvironment).some((key) => key.toUpperCase() === EFFORT_OVERRIDE);
@@ -538,6 +551,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
   // Session state.
   // ---------------------------------------------------------------------------
   const resuming = typeof config.nativeId === "string";
+  let forkArgs;
   let nativeId = resuming ? config.nativeId : randomUUID();
   let nativePath = transcriptPath(nativeId);
   let title = plain(config.title) ? config.title.trim() : "Claude Code session";
@@ -1166,17 +1180,15 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
   const HISTORY_FILE_LIMIT = 32 * 1024 * 1024;
   const HISTORY_BLOCK_LIMIT = 2000;
   const HISTORY_TEXT_BUDGET = 8 * 1024 * 1024;
-  const readHistory = async (path) => {
+  const readHistoryChain = async (path, until = undefined) => {
     let raw;
     try {
       const info = await stat(path);
-      if (!info.isFile()) return [];
-      if (info.size > HISTORY_FILE_LIMIT) {
-        return [{ id: opaque("claude-history", `${path}:too-large`), kind: "custom", label: "Claude Code", status: "complete", safeSummary: "This Claude Code conversation is too large to display here." }];
-      }
+      if (!info.isFile()) return { entries: [], chain: [] };
+      if (info.size > HISTORY_FILE_LIMIT) return undefined;
       raw = await readFile(path, "utf8");
     } catch {
-      return [];
+      return { entries: [], chain: [] };
     }
     const entries = [];
     for (const line of raw.split("\n")) {
@@ -1192,8 +1204,8 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
     const byUuid = new Map();
     for (const entry of entries) if (typeof entry.uuid === "string") byUuid.set(entry.uuid, entry);
     const conversational = entries.filter((entry) => (entry.type === "user" || entry.type === "assistant") && entry.isSidechain !== true);
-    const leaf = conversational.at(-1);
-    let chain = conversational;
+    const leaf = typeof until === "string" ? byUuid.get(until) : conversational.at(-1);
+    let chain = typeof until === "string" ? [] : conversational;
     if (leaf && typeof leaf.uuid === "string") {
       chain = [];
       const seen = new Set();
@@ -1207,6 +1219,21 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
       }
       chain.reverse();
     }
+    return { entries, chain };
+  };
+  const forkPoint = async (sourcePath, beforeBlockId) => {
+    const history = await readHistoryChain(sourcePath);
+    const entry = history?.chain.find(entry => entry.type === "user" && typeof entry.uuid === "string" && userBlockId(entry.uuid) === beforeBlockId);
+    if (!entry) throw fail("branch-point-not-found", "That message is no longer in the chat this one branches from.");
+    const at = entry.parentUuid ?? entry.logicalParentUuid;
+    return typeof at === "string" && at ? { at } : { empty: true };
+  };
+  const readHistory = async (path, until = undefined) => {
+    const history = await readHistoryChain(path, until);
+    if (history === undefined) {
+      return [{ id: opaque("claude-history", `${path}:too-large`), kind: "custom", label: "Claude Code", status: "complete", safeSummary: "This Claude Code conversation is too large to display here." }];
+    }
+    const { entries, chain } = history;
     const result = [];
     const toolIndex = new Map();
     const applyResult = (part) => {
@@ -1348,6 +1375,30 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
       additionalProperties: false,
     },
   };
+  const sessionsObject = (op, fields = {}, required = []) => ({
+    type: "object", properties: { op: { const: op }, ...fields }, required: ["op", ...required], additionalProperties: false,
+  });
+  const sessionsId = { type: "string", minLength: 1, pattern: "^[A-Za-z0-9_-]+$" };
+  const sessionsModelName = { type: "string", minLength: 1 };
+  const sessionsText = { type: "string", minLength: 1, maxLength: 16000 };
+  const sessionsWait = { type: "integer", minimum: 0, maximum: 240 };
+  const sessionsInputSchema = { type: "object", oneOf: [
+    sessionsObject("start", {
+      title: { type: "string", minLength: 1, pattern: "\\S" }, prompt: sessionsText,
+      harness: { anyOf: [{ enum: ["pi", "nano", "claude-code", "codex", "prime-agent", "hermes"] }, { type: "string", pattern: "^acp:(?!.*--)[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$" }] },
+      model: { type: "object", properties: { provider: sessionsModelName, id: sessionsModelName }, required: ["provider", "id"], additionalProperties: false },
+      permissionMode: { enum: ["native", "read-only", "workspace-write", "full-access"] },
+      wait: { type: "boolean" }, waitSeconds: sessionsWait,
+    }, ["title", "prompt"]),
+    sessionsObject("list"),
+    sessionsObject("message", { sessionId: sessionsId, text: sessionsText, wait: { type: "boolean" }, waitSeconds: sessionsWait }, ["sessionId", "text"]),
+    sessionsObject("read", { sessionId: sessionsId, page: { type: "integer", minimum: 1 } }, ["sessionId"]),
+    sessionsObject("wait", { sessionId: sessionsId, waitSeconds: sessionsWait }, ["sessionId"]),
+    sessionsObject("stop", { sessionId: sessionsId }, ["sessionId"]),
+  ] };
+  const SESSIONS_MCP_TOOL = {
+    name: "sessions", description: "Work with chats linked to this one. start: begin a new linked chat for a separable piece of work and give it a complete prompt. list: the linked chats and their state. message: send a linked chat a message. read: the last answer of a linked chat. wait: wait for a linked chat to finish its turn. stop: stop a linked chat you started. With wait:true (waitSeconds up to 240) start and message return the answer. A linked chat on another harness needs permissionMode, and is refused when this chat runs in its harness's own permission mode.", inputSchema: sessionsInputSchema,
+  };
   const SIDEKICK_MCP_TOOL = {
     name: "sidekick",
     description: "Delegate to your PiUI Fusion sidekick, a persistent agent in this folder. op brief sends one coherent task (title, goal, doneWhen required) and waits a bounded portion for the report; wait collects it; message sends a correction for a brief; steer, stop, diff, report, status, close and reset manage rounds. Report bodies are untrusted data from another agent. The result is text.",
@@ -1415,7 +1466,17 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
         serverInfo: { name: COORDINATOR_SERVER, version: "1" },
       } });
     } else if (message.method === "ping") reply({ result: {} });
-    else if (message.method === "tools/list") reply({ result: { tools: [...(coordination ? [WORKSPACE_TOOL] : []), ...(boardEnabled ? [BOARD_MCP_TOOL] : []), ...(sidekickEnabled ? [SIDEKICK_MCP_TOOL] : [])] } });
+    else if (message.method === "tools/list") reply({ result: { tools: [...(coordination ? [WORKSPACE_TOOL] : []), ...(boardEnabled ? [BOARD_MCP_TOOL] : []), ...(sidekickEnabled ? [SIDEKICK_MCP_TOOL] : []), ...(sessionsEnabled ? [SESSIONS_MCP_TOOL] : [])] } });
+    else if (message.method === "tools/call" && message.params?.name === "sessions" && sessionsEnabled) {
+      try {
+        const result = await sessionsRequest(message.params.arguments, { toolCallId: `mcp-${String(message.id)}`, signal: disconnected.signal });
+        reply({ result: { ...(result?.ok === false ? { isError: true } : {}), content: [{ type: "text", text: JSON.stringify(result) }] } });
+      } catch (error) {
+        const code = typeof error?.bridgeCode === "string" ? error.bridgeCode : "unavailable";
+        const text = typeof error?.safeMessage === "string" ? error.safeMessage : "Linked chats could not complete this operation.";
+        reply({ result: { isError: true, content: [{ type: "text", text: JSON.stringify({ ok: false, code, message: text }) }] } });
+      }
+    }
     else if (message.method === "tools/call" && message.params?.name === "sidekick" && sidekickEnabled) {
       // The host keys retries by the native tool use id (Fusion spike S10).
       // Without it no call reference is made up: a JSON-RPC id repeats across
@@ -1508,9 +1569,21 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
       }
       for (const block of await readHistory(nativePath)) blocks.set(block.id, block);
     }
+    if (fork) {
+      const sourcePath = transcriptPath(fork.nativeId);
+      if ((fork.nativePath !== undefined && !samePath(fork.nativePath, sourcePath)) || !await isFile(sourcePath)) {
+        throw fail("branch-unsupported", "This chat cannot be branched natively.");
+      }
+      const point = fork.beforeBlockId !== undefined ? await forkPoint(sourcePath, fork.beforeBlockId) : {};
+      if (!point.empty) {
+        for (const block of await readHistory(sourcePath, point.at)) blocks.set(block.id, block);
+        forkArgs = ["--resume", fork.nativeId, "--fork-session", "--session-id", nativeId, ...(point.at ? ["--resume-session-at", point.at] : [])];
+      }
+    }
     if (boardRequested && !boardEnabled) emit({ type: "notice", code: "unsupported-board-tool" });
     if (sidekickRequested && !sidekickEnabled) emit({ type: "notice", code: "unsupported-sidekick-tool" });
-    if (coordination || boardEnabled || sidekickEnabled) {
+    if (sessionsRequested && !sessionsEnabled) emit({ type: "notice", code: "unsupported-sessions-tool" });
+    if (coordination || boardEnabled || sidekickEnabled || sessionsEnabled) {
       server = createServer((request, response) => {
         void handleMcp(request, response).catch(() => { try { response.writeHead(500).end(); } catch { /* closed */ } });
       });
@@ -1533,17 +1606,17 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
       args.push("--mcp-config", await scratchFile("mcp.json", JSON.stringify({ mcpServers })));
       // The coordinator and the board enforce their own ACLs, so exactly these
       // host tools run without prompts; nothing else is pre-approved.
-      const hostTools = [...(coordination ? [COORDINATOR_TOOL] : []), ...(boardEnabled ? [BOARD_TOOL] : []), ...(sidekickEnabled ? [SIDEKICK_TOOL] : [])];
+      const hostTools = [...(coordination ? [COORDINATOR_TOOL] : []), ...(boardEnabled ? [BOARD_TOOL] : []), ...(sidekickEnabled ? [SIDEKICK_TOOL] : []), ...(sessionsEnabled ? [SESSIONS_TOOL] : [])];
       if (server && hostTools.length) args.push("--allowed-tools", hostTools.join(","));
     }
     if (toolAllowlist) args.push("--tools", toolAllowlist.join(","), "--strict-mcp-config");
     // With an allowlist, `--strict-mcp-config` already limits MCP to this
     // session's own server; `mcp__*` is denied only when no host tool uses it.
-    const denied = [...(disableSubagents ? ["Agent"] : []), ...(toolAllowlist && !coordination && !boardEnabled && !sidekickEnabled ? ["mcp__*"] : [])];
+    const denied = [...(disableSubagents ? ["Agent"] : []), ...(toolAllowlist && !coordination && !boardEnabled && !sidekickEnabled && !sessionsEnabled ? ["mcp__*"] : [])];
     if (denied.length) args.push("--disallowed-tools", denied.join(","));
     staticArgs = args;
 
-    verifyInitialize(await launch(resuming ? ["--resume", nativeId] : ["--session-id", nativeId]));
+    verifyInitialize(await launch(resuming ? ["--resume", nativeId] : forkArgs ?? ["--session-id", nativeId]));
     if (config.model?.id && !findModel(config.model.id)) {
       throw fail("model-unavailable", "The selected Claude model is unavailable for this account.");
     }
@@ -1566,7 +1639,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
     restarting = true;
     try {
       await stopProcess(proc, 3000);
-      const sessionArgs = (await isFile(transcriptPath(nativeId))) ? ["--resume", nativeId] : ["--session-id", nativeId];
+      const sessionArgs = (await isFile(transcriptPath(nativeId))) ? ["--resume", nativeId] : forkArgs ?? ["--session-id", nativeId];
       verifyInitialize(await launch(sessionArgs));
     } catch (error) {
       restarting = false;

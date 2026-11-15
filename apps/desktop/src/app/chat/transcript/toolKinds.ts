@@ -13,13 +13,14 @@ const EDIT = new Set(['file-change', 'filechange', 'edit', 'write', 'apply_patch
 const READ = new Set(['read', 'view', 'cat', 'open', 'readfile', 'read_file']);
 const SEARCH = new Set(['grep', 'find', 'glob', 'ls', 'search', 'rg', 'list']);
 const WEB = new Set(['websearch', 'web_search', 'web-search', 'fetch', 'webfetch', 'browse']);
+const AGENT = new Set(['agent', 'task', 'subagent', 'spawn_agent', 'collab-agent']);
 
 export function toolKind(block: TimelineBlock): ToolKind {
   if (block.kind === 'thinking') return 'thinking';
   const name = (block.toolName ?? '').toLowerCase();
   const title = (block.title ?? '').toLowerCase();
   const label = (block.label ?? '').toLowerCase();
-  if (name.startsWith('workspace.') || title.startsWith('workspace.')) return 'agent';
+  if (name.startsWith('workspace.') || title.startsWith('workspace.') || AGENT.has(name)) return 'agent';
   if (COMMAND.has(name) || label === 'command') return 'command';
   if (EDIT.has(name) || label === 'file change' || label === 'diff') return 'edit';
   if (READ.has(name)) return 'read';
@@ -149,4 +150,74 @@ export function activityState(blocks: readonly TimelineBlock[]): ActivityState {
     else if (block.status === 'interrupted') stopped = true;
   }
   return { live: running !== undefined, failed, stopped, ...(running ? { current: activityLine(running) } : {}) };
+}
+
+/** The kind that names a group: the first of the summary's order that occurs, reasoning only when it is all there is. */
+export function leadingKind(blocks: readonly TimelineBlock[]): ToolKind {
+  const kinds = new Set(blocks.map(toolKind));
+  return ORDER.find((kind) => kinds.has(kind)) ?? 'tool';
+}
+
+const PREVIEW_LENGTH = 160;
+
+/**
+ * One line of reasoning text for a row's header. Finished text gives its first
+ * non-empty line; text still streaming gives the first line of its last
+ * paragraph, so the line follows what the model is saying now.
+ */
+export function reasoningPreview(text: string, live: boolean = false): string {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n').map((line) => line.trim());
+  let line: string | undefined;
+  if (live) {
+    let end = lines.length;
+    while (end > 0 && lines[end - 1] === '') end -= 1;
+    let start = end;
+    while (start > 0 && lines[start - 1] !== '') start -= 1;
+    line = lines[start];
+  } else {
+    line = lines.find((entry) => entry !== '');
+  }
+  const clean = (line ?? '').replaceAll('**', '').replace(/\s+/g, ' ').trim();
+  return clean.length > PREVIEW_LENGTH ? `${clean.slice(0, PREVIEW_LENGTH - 1).trimEnd()}…` : clean;
+}
+
+const LIVE_LABELS: Record<Language, Record<ToolKind | 'working', string>> = {
+  en: {
+    command: 'Running a command',
+    edit: 'Editing files',
+    read: 'Reading files',
+    search: 'Searching',
+    web: 'Searching the web',
+    agent: 'Delegating',
+    tool: 'Using a tool',
+    thinking: 'Thinking',
+    working: 'Working',
+  },
+  ru: {
+    command: 'Выполняет команду',
+    edit: 'Изменяет файлы',
+    read: 'Читает файлы',
+    search: 'Ищет',
+    web: 'Ищет в интернете',
+    agent: 'Поручает задачу',
+    tool: 'Использует инструмент',
+    thinking: 'Думает',
+    working: 'Работает',
+  },
+};
+
+/** What a group that is still working is doing now: the running call, else the reasoning, else just "working". */
+export function activityLive(blocks: readonly TimelineBlock[], language: Language): { label: string; detail?: string } {
+  const labels = LIVE_LABELS[language];
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index]!;
+    if (block.kind === 'tool' && block.status === 'streaming') return { label: labels[toolKind(block)], detail: activityLine(block) };
+  }
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index]!;
+    if (block.kind !== 'thinking' || block.status !== 'streaming') continue;
+    const detail = reasoningPreview(block.text ?? block.safeSummary ?? '', true);
+    return detail ? { label: labels.thinking, detail } : { label: labels.thinking };
+  }
+  return { label: labels.working };
 }

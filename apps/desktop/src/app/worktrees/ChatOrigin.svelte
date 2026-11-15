@@ -81,12 +81,17 @@
 
 {#if placement?.continuedFrom}
   <section class="origin">
-    <h3>{$t('Continued from')}</h3>
+    <h3>{placement.branch ? $t('Branch of') : $t('Continued from')}</h3>
     {#if source}
       <button type="button" class="link" onclick={() => void store.openSession(source.id)}>{source.title}</button>
-      <p class="note">{$t('This chat continues that one. Its history was not copied or converted.')}</p>
+      {#if !placement.branch}
+        <p class="note">{$t('This chat continues that one. Its history was not copied or converted.')}</p>
+      {/if}
     {:else}
       <p class="note">{$t('A chat that is no longer in Nano Desktop.')}</p>
+    {/if}
+    {#if placement.branch === 'linked'}
+      <p class="note">{$t('A linked branch: the history was not copied.')}</p>
     {/if}
   </section>
 {/if}

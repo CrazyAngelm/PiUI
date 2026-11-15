@@ -2,7 +2,7 @@
 // this source can be concatenated with the common embedded runner.
 // `probeHooks` is a test-only injection (like `openChild`); production callers
 // never pass it: { timeoutMs, platform, spawn } for the `features list` probe.
-export async function createCodexAdapter(config, emit, coordinatorRequest, openChild, boardRequest, sidekickRequest, probeHooks = {}) {
+export async function createCodexAdapter(config, emit, coordinatorRequest, openChild, boardRequest, sidekickRequest, probeHooks = {}, sessionsRequest) {
   const sourceEnvironment = process.env.PIUI_NANO_CODEX_SOURCE;
   delete process.env.PIUI_NANO_CODEX_SOURCE;
   const { spawn } = await import("node:child_process");
@@ -26,6 +26,15 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   }
   if (!new Set(["native", "read-only", "workspace-write", "full-access"]).has(config.permissionMode)) {
     throw fail("unsupported-permission-mode", "The requested Codex permission mode is not supported.");
+  }
+  const fork = config.fork;
+  if (fork !== undefined && (fork === null || typeof fork !== "object" || Array.isArray(fork)
+    || Object.keys(fork).some(key => !["nativeId", "nativePath", "beforeBlockId"].includes(key))
+    || typeof fork.nativeId !== "string" || fork.nativeId.length < 1 || fork.nativeId.length > 200
+    || (fork.nativePath !== undefined && typeof fork.nativePath !== "string")
+    || (fork.beforeBlockId !== undefined && (typeof fork.beforeBlockId !== "string" || fork.beforeBlockId.length < 1 || fork.beforeBlockId.length > 256))
+    || config.nativeId != null)) {
+    throw fail("invalid-session", "The Codex branch reference is invalid.");
   }
   const nanoProvider = "nano-codex-subscription";
   const nanoKeyName = "PIUI_NANO_CODEX_KEY";
@@ -70,7 +79,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   if (coordinationEnabled && typeof coordinatorRequest !== "function") {
     throw fail("coordinator-unavailable", "The managed Codex coordinator is unavailable.");
   }
-  if (coordinationEnabled && config.nativeId) {
+  if (coordinationEnabled && (config.nativeId || fork)) {
     throw fail("unsupported-coordinator-resume", "Codex app-server thread/resume cannot re-register the managed workspace tool.");
   }
   if (coordinationEnabled && config.nativeSubagents === true) {
@@ -82,14 +91,20 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   // it runs without it (a notice, never a failure: the board is optional).
   const boardRequested = Array.isArray(config.hostTools) && config.hostTools.includes("board");
   const boardAvailable = boardRequested && typeof boardRequest === "function";
-  const registerBoard = boardAvailable && !config.nativeId;
+  const registerBoard = boardAvailable && !config.nativeId && !fork;
   if (boardRequested && !boardAvailable) emit({ type: "notice", code: "unsupported-board-tool" });
   // The Fusion lead's `sidekick` tool (ADR-043) follows the same rule: it is
   // registered on `thread/start` and persists with the thread (spike S7).
   const sidekickRequested = Array.isArray(config.hostTools) && config.hostTools.includes("sidekick");
   const sidekickAvailable = sidekickRequested && typeof sidekickRequest === "function";
-  const registerSidekick = sidekickAvailable && !config.nativeId;
+  const registerSidekick = sidekickAvailable && !config.nativeId && !fork;
   if (sidekickRequested && !sidekickAvailable) emit({ type: "notice", code: "unsupported-sidekick-tool" });
+  const sessionsRequested = Array.isArray(config.hostTools) && config.hostTools.includes("sessions");
+  const sessionsAvailable = sessionsRequested && typeof sessionsRequest === "function";
+  const registerSessions = sessionsAvailable && !config.nativeId && !fork;
+  let sessionsRegistered = registerSessions;
+  let sessionsRegistrationKnown = !config.nativeId && !fork;
+  if (sessionsRequested && !sessionsAvailable) emit({ type: "notice", code: "unsupported-sessions-tool" });
   // The rollout's first line is `session_meta` with the thread's persisted
   // `dynamic_tools` (verified on 0.163). Read-only and bounded; any doubt is
   // "not registered", which only shows the resume notice.
@@ -181,6 +196,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   ]);
 
   const MAX_FRAME_BYTES = 32 * 1024 * 1024;
+  const MCP_TOOLS_TIMEOUT_MS = 75_000; // below the host's 90 s resources request
   const pending = new Map();
   const pendingApprovals = new Map();
   const pendingCoordinatorCalls = new Map();
@@ -388,6 +404,47 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     const title = toolCallTitle(item);
     return { text: output.text, truncated: output.truncated, ...(title ? { title } : {}) };
   };
+  const COLLAB_TITLES = { spawnAgent: "Start agent", sendInput: "Message to agent", sendMessage: "Message to agent", followupTask: "Follow-up task", resumeAgent: "Resume agent", wait: "Wait for agents", closeAgent: "Close agent", interruptAgent: "Interrupt agent", listAgents: "List agents" };
+  const SUBAGENT_TITLES = { started: "Agent started", interacted: "Agent continued", interrupted: "Agent interrupted", completed: "Agent finished" };
+  const projectedToolFields = (item) => {
+    const lines = [];
+    const addLine = (name, value) => {
+      if (typeof value === "string" && value.trim()) lines.push(`${name}: ${value}`);
+    };
+    let toolName, title, status;
+    if (item.type === "collabAgentToolCall") {
+      toolName = "subagent";
+      title = Object.hasOwn(COLLAB_TITLES, item.tool) ? COLLAB_TITLES[item.tool] : "Agent tool";
+      if (typeof item.prompt === "string" && item.prompt.trim()) title += `: ${oneLine(item.prompt, 100)}`;
+      addLine("Prompt", item.prompt);
+      addLine("Model", item.model);
+      addLine("Reasoning", item.reasoningEffort);
+      const states = item.agentsStates;
+      if (states !== null && typeof states === "object" && !Array.isArray(states)
+        && (Object.getPrototypeOf(states) === Object.prototype || Object.getPrototypeOf(states) === null)) {
+        for (const [index, state] of Object.values(states).slice(0, 8).entries()) {
+          const agentStatus = typeof state?.status === "string" ? state.status : "";
+          const message = typeof state?.message === "string" && state.message.trim() ? ` (${oneLine(state.message, 200)})` : "";
+          lines.push(`Agent ${index + 1}: ${agentStatus}${message}`);
+        }
+      }
+      status = mapStatus(item.status);
+    } else if (item.type === "subAgentActivity") {
+      toolName = "subagent";
+      title = Object.hasOwn(SUBAGENT_TITLES, item.kind) ? SUBAGENT_TITLES[item.kind] : "Agent activity";
+      if (typeof item.agentPath === "string" && item.agentPath.trim()) title += ` · ${oneLine(item.agentPath, 120)}`;
+      addLine("Agent", item.agentPath);
+      addLine("Model", item.model);
+      addLine("Reasoning", item.reasoningEffort);
+      status = item.kind === "interrupted" ? "interrupted" : "complete";
+    } else if (item.type === "imageView") {
+      toolName = "read";
+      if (typeof item.path === "string" && item.path.trim()) title = oneLine(item.path, 160);
+      addLine("Path", item.path);
+      status = "complete";
+    } else return {};
+    return { ...boundText(lines.join("\n")), toolName, ...(title ? { title } : {}), status };
+  };
   const itemText = (item) => {
     if (item?.type === "userMessage") {
       // Images the message carried are listed as `[image]` lines after its
@@ -417,7 +474,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     if (type === "agentMessage") return "assistant";
     if (type === "reasoning" || type === "plan") return "thinking";
     if (type === "contextCompaction") return "compaction";
-    if (["commandExecution", "fileChange", "webSearch", "mcpToolCall", "dynamicToolCall"].includes(type)) return "tool";
+    if (["commandExecution", "fileChange", "webSearch", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "subAgentActivity", "imageView"].includes(type)) return "tool";
     return "unknown";
   };
   const itemLabel = (type) => ({
@@ -430,21 +487,25 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     webSearch: "Web search",
     mcpToolCall: "MCP tool",
     dynamicToolCall: "Tool",
-    collabAgentToolCall: "Agent tool",
+    collabAgentToolCall: "Agent",
+    subAgentActivity: "Agent",
+    imageView: "Image",
     contextCompaction: "Compaction",
   })[type] || "Codex item";
   const putItem = (item, overrideStatus) => {
     if (!item || typeof item.id !== "string") return;
     const kind = itemKind(item.type);
     const existing = blocks.get(item.id);
+    const { status: projectedStatus, ...projectedFields } = projectedToolFields(item);
     const block = {
       id: item.id,
       kind,
       label: itemLabel(item.type),
-      status: overrideStatus || (isToolCall(item) ? toolCallStatus(item) : mapStatus(item.status)),
+      status: overrideStatus || projectedStatus || (isToolCall(item) ? toolCallStatus(item) : mapStatus(item.status)),
       text: itemText(item),
       ...(kind === "tool" ? { toolName: item.type === "webSearch" ? "web-search" : item.tool || item.type, collapsible: true } : {}),
       ...(isToolCall(item) ? toolCallFields(item) : {}),
+      ...projectedFields,
       ...(kind === "unknown" ? {
         safeSummary: `Unsupported Codex item: ${typeof item.type === "string" ? item.type : "unknown"}`,
         fallback: true,
@@ -990,6 +1051,33 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       pendingCoordinatorCalls.delete(key);
     }
   };
+  const answerSessionsCall = async (message) => {
+    const params = message.params || {};
+    const key = `sessions:${String(message.id)}:${String(params.callId)}`;
+    const reply = (text, success) => writeNative({ id: message.id, result: { contentItems: [{ type: "inputText", text }], success } });
+    if (!sessionsAvailable || !sessionsRegistered) {
+      await reply(JSON.stringify({ ok: false, code: "not-allowed", message: "Linked chats are not enabled for this chat." }), false);
+      return;
+    }
+    if (params.threadId !== nativeId || typeof params.turnId !== "string" || typeof params.callId !== "string"
+      || !params.arguments || typeof params.arguments !== "object" || Array.isArray(params.arguments) || pendingCoordinatorCalls.has(key)) {
+      await reply(JSON.stringify({ ok: false, code: "invalid-operation", message: "The sessions request is invalid." }), false);
+      return;
+    }
+    const controller = new AbortController();
+    pendingCoordinatorCalls.set(key, { controller, turnId: params.turnId });
+    try {
+      const result = await sessionsRequest(params.arguments, { toolCallId: params.callId, signal: controller.signal });
+      if (controller.signal.aborted) throw fail("unavailable", "The sessions request was cancelled.");
+      await reply(JSON.stringify(result), result?.ok === true);
+    } catch (error) {
+      const code = typeof error?.bridgeCode === "string" ? error.bridgeCode : "unavailable";
+      const messageText = typeof error?.safeMessage === "string" ? error.safeMessage : "Linked chats could not complete this operation.";
+      await reply(JSON.stringify({ ok: false, code, message: messageText }), false).catch(() => {});
+    } finally {
+      pendingCoordinatorCalls.delete(key);
+    }
+  };
   // A cancelled wait (interrupt, turn end) never cancels the sidekick's work;
   // the host keeps the round and a later wait collects it.
   const answerSidekickCall = async (message) => {
@@ -1064,10 +1152,15 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       return;
     }
     if (method === "item/tool/call" && message.id !== undefined) {
+      if (params.namespace === "piui" && params.tool === "sessions" && sessionsAvailable && !sessionsRegistrationKnown) {
+        deferredNativeMessages.push(message);
+        return;
+      }
       // A failed reply write means the native side is closing; never let it
       // become an unhandled rejection.
       if (params.namespace === "piui" && params.tool === "board") void answerBoardCall(message).catch(() => {});
       else if (params.namespace === "piui" && params.tool === "sidekick") void answerSidekickCall(message).catch(() => {});
+      else if (params.namespace === "piui" && params.tool === "sessions") void answerSessionsCall(message).catch(() => {});
       else void answerCoordinatorCall(message).catch(() => {});
       return;
     }
@@ -1337,7 +1430,10 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       if ("result" in message) waiter.resolve(message.result);
       // `nativeRejected` marks a JSON-RPC error answer, unlike a transport
       // loss, so required startup requests can be reported as a mismatch.
-      else waiter.reject(Object.assign(safeNativeError(), { nativeRejected: true }));
+      else waiter.reject(Object.assign(safeNativeError(), {
+        nativeRejected: true,
+        nativeTurnNotFound: typeof message.error?.message === "string" && message.error.message.startsWith("turn not found"),
+      }));
       return;
     }
     if (typeof message.method === "string" && !hasResult && !hasError) {
@@ -1594,6 +1690,12 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     try {
       return await callNative(method, params);
     } catch (error) {
+      if (fork && error?.nativeRejected === true && (method === "thread/fork" || method === "thread/turns/list")) {
+        throw cleanupStartupFailure(fail(
+          error.nativeTurnNotFound ? "branch-point-not-found" : "branch-unsupported",
+          error.nativeTurnNotFound ? "That message is no longer in the chat this one branches from." : "This chat cannot be branched natively.",
+        ));
+      }
       throw cleanupStartupFailure(error?.nativeRejected === true ? protocolMismatch() : error);
     }
   };
@@ -1670,29 +1772,45 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   };
   const adapter = {
     async resources() {
+      const bounded = (work) => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("timeout")), MCP_TOOLS_TIMEOUT_MS);
+        timer.unref?.();
+        work.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
+      });
+      const listTools = async () => {
+        const tools = [];
+        let cursor;
+        do {
+          const response = await callNative("mcpServerStatus/list", { ...(cursor ? { cursor } : {}) });
+          for (const server of response.data ?? []) for (const [id, tool] of Object.entries(server.tools ?? {})) tools.push({ kind: "tool", id, name: tool.name ?? id, enabled: true, configurable: false });
+          cursor = response.nextCursor;
+        } while (cursor);
+        return tools;
+      };
+      const [skills, servers, tools] = await Promise.allSettled([
+        callNative("skills/list", { cwds: [config.cwd], forceReload: false }),
+        readConfig(),
+        bounded(listTools()),
+      ]);
       const items = [];
       const warnings = [...mcpStartupFailures]
         .sort((left, right) => left.localeCompare(right))
         .map((name) => `MCP server ${name} could not start.`);
       warnings.push(...controlPlaneWarnings);
       try {
-        const response = await callNative("skills/list", { cwds: [config.cwd], forceReload: false });
+        if (skills.status === "rejected") throw skills.reason;
+        const response = skills.value;
         for (const group of response.data ?? []) for (const skill of group.skills ?? []) {
           if (typeof skill.path === "string") items.push({ kind: "skill", id: skill.path, name: skill.name ?? skill.path, enabled: skill.enabled !== false, configurable: true });
         }
       } catch { warnings.push("Skills could not be loaded from Codex."); }
       try {
-        const response = await readConfig();
+        if (servers.status === "rejected") throw servers.reason;
+        const response = servers.value;
         for (const [id, server] of Object.entries(response.config?.mcp_servers ?? {})) items.push({ kind: "mcp", id, name: id, enabled: server.enabled !== false, configurable: true });
       } catch { warnings.push("MCP servers could not be loaded from Codex."); }
-      try {
-        let cursor;
-        do {
-          const response = await callNative("mcpServerStatus/list", { ...(cursor ? { cursor } : {}) });
-          for (const server of response.data ?? []) for (const [id, tool] of Object.entries(server.tools ?? {})) items.push({ kind: "tool", id, name: tool.name ?? id, enabled: true, configurable: false });
-          cursor = response.nextCursor;
-        } while (cursor);
-      } catch { warnings.push("MCP tools could not be loaded from Codex."); }
+      if (tools.status === "fulfilled") items.push(...tools.value);
+      else warnings.push("MCP tools could not be loaded from Codex.");
       return { items, warnings };
     },
     snapshot() {
@@ -1981,6 +2099,31 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     ],
   }] : undefined;
   const boardStatuses = ["backlog", "todo", "inProgress", "inReview", "blocked", "done", "cancelled"];
+  const sessionsObject = (op, fields = {}, required = []) => ({
+    type: "object", properties: { op: { const: op }, ...fields }, required: ["op", ...required], additionalProperties: false,
+  });
+  const sessionsId = { type: "string", minLength: 1, pattern: "^[A-Za-z0-9_-]+$" };
+  const sessionsModelName = { type: "string", minLength: 1 };
+  const sessionsText = { type: "string", minLength: 1, maxLength: 16000 };
+  const sessionsWait = { type: "integer", minimum: 0, maximum: 240 };
+  const sessionsInputSchema = { type: "object", oneOf: [
+    sessionsObject("start", {
+      title: { type: "string", minLength: 1, pattern: "\\S" }, prompt: sessionsText,
+      harness: { anyOf: [{ enum: ["pi", "nano", "claude-code", "codex", "prime-agent", "hermes"] }, { type: "string", pattern: "^acp:(?!.*--)[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$" }] },
+      model: { type: "object", properties: { provider: sessionsModelName, id: sessionsModelName }, required: ["provider", "id"], additionalProperties: false },
+      permissionMode: { enum: ["native", "read-only", "workspace-write", "full-access"] },
+      wait: { type: "boolean" }, waitSeconds: sessionsWait,
+    }, ["title", "prompt"]),
+    sessionsObject("list"),
+    sessionsObject("message", { sessionId: sessionsId, text: sessionsText, wait: { type: "boolean" }, waitSeconds: sessionsWait }, ["sessionId", "text"]),
+    sessionsObject("read", { sessionId: sessionsId, page: { type: "integer", minimum: 1 } }, ["sessionId"]),
+    sessionsObject("wait", { sessionId: sessionsId, waitSeconds: sessionsWait }, ["sessionId"]),
+    sessionsObject("stop", { sessionId: sessionsId }, ["sessionId"]),
+  ] };
+  const sessionsTool = {
+    type: "function",
+    name: "sessions", description: "Work with chats linked to this one. start: begin a new linked chat for a separable piece of work and give it a complete prompt. list: the linked chats and their state. message: send a linked chat a message. read: the last answer of a linked chat. wait: wait for a linked chat to finish its turn. stop: stop a linked chat you started. With wait:true (waitSeconds up to 240) start and message return the answer. A linked chat on another harness needs permissionMode, and is refused when this chat runs in its harness's own permission mode.", inputSchema: sessionsInputSchema,
+  };
   const sidekickTool = {
     type: "function",
     name: "sidekick",
@@ -2002,11 +2145,11 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       additionalProperties: false,
     },
   };
-  const boardTools = registerBoard || registerSidekick ? [{
+  const boardTools = registerBoard || registerSidekick || registerSessions ? [{
     type: "namespace",
     name: "piui",
     description: "PiUI host tools for this chat.",
-    tools: [...(registerSidekick ? [sidekickTool] : []), ...(registerBoard ? [{
+    tools: [...(registerSidekick ? [sidekickTool] : []), ...(registerSessions ? [sessionsTool] : []), ...(registerBoard ? [{
       type: "function",
       name: "board",
       description: "Manage this project's PiUI board: the cards the person tracks. Call op context before create and prefer updating, commenting on or moving the active or a similar card. Moving to done or cancelled only proposes it to the person. Do not retry ALREADY_CLAIMED or FORBIDDEN. The result is JSON.",
@@ -2043,14 +2186,60 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     ...permissionParams,
   };
   const { cwd: _startCwd, ...startThreadParams } = threadParams;
-  const opened = nativeId
-    ? await callDuringStartup("thread/resume", {
+  let opened;
+  let forkedNativeThread = false;
+  if (fork) {
+    let previousTurnId;
+    let empty = false;
+    if (fork.beforeBlockId !== undefined) {
+      let cursor;
+      let found = false;
+      // The branch contract bounds source discovery to 200 native pages.
+      for (let page = 0; page < 200; page += 1) {
+        const turns = await callDuringStartup("thread/turns/list", {
+          threadId: fork.nativeId, sortDirection: "asc", itemsView: "full", ...(cursor ? { cursor } : {}),
+        });
+        if (!Array.isArray(turns?.data)) throw cleanupStartupFailure(protocolMismatch());
+        for (const turn of turns.data) {
+          if (typeof turn?.id !== "string" || !Array.isArray(turn.items)) throw cleanupStartupFailure(protocolMismatch());
+          if (turn.items.some(item => item?.type === "userMessage" && item.id === fork.beforeBlockId)) {
+            found = true;
+            empty = previousTurnId === undefined;
+            break;
+          }
+          previousTurnId = turn.id;
+        }
+        if (found || !turns.nextCursor) break;
+        cursor = turns.nextCursor;
+      }
+      if (!found) throw cleanupStartupFailure(fail("branch-point-not-found", "That message is no longer in the chat this one branches from."));
+    }
+    if (empty) {
+      opened = await callDuringStartup("thread/start", { ...startThreadParams, ephemeral: false });
+    } else {
+      const forkParams = {};
+      for (const key of ["cwd", "serviceTier", "model", "modelProvider", "baseInstructions", "developerInstructions", "config", "approvalPolicy", "sandbox", "permissions"]) {
+        if (Object.hasOwn(threadParams, key)) forkParams[key] = threadParams[key];
+      }
+      const branched = await callDuringStartup("thread/fork", {
+        threadId: fork.nativeId, ...(previousTurnId ? { lastTurnId: previousTurnId } : {}), ...forkParams, excludeTurns: true,
+      });
+      if (!isRecord(branched?.thread) || typeof branched.thread.id !== "string") throw cleanupStartupFailure(protocolMismatch());
+      const page = await callDuringStartup("thread/turns/list", { threadId: branched.thread.id, sortDirection: "desc", itemsView: "full" });
+      if (!Array.isArray(page?.data)) throw cleanupStartupFailure(protocolMismatch());
+      opened = { ...branched, initialTurnsPage: page };
+      forkedNativeThread = true;
+    }
+  } else if (nativeId) {
+    opened = await callDuringStartup("thread/resume", {
         threadId: nativeId,
         ...threadParams,
         excludeTurns: true,
         initialTurnsPage: { sortDirection: "desc", itemsView: "full" },
-      })
-    : await callDuringStartup("thread/start", { ...startThreadParams, ephemeral: false, ...(dynamicTools.length ? { dynamicTools } : {}) });
+      });
+  } else {
+    opened = await callDuringStartup("thread/start", { ...startThreadParams, ephemeral: false, ...(dynamicTools.length ? { dynamicTools } : {}) });
+  }
   // The thread, its id and its effective cwd are required fields of the
   // thread/start and thread/resume responses of every known version.
   if (!isRecord(opened) || !isRecord(opened.thread) || typeof opened.thread.id !== "string" || typeof opened.cwd !== "string") {
@@ -2092,12 +2281,17 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   }
   nativeId = thread.id;
   nativePath = typeof thread.path === "string" ? thread.path : nativePath;
-  if (boardAvailable && config.nativeId && !await rolloutHasPiuiTool(nativePath, "board")) {
+  if (boardAvailable && (config.nativeId || fork) && !await rolloutHasPiuiTool(nativePath, "board")) {
     emit({ type: "notice", code: "unsupported-board-tool-resume" });
   }
-  if (sidekickAvailable && config.nativeId && !await rolloutHasPiuiTool(nativePath, "sidekick")) {
+  if (sidekickAvailable && (config.nativeId || fork) && !await rolloutHasPiuiTool(nativePath, "sidekick")) {
     emit({ type: "notice", code: "unsupported-sidekick-tool-resume" });
   }
+  if (sessionsAvailable && (config.nativeId || fork)) {
+    sessionsRegistered = await rolloutHasPiuiTool(nativePath, "sessions");
+    if (!sessionsRegistered) emit({ type: "notice", code: "unsupported-sessions-tool-resume" });
+  }
+  sessionsRegistrationKnown = true;
   for (const message of deferredNativeMessages.splice(0)) guardedNotification(message);
   if (typeof opened.modelProvider === "string") currentProvider = publicProvider(opened.modelProvider);
   if (typeof opened.model === "string") {
@@ -2113,7 +2307,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   if (thread.status?.type === "active" && !activeTurnId) {
     throw cleanupStartupFailure(fail("native-active-turn-unresolved", "Codex resumed an active thread without an interruptible turn reference."));
   }
-  materialized = resumingNativeThread;
+  materialized = resumingNativeThread || forkedNativeThread;
   publishBinding();
   if (activeTurnId || thread.status?.type === "active") setStatus("running");
   else if (thread.status?.type === "systemError") {

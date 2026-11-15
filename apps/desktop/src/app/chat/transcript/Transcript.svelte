@@ -1,8 +1,10 @@
 <script lang="ts">
-  import type { Snippet } from 'svelte';
+  import { untrack, type Snippet } from 'svelte';
+  import { interactiveDecoration } from '../../interactive/decorate';
   import { language } from '../../../features/locale/language';
   import { readWorkspaceHistory } from '../../../host-api/workspaceHistory';
   import type { TimelineBlock } from '../../../host-api/types';
+  import type { ConversationMessageAction, ConversationMessageControls } from '../../../../../../contracts/conversation-presentation-v1';
   import { toasts } from '../../../lib/ui';
   import type { TimedInsert } from '../../chatPipelines/interleave';
   import { pluginRegistry } from '../../plugins/pluginRegistry.svelte';
@@ -16,6 +18,8 @@
     sessionKey: string;
     historySessionId?: string;
     agentLabel: string;
+    /** The agent is working: the last turn stays open instead of folding its activity. */
+    running?: boolean;
     searchOpen?: boolean;
     olderAvailable?: boolean;
     olderLoading?: boolean;
@@ -23,8 +27,13 @@
     emptyText?: string;
     inserts?: readonly TimedInsert[];
     insert?: Snippet<[string]>;
+    interactive?: boolean;
+    onReply?: (text: string) => Promise<boolean>;
+    messageControls?: readonly ConversationMessageControls[];
+    onMessageAction?: (id: string, action: ConversationMessageAction) => Promise<void>;
   }
-  let { searchOpen = $bindable(false), ...props }: Props = $props();
+  let { searchOpen = $bindable(false), interactive = false, onReply = undefined, running = false, ...props }: Props = $props();
+  const decorateMessage = untrack(() => interactive) ? interactiveDecoration({ reply: () => onReply }) : undefined;
   setConversationPresentation({
     notify(level, message) { toasts[level](message); },
     renderer(block) {
@@ -50,5 +59,5 @@
 </script>
 
 {#key props.sessionKey}
-  <ConversationTranscript {...props} language={$language} readHistory={historyReader} nativeMarkers={true} {positionStore} bind:searchOpen />
+  <ConversationTranscript {...props} {running} language={$language} readHistory={historyReader} nativeMarkers={true} {positionStore} {decorateMessage} richMarkdown={false} bind:searchOpen />
 {/key}

@@ -10,6 +10,8 @@ export const SESSION_NOTICE_CODES = [
   'unsupported-board-tool-resume',
   'unsupported-sidekick-tool',
   'unsupported-sidekick-tool-resume',
+  'unsupported-sessions-tool',
+  'unsupported-sessions-tool-resume',
   'settings-not-restored',
   'settings-not-remembered',
 ] as const;
@@ -55,5 +57,12 @@ export function boardToolNotice(harness: HarnessKind, notices: readonly SessionN
 export function sidekickToolNotice(notices: readonly SessionNoticeCode[]): SessionNoticeCode | undefined {
   if (notices.includes('unsupported-sidekick-tool-resume')) return 'unsupported-sidekick-tool-resume';
   if (notices.includes('unsupported-sidekick-tool')) return 'unsupported-sidekick-tool';
+  return undefined;
+}
+
+/** Linked-chat tools use the board transports; Pi and Nano have no host tools. */
+export function sessionsToolNotice(harness: HarnessKind, notices: readonly SessionNoticeCode[]): SessionNoticeCode | undefined {
+  if (notices.includes('unsupported-sessions-tool-resume')) return 'unsupported-sessions-tool-resume';
+  if (notices.includes('unsupported-sessions-tool') || harness === 'pi' || harness === 'nano') return 'unsupported-sessions-tool';
   return undefined;
 }

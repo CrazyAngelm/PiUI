@@ -15,6 +15,17 @@
  *   chat of the same project (continuing work there).
  * - `continuedFrom` links a chat to the chat it continues ("Continue in
  *   another harness"). No history is converted; the source is unchanged.
+ * - `branch` (additive, v1.2, ADR-070) makes the new chat a branch of
+ *   `continuedFrom` and links it to that chat as a child (session links kind
+ *   `branch`). `mode: 'native'` opens it with the source's own history up to
+ *   the cut, on the same harness and in the same folder; it is refused with
+ *   `BRANCH_UNSUPPORTED` when the harness cannot branch natively or the source
+ *   has no native history yet, and with `BRANCH_POINT_NOT_FOUND` when the cut
+ *   is not in the source. `mode: 'linked'` creates an ordinary chat that is
+ *   only recorded as a branch (any harness). The source is never changed.
+ *   A branch on the source's harness takes the source chat's permission mode;
+ *   a native branch also takes its model and reasoning level, so the request's
+ *   `permissionMode` and `model` are not used for it.
  * - `removeWorktree` answers `dirty` (nothing removed) while the worktree has
  *   changes or untracked files; repeating it with `discardChanges: true` and
  *   that `fingerprint` removes it. The branch is never deleted. The chat
@@ -54,8 +65,18 @@ export interface ChatPlacementV1 {
   sessionId: string;
   worktree?: ChatWorktreeV1;
   continuedFrom?: string;
+  /** Set for a branch of `continuedFrom` (v1.2). */
+  branch?: 'native' | 'linked';
   adopted?: true;
 }
+
+/** Where a branch starts (v1.2, ADR-070). */
+export type ChatBranchV1 =
+  /** The source's native history as it is now. */
+  | { mode: 'native'; at: 'end' }
+  /** The source's native history before this user message (a block id of the source chat). */
+  | { mode: 'native'; at: 'before'; blockId: string }
+  | { mode: 'linked' };
 
 /** A PiUI-managed worktree (v1.1). */
 export interface ManagedWorktreeV1 {
@@ -111,6 +132,8 @@ export type WorkspacePlacementCommandV1 =
     /** At least one of `worktree` and `continuedFrom`. */
     worktree?: WorktreeRequestV1;
     continuedFrom?: string;
+    /** Needs `continuedFrom` (v1.2). A native branch runs in the source's folder: `worktree` must be absent. */
+    branch?: ChatBranchV1;
   }
   | { type: 'removeWorktree'; sessionId: string; discardChanges: boolean; expectedChanges?: string }
   | { type: 'worktrees' }
@@ -154,6 +177,8 @@ export type PlacementErrorCode =
   | 'GIT_FAILED'
   | 'WORKTREE_REMOVED'
   | 'WORKTREE_UNAVAILABLE'
+  | 'BRANCH_UNSUPPORTED'
+  | 'BRANCH_POINT_NOT_FOUND'
   | 'IO_ERROR'
   /** Any workspace v15 start refusal (`RUNTIME_FAILED`, `SIGN_IN_REQUIRED`, …). */
   | (string & {});

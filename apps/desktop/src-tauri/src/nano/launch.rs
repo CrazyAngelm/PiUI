@@ -598,6 +598,7 @@ mod tests {
             session_dir,
             native_id: None,
             native_path: None,
+            fork: None,
             title: None,
             model: None,
             thinking_level: None,

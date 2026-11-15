@@ -4,7 +4,7 @@
 const MAX_FRAME_BYTES = 32 * 1024 * 1024;
 const METHODS = new Set([
   "initialize", "snapshot", "prompt", "interrupt", "models", "resources", "catalogModels",
-  "setModel", "respond", "rename", "dispose", "coordinatorResponse", "boardResponse", "sidekickResponse",
+  "setModel", "respond", "rename", "dispose", "coordinatorResponse", "boardResponse", "sidekickResponse", "sessionsResponse",
   "openSession", "sessionRequest", "composerCapabilities", "compact", "setMode", "composerCatalog",
 ]);
 const MAX_DETAILS_BYTES = 4 * 1024;
@@ -70,6 +70,41 @@ const SIDEKICK_LIMITS = Object.freeze({
   noteBytes: 4 * 1024, reason: 2000, path: 1024, page: 1000, waitSeconds: 540,
 });
 const BRIEF_OUTCOMES = new Set(["accepted", "rejected", "superseded"]);
+
+// Exact sessions-v1 shapes; Unicode scalar counts match Rust's chars().count().
+// Titles are sanitized and shortened to 80 characters by the host when framed.
+export function validateSessionsOperation(operation) {
+  if (!operation || typeof operation !== "object" || Array.isArray(operation) || typeof operation.op !== "string") return false;
+  const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  const id = (value) => typeof value === "string" && /^[A-Za-z0-9_-]+$/.test(value);
+  const content = (value) => typeof value === "string" && Array.from(value).length >= 1 && Array.from(value).length <= 16000;
+  const title = (value) => typeof value === "string" && value.trim().length > 0;
+  const harness = (value) => ["pi", "nano", "claude-code", "codex", "prime-agent", "hermes"].includes(value)
+    || typeof value === "string" && /^acp:(?!.*--)[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(value);
+  const model = (value) => record(value) && Object.keys(value).sort().join(",") === "id,provider"
+    && typeof value.id === "string" && value.id.length > 0 && typeof value.provider === "string" && value.provider.length > 0;
+  const permissionMode = (value) => ["native", "read-only", "workspace-write", "full-access"].includes(value);
+  const wait = (value) => typeof value === "boolean";
+  const waitSeconds = (value) => Number.isSafeInteger(value) && value >= 0 && value <= 240;
+  const page = (value) => Number.isSafeInteger(value) && value >= 1;
+  const shapes = {
+    start: { required: { title, prompt: content }, optional: { harness, model, permissionMode, wait, waitSeconds } },
+    list: {},
+    message: { required: { sessionId: id, text: content }, optional: { wait, waitSeconds } },
+    read: { required: { sessionId: id }, optional: { page } },
+    wait: { required: { sessionId: id }, optional: { waitSeconds } },
+    stop: { required: { sessionId: id } },
+  };
+  if (!Object.hasOwn(shapes, operation.op)) return false;
+  const required = shapes[operation.op].required ?? {};
+  const optional = shapes[operation.op].optional ?? {};
+  for (const key of Object.keys(operation)) {
+    if (key === "op") continue;
+    const check = Object.hasOwn(required, key) ? required[key] : Object.hasOwn(optional, key) ? optional[key] : undefined;
+    if (!check || !check(operation[key])) return false;
+  }
+  return Object.keys(required).every((key) => Object.hasOwn(operation, key));
+}
 
 // Strict `SidekickToolOperationV1` check (contracts/fusion-v1.ts): exact key
 // sets, types, enum values and size caps. The host parses it again.
@@ -221,6 +256,8 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
 
   const sidekickPending = new Map();
   let sidekickSequence = 0;
+  const sessionsPending = new Map();
+  let sessionsSequence = 0;
 
   const rejectPending = (pendingMap, code, message) => {
     const current = [...pendingMap.values()];
@@ -236,6 +273,7 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
     rejectPending(coordinatorPending, code, message);
     rejectPending(boardPending, "board-cancelled", "The board request was cancelled.");
     rejectPending(sidekickPending, "sidekick-cancelled", "The sidekick request was cancelled. Collect the result with wait.");
+    rejectPending(sessionsPending, "unavailable", "The sessions request was cancelled.");
   };
 
   const validateCoordinatorOperation = (operation) => {
@@ -312,6 +350,24 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
     });
   };
 
+  const sessionsRequest = (operation, metadata = {}) => {
+    const enabled = Array.isArray(initializeConfig?.hostTools) && initializeConfig.hostTools.includes("sessions");
+    if (!enabled) return Promise.reject(Object.assign(new Error("disabled"), { bridgeCode: "not-allowed", safeMessage: "Linked chats are not enabled for this chat." }));
+    if (!validateSessionsOperation(operation)) return Promise.reject(Object.assign(new Error("invalid"), { bridgeCode: "invalid-operation", safeMessage: "The sessions operation is invalid. Check `op` and its fields." }));
+    const requestId = `piui-sessions-${epoch}-${++sessionsSequence}`;
+    return new Promise((resolve, reject) => {
+      const cancelled = () => Object.assign(new Error("cancelled"), { bridgeCode: "unavailable", safeMessage: "The sessions request was cancelled." });
+      if (metadata?.signal?.aborted === true) { reject(cancelled()); return; }
+      sessionsPending.set(requestId, { resolve, reject });
+      if (metadata?.signal && typeof metadata.signal.addEventListener === "function") {
+        metadata.signal.addEventListener("abort", () => {
+          if (sessionsPending.delete(requestId)) reject(cancelled());
+        }, { once: true });
+      }
+      emit({ type: "sessionsRequest", requestId, operation });
+    });
+  };
+
   let initializeConfig;
 
   // A reply after the output closed (dispose, EOF) must not become an
@@ -369,7 +425,7 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
       }
       initialized = true;
       initializeConfig = params;
-      initializePromise = Promise.resolve().then(() => factory(params, emit, coordinatorRequest, boardRequest, sidekickRequest));
+      initializePromise = Promise.resolve().then(() => factory(params, emit, coordinatorRequest, boardRequest, sidekickRequest, sessionsRequest));
       try {
         adapter = await initializePromise;
         if (!adapter || typeof adapter !== "object") throw new TypeError("invalid adapter");
@@ -430,6 +486,24 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
       // A board refusal (`ok:false`) is still a result the agent reads.
       slot.resolve(result);
       writeFrame(output, { id, ok: true, result: null });
+      return;
+    }
+
+    if (request.method === "sessionsResponse") {
+      const requestId = typeof params.requestId === "string" ? params.requestId : "";
+      const slot = sessionsPending.get(requestId);
+      if (!slot) {
+        writeFrame(output, safeFailure(id, "stale-sessions-request", "The sessions request is invalid or no longer pending."));
+        return;
+      }
+      const result = params.result;
+      if (Object.keys(params).sort().join(",") !== "requestId,result" || !result || typeof result !== "object" || Array.isArray(result) || typeof result.ok !== "boolean") {
+        writeFrame(output, safeFailure(id, "invalid-sessions-response", "The sessions response is invalid."));
+        return;
+      }
+      sessionsPending.delete(requestId);
+      slot.resolve(result);
+      writeFrameQuietly({ id, ok: true, result: null });
       return;
     }
 

@@ -88,6 +88,7 @@ fn native_config(kind: HarnessKind, label: &str) -> NativeRuntimeConfig {
         session_dir,
         native_id: None,
         native_path: None,
+        fork: None,
         title: Some("PiUI integration verification".into()),
         model: if kind == HarnessKind::Hermes {
             std::env::var("PIUI_TEST_HERMES_MODEL")

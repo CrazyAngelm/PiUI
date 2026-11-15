@@ -608,11 +608,17 @@ pub(crate) async fn run_composer(
                     Some((text, attachments)),
                 )
                 .await?;
+                if let Some(hooks) = host.workspace.session_links_hooks() {
+                    hooks.person_message(id.clone()).await;
+                }
             } else {
                 host.workspace
                     .enqueue_message(&id, request_id, text, &attachments)?;
                 if !host.workspace.record(&id)?.composer.paused {
                     live.composer_paused.store(false, Ordering::Release);
+                }
+                if let Some(hooks) = host.workspace.session_links_hooks() {
+                    hooks.person_message(id.clone()).await;
                 }
                 host.workspace.drain_queue(&id);
             }

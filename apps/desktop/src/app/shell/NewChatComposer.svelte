@@ -6,7 +6,7 @@
   import { onMount, tick, untrack } from 'svelte';
   import { SvelteMap, SvelteSet } from 'svelte/reactivity';
   import { t } from '../../features/locale/language';
-  import { cachedHarnessModels, catalogDegraded, harnessModels, isNanoConnectorModel, rememberedHarnessModels } from '../../host-api/harnessModels';
+  import { cachedHarnessModels, catalogUnavailable, harnessModels, isNanoConnectorModel, rememberedHarnessModels, resourceNotices, type ResourceNotice } from '../../host-api/harnessModels';
   import { prewarmHarnessCatalogs } from '../../host-api/catalogPrewarm';
   import ModelPicker, { type ModelOption } from './ModelPicker.svelte';
   import type { HarnessCatalogModel, HarnessModelsResult, HarnessResource } from '../../../../../contracts/harness-models-v18';
@@ -111,8 +111,8 @@
   let modelsProvisional = $state(false);
   let modelsResolved = $state(false);
   let modelsError = $state('');
-  /** Set when resource discovery failed: the models stay, skills can be retried. */
-  let resourcesWarning = $state('');
+  /** Resource discovery failures or MCP servers that failed to start. */
+  let resourceNotes = $state.raw<ResourceNotice[]>([]);
   let catalogAttempt = $state(0);
   /** Set by a manual Retry for the load it starts: the harness is asked again, a remembered answer (even an empty one) is not reused. */
   let refreshCatalog = false;
@@ -259,7 +259,7 @@
     }
     catalogFor = forKey;
     modelsError = '';
-    resourcesWarning = '';
+    resourceNotes = [];
     // The load this effect cancelled may never settle: no early exit below keeps its spinner.
     modelsLoading = false;
     if (!id || !kind) return;
@@ -283,10 +283,10 @@
       models = result.models;
       modelsProvisional = false;
       modelsResolved = true;
-      const degraded = catalogDegraded(result);
+      const unavailable = catalogUnavailable(result);
       // A failed discovery keeps the skills this picker already showed.
-      if (!degraded || result.resources.items.length) skills = result.resources.items;
-      resourcesWarning = degraded ? 'Skills, MCP servers and tools could not be loaded from the harness.' : '';
+      if (!unavailable || result.resources.items.length) skills = result.resources.items;
+      resourceNotes = resourceNotices(result);
       modelsError = '';
     };
     // A native probe can fail transiently (slow harness start); retry once
@@ -683,6 +683,8 @@
   // The dictation button and its recorder load once a dictation source is ready,
   // outside the first-paint bundle.
   const loadDictate = () => import('../nano/DictateButton.svelte');
+  const loadPending = () => import('../nano/DictationPending.svelte');
+  const dictationScope = $derived(`new:${workspaceId || 'personal'}`);
 
   /** Dictated words go in at the caret. The helper arrives with the dictation button. */
   function dictated(words: string): void {
@@ -1059,6 +1061,11 @@
       {/await}
     {/if}
   </div>
+  {#if !remoteMode}
+    {#await loadPending() then { default: DictationPending }}
+      <DictationPending scope={dictationScope} onText={dictated} disabled={busy || store.safeMode} />
+    {/await}
+  {/if}
   <div data-nano-composer="bar">
     <div class="chips">
       {#if !remoteMode}
@@ -1066,7 +1073,7 @@
       {/if}
       {#if dictationSource.available && !remoteMode}
         {#await loadDictate() then { default: DictateButton }}
-          <DictateButton onText={dictated} disabled={busy || store.safeMode} />
+          <DictateButton onText={dictated} scope={dictationScope} disabled={busy || store.safeMode} />
         {/await}
       {/if}
       {#if !fusionMode}
@@ -1165,9 +1172,9 @@
   </p>
 {:else if !usesPipeline && !fusionMode && modelKey && modelsResolved && !model}
   <p class="notice notice--error">{$t('Choose a model')}</p>
-{:else if resourcesWarning && !modelsLoading}
+{:else if resourceNotes.length && !modelsLoading && !fusionMode}
   <p class="notice" role="status">
-    {$t(resourcesWarning)}
+    {#each resourceNotes as note, index}{#if index > 0}{' '}{/if}{$t(note.key, note.args ?? [])}{/each}
     <button type="button" class="link" onclick={retryCatalog}>{$t('Retry')}</button>
   </p>
 {/if}

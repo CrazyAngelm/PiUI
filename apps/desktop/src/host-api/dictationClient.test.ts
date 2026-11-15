@@ -5,6 +5,7 @@ import {
   createDictationClient,
   decodeDictationSettings,
   dictationError,
+  recordingFileName,
 } from './dictationClient';
 
 function settingsView(): Record<string, unknown> {
@@ -62,6 +63,24 @@ describe('dictation client', () => {
     expect(invoke).toHaveBeenLastCalledWith('dictation_settings_v1', { request: { type: 'get' } });
     expect(await client.transcribe(CLIP)).toEqual({ text: 'hello' });
     expect(invoke).toHaveBeenLastCalledWith('dictation_transcribe_v1', { request: CLIP });
+  });
+
+  it('saves a recording through the host and reports whether the dialog saved it', async () => {
+    const invoke = vi.fn((_command: string) => Promise.resolve({ saved: false }));
+    const client = createDictationClient(invoke as never);
+    expect(await client.saveRecording(CLIP)).toEqual({ saved: false });
+    expect(invoke).toHaveBeenLastCalledWith('dictation_save_recording_v1', { request: CLIP });
+    const refused = createDictationClient((() => Promise.reject({ code: 'too-large' })) as never);
+    await expect(refused.saveRecording(CLIP)).rejects.toMatchObject({ code: 'too-large' });
+    const malformed = createDictationClient((() => Promise.resolve({ saved: 'yes' })) as never);
+    await expect(malformed.saveRecording(CLIP)).rejects.toMatchObject({ code: 'unknown' });
+  });
+
+  it('names a saved recording after its time and container', () => {
+    const when = new Date(2026, 10, 16, 9, 5);
+    expect(recordingFileName(when, 'audio/webm;codecs=opus')).toBe('nano-voice-20261116-0905.webm');
+    expect(recordingFileName(when, 'audio/ogg;codecs=opus')).toBe('nano-voice-20261116-0905.ogg');
+    expect(recordingFileName(when, 'audio/mp4')).toBe('nano-voice-20261116-0905.m4a');
   });
 
   it('maps rejections to typed errors and never forwards host text', async () => {

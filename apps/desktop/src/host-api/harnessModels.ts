@@ -64,22 +64,40 @@ const catalogKey = (request: HarnessModelsRequest): string => JSON.stringify([re
 const partKey = (request: HarnessModelsRequest, part: HarnessCatalogPart): string => JSON.stringify([request.workspaceId, request.harness, part]);
 
 const RESOURCES_UNAVAILABLE = 'Skills, MCP servers and tools could not be loaded from the harness.';
+const MCP_START_FAILED = /^MCP server (.+) could not start\.$/u;
+const DISCOVERY_FAILED: ReadonlySet<string> = new Set([
+  RESOURCES_UNAVAILABLE,
+  'Skills could not be loaded from Codex.',
+  'MCP servers could not be loaded from Codex.',
+  'MCP tools could not be loaded from Codex.',
+  'Hermes tool inventory is unavailable.',
+  'Hermes skill inventory is unavailable.',
+  'Skills could not be loaded from Pi.',
+  'Skills could not be loaded from Prime Agent.',
+  'Tools could not be loaded from Prime Agent.',
+]);
 
-/**
- * True when resource discovery failed and the host answered with a warning in
- * place of the resources: the models are real, the empty resource list is not.
- */
+/** Discovery itself failed: what the harness has is not listed, and asking again can help. */
+export function catalogUnavailable(result: HarnessModelsResult): boolean {
+  return result.resources.warnings.some(warning => DISCOVERY_FAILED.has(warning));
+}
+/** `catalogUnavailable`, or an MCP server that did not start: the listed resources are incomplete. */
 export function catalogDegraded(result: HarnessModelsResult): boolean {
-  return result.resources.warnings.some(warning => warning === RESOURCES_UNAVAILABLE
-    || warning === 'Skills could not be loaded from Codex.'
-    || warning === 'MCP servers could not be loaded from Codex.'
-    || warning === 'MCP tools could not be loaded from Codex.'
-    || warning === 'Hermes tool inventory is unavailable.'
-    || warning === 'Hermes skill inventory is unavailable.'
-    || warning === 'Skills could not be loaded from Pi.'
-    || warning === 'Skills could not be loaded from Prime Agent.'
-    || warning === 'Tools could not be loaded from Prime Agent.'
-    || /^MCP server .+ could not start\.$/u.test(warning));
+  return catalogUnavailable(result) || result.resources.warnings.some(warning => MCP_START_FAILED.test(warning));
+}
+/** What a picker tells the person: each discovery failure in the host's words, then the servers that did not start. */
+export interface ResourceNotice { key: string; args?: string[] }
+export function resourceNotices(result: HarnessModelsResult): ResourceNotice[] {
+  const failed: string[] = [];
+  const notices: ResourceNotice[] = [];
+  for (const warning of result.resources.warnings) {
+    const server = MCP_START_FAILED.exec(warning)?.[1];
+    if (server !== undefined) failed.push(server);
+    else if (DISCOVERY_FAILED.has(warning)) notices.push({ key: warning });
+  }
+  if (failed.length === 1) notices.push({ key: 'MCP server {0} could not start.', args: failed });
+  else if (failed.length > 1) notices.push({ key: 'MCP servers {0} could not start.', args: [failed.join(', ')] });
+  return notices;
 }
 
 /** `owner` is the generation of the split load a part belongs to. */
@@ -98,11 +116,11 @@ function nativeCatalog(request: HarnessModelsRequest, part: HarnessCatalogPart, 
     if (result.protocol !== 18 || result.harness !== request.harness) throw new Error('Invalid model catalog');
     entry.pending = false;
     entry.at = Date.now();
-    // A degraded answer is not remembered: the next load asks for the resources again.
-    const degraded = part === 'resources' && catalogDegraded(result);
+    // A failed discovery is not remembered: the next load asks for the resources again.
+    const unavailable = part === 'resources' && catalogUnavailable(result);
     // A part of a replaced split is not the catalog's answer: the next split asks again.
     const superseded = generations.get(full) !== owner;
-    if ((degraded || superseded) && catalogs.get(key) === entry) catalogs.delete(key);
+    if ((unavailable || superseded) && catalogs.get(key) === entry) catalogs.delete(key);
     return result;
   }).catch(error => {
     if (catalogs.get(key) === entry) catalogs.delete(key);
@@ -147,7 +165,7 @@ export function catalogSettled(request: HarnessModelsRequest): boolean {
  * Models first, resources after: the host answers `models` without waiting for
  * resource discovery (MCP startup) and hands that discovery to `resources`.
  * A failed resource discovery keeps the models and reports a warning; that
- * degraded catalog is not remembered, so the next load asks for the resources
+ * unavailable catalog is not remembered, so the next load asks for the resources
  * again (the answered models are reused).
  */
 function splitCatalog(request: HarnessModelsRequest, version: string | undefined, fullRequest = false): { models: Promise<HarnessModelsResult>; full: Promise<HarnessModelsResult> } {
@@ -159,9 +177,9 @@ function splitCatalog(request: HarnessModelsRequest, version: string | undefined
   const generation = nextGeneration(key);
   const discoveryId = crypto.randomUUID();
   const models = nativeCatalog(request, 'models', generation, discoveryId, version);
-  let degraded = false;
+  let discoveryFailed = false;
   const unavailable = (listed: HarnessModelsResult): HarnessModelsResult => {
-    degraded = true;
+    discoveryFailed = true;
     return { ...listed, resources: { items: [], warnings: [RESOURCES_UNAVAILABLE] } };
   };
   // Both parts name the same discovery, even if their IPC answers arrive out
@@ -169,7 +187,7 @@ function splitCatalog(request: HarnessModelsRequest, version: string | undefined
   const full = models.then(listed => {
     return nativeCatalog(request, 'resources', generation, discoveryId, version).then(
       found => {
-        degraded = catalogDegraded(found);
+        discoveryFailed = catalogUnavailable(found);
         return { ...listed, resources: found.resources };
       },
       () => unavailable(listed),
@@ -177,10 +195,10 @@ function splitCatalog(request: HarnessModelsRequest, version: string | undefined
   }).then(result => {
     entry.pending = false;
     entry.at = Date.now();
-    if (degraded && catalogs.get(key) === entry) catalogs.delete(key);
+    if (discoveryFailed && catalogs.get(key) === entry) catalogs.delete(key);
     if (generations.get(key) === generation) {
-      // A degraded snapshot gets the fresh models with the resources it already had.
-      storeSnapshot(key, request, degraded ? { ...result, resources: readSnapshot(key, request)?.resources ?? { items: [], warnings: [] } } : result);
+      // A failed discovery gets the fresh models with the resources it already had.
+      storeSnapshot(key, request, discoveryFailed ? { ...result, resources: readSnapshot(key, request)?.resources ?? { items: [], warnings: [] } } : result);
     }
     return generations.get(key) === generation ? result : (newestAnswer(key) ?? result);
   }, error => {

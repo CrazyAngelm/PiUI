@@ -18,34 +18,71 @@ async function startChat(lab: Lab, prompt: string): Promise<Locator> {
 }
 
 test.describe('chat activity', () => {
-  test('reasoning and prose stay visible between collapsed tool groups', async ({ lab, page }) => {
+  test('reasoning and calls between two replies share one group, and the working group names its command', async ({ lab, page }) => {
     await lab.open();
     await lab.chat(/Fix flaky scheduler test/).click();
     const transcript = page.getByRole('region', { name: 'Conversation messages' });
 
-    // Finished reasoning is one closed line; its text opens with the keyboard.
-    const thought = transcript.getByRole('button', { name: 'Thought', exact: true });
-    const reasoningText = transcript.getByText(/The flaky test is cancellation_preserves/);
-    await expect(thought).toBeVisible();
-    await expect(thought).toHaveAttribute('aria-expanded', 'false');
-    await expect(reasoningText).toHaveCount(0);
-    await thought.focus();
-    await page.keyboard.press('Enter');
-    await expect(thought).toHaveAttribute('aria-expanded', 'true');
-    await expect(reasoningText).toBeVisible();
-    await page.keyboard.press('Enter');
-    await expect(thought).toHaveAttribute('aria-expanded', 'false');
+    // Reasoning is a row inside its group, not a button of its own.
+    await expect(transcript.getByRole('button', { name: 'Thought', exact: true })).toHaveCount(0);
+    const early = transcript.getByRole('button', { name: /^Read 1 file, searched 1 time/ });
+    const reasoning = transcript.getByRole('button', { name: /^Reasoning/ });
+    const plan = transcript.getByText(/Plan: read the test, grep for the revision assertion/);
+    await expect(early).toBeVisible();
+    await expect(early).toHaveAttribute('aria-expanded', 'false');
+    await expect(reasoning).toHaveCount(0);
 
-    // Tool calls collapse between the prose and reasoning rows, not across them.
-    const first = transcript.getByRole('button', { name: /^Read 1 file, searched 1 time/ });
-    await expect(first).toBeVisible();
-    await expect(first).toHaveAttribute('aria-expanded', 'false');
+    // Opening the group lists its rows; the reasoning row shows its first line and opens with the keyboard.
+    await early.focus();
+    await page.keyboard.press('Enter');
+    await expect(early).toHaveAttribute('aria-expanded', 'true');
+    await expect(reasoning).toHaveAttribute('aria-expanded', 'false');
+    await expect(reasoning).toContainText('The flaky test is cancellation_preserves');
+    await expect(plan).toHaveCount(0);
+    await reasoning.focus();
+    await page.keyboard.press('Enter');
+    await expect(reasoning).toHaveAttribute('aria-expanded', 'true');
+    await expect(plan).toBeVisible();
+    await page.keyboard.press('Enter');
+    await expect(reasoning).toHaveAttribute('aria-expanded', 'false');
+    await expect(plan).toHaveCount(0);
 
-    // The running group shows a live state and the command it is running.
+    // The group that is still working says what it is doing now, in place of counts.
     await expect(
-      transcript.getByRole('button', { name: /^Edited 1 file, ran 1 command.*working….*pnpm --filter @piui\/desktop test:e2e/ }),
+      transcript.getByRole('button', { name: /^Running a command.*pnpm --filter @piui\/desktop test:e2e/ }),
     ).toBeVisible();
     await expect(transcript.getByRole('button', { name: /failed|Stopped/ })).toHaveCount(0);
+  });
+
+  test('a finished turn folds its groups behind one control that opens with the keyboard', async ({ lab, page }) => {
+    await lab.open();
+    await lab.chat(/Route host calls through one transport/).click();
+    const transcript = page.getByRole('region', { name: 'Conversation messages' });
+
+    // One control for the whole turn: how long it took, then what it did. The first reply stays visible.
+    const control = transcript.getByRole('button', { name: /^Worked for \d+m \d+s · edited 1 file, ran 4 commands/ });
+    const edits = transcript.getByRole('button', { name: /^Edited 1 file, ran 1 command/ });
+    const checks = transcript.getByRole('button', { name: /^Ran 3 commands/ });
+    await control.scrollIntoViewIfNeeded();
+    await expect(control).toBeVisible();
+    await expect(control).toHaveAttribute('aria-expanded', 'false');
+    await expect(transcript.getByText('The edits are in place. Running the checks next.')).toBeVisible();
+    await expect(edits).toHaveCount(0);
+    await expect(checks).toHaveCount(0);
+
+    // Enter opens it: the groups return, each still closed.
+    await control.focus();
+    await page.keyboard.press('Enter');
+    await expect(control).toHaveAttribute('aria-expanded', 'true');
+    await expect(edits).toBeVisible();
+    await expect(edits).toHaveAttribute('aria-expanded', 'false');
+    await expect(checks).toBeVisible();
+
+    // Enter again folds them.
+    await page.keyboard.press('Enter');
+    await expect(control).toHaveAttribute('aria-expanded', 'false');
+    await expect(edits).toHaveCount(0);
+    await expect(checks).toHaveCount(0);
   });
 
   test('only a failed call shows the error state', async ({ lab, page }) => {
@@ -65,17 +102,23 @@ test.describe('chat activity', () => {
     await expect(transcript.getByRole('button', { name: /failed|Stopped/ })).toHaveCount(0);
   });
 
-  test('a running turn shows its reasoning, and a declined command is stopped, not failed', async ({ lab, page }) => {
+  test('a running turn shows its reasoning and command as one working group, and a declined command is stopped, not failed', async ({ lab, page }) => {
     test.slow(); // The native turn streams with real timers.
     await lab.open();
     const transcript = await startChat(lab, 'Install the lab dependencies and run the checks');
 
-    // Reasoning is a row of its own: open while it streams, then a closed "Thought".
-    await expect(transcript.getByRole('button', { name: /^(Thinking…|Thought)/ })).toBeVisible({ timeout: 15_000 });
+    // While the agent thinks and then waits on the command, one group says what it is doing.
+    await expect(transcript.getByRole('button', { name: /^(Thinking|Running a command)/ })).toBeVisible({ timeout: 15_000 });
     const card = page.getByRole('article', { name: 'Permission request' });
     await expect(card).toBeVisible({ timeout: 15_000 });
-    await expect(transcript.getByRole('button', { name: /^Thought/ })).toHaveAttribute('aria-expanded', 'false');
-    await expect(transcript.getByRole('button', { name: /^Ran 1 command.*working…/ })).toBeVisible();
+    const working = transcript.getByRole('button', { name: /^Running a command/ });
+    await expect(working).toBeVisible();
+    await expect(working).toHaveAttribute('aria-expanded', 'false');
+
+    // The finished reasoning is a row inside that group.
+    await expect(transcript.getByRole('button', { name: /^Reasoning/ })).toHaveCount(0);
+    await working.click();
+    await expect(transcript.getByRole('button', { name: /^Reasoning/ })).toBeVisible();
 
     // Declining stops the command; it is not an error.
     await card.getByRole('button', { name: 'Deny' }).click();

@@ -105,6 +105,9 @@ export type WorkspaceNoticeCode =
   /** Additive (ADR-043): the Fusion lead's `sidekick` tool is missing. */
   | 'unsupported-sidekick-tool'
   | 'unsupported-sidekick-tool-resume'
+  /** Additive (ADR-069): the linked chats `sessions` tool is missing. */
+  | 'unsupported-sessions-tool'
+  | 'unsupported-sessions-tool-resume'
   /** Additive: a reopened chat's remembered model, reasoning or speed could not be re-applied (host-decided). */
   | 'settings-not-restored'
   /** Additive: the model, reasoning or speed a person just confirmed could not be saved for the next reopen (host-decided). */

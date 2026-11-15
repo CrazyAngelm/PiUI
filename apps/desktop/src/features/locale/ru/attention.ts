@@ -1,0 +1,17 @@
+export const attentionRu: Readonly<Record<string, string>> = {
+  'Notifications': 'Уведомления',
+  'Play a sound': 'Воспроизводить звук',
+  'Show a number on the taskbar button': 'Показывать число на кнопке панели задач',
+  'Flash the taskbar button': 'Мигать кнопкой панели задач',
+  'Sound': 'Звук',
+  'Play': 'Воспроизвести',
+  'Volume': 'Громкость',
+  'Chime': 'Перезвон',
+  'Bell': 'Колокол',
+  'Pop': 'Пузырёк',
+  'Marimba': 'Маримба',
+  'Notify me when': 'Уведомлять, когда',
+  'A chat finishes its turn': 'чат закончил ответ',
+  'A chat needs an approval or an answer': 'чату нужно разрешение или ответ',
+  'A chat fails': 'чат завершился ошибкой',
+};

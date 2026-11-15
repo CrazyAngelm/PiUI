@@ -875,6 +875,49 @@ four read-only GPT 6.1 Sol passes.
 - Verification: pending the end-of-task test run (synthetic UI Lab evidence
   only).
 
+## Workbench: tabs, linked chats, branches, attention, transcript layout — 2026-11-16 (unreleased)
+
+Branch `feat/workbench-1116`. Decisions: ADR-064 to ADR-071.
+
+- **New-chat composer notice.** "Skills, MCP servers and tools could not be
+  loaded" appeared whenever any MCP server failed to start. The composer now
+  tells a failed discovery from a server that did not start (and names it),
+  and shows neither for a Fusion pair, whose agents load their own tools.
+- **Interactive answers (ADR-067).** A `hermes-ui` block renders as a live
+  interface in the chat, with the source as the fallback.
+- **Tabs and split panes (ADR-068).** Opened chats stay as tabs. Two to four
+  chats share the screen. The sidebar hides with the button beside New chat
+  or Mod+B, now a reserved plugin shortcut.
+- **Chat menu and marks (ADR-064).** Every chat has a three-dots menu with
+  Rename, Mark and Delete. Projects and chats take an emoji or a coloured
+  shape. Renaming a chat that is not running changes the PiUI record only.
+- **Attention (ADR-065).** A sound chosen in Settings and a taskbar count
+  when a chat finishes, fails or asks while out of sight. Requests that were
+  already waiting when a chat loads raise nothing.
+- **Dictation keeps the recording (ADR-066).** The two-minute cut is gone.
+  The clip is written to the WebView's storage every five seconds and before
+  the upload. An unsent clip can be sent again, saved or deleted for 24 hours.
+- **Linked chats (ADR-069)** carry messages between chats of any harness and
+  list sub-chats. **Chat branches (ADR-070)** fork natively on Claude Code
+  and Codex and fall back to a linked branch elsewhere. `/btw` asks a side
+  question in a branch beside the chat. Each message has copy, branch and
+  edit-and-send-again.
+- **Transcript layout (ADR-071).** One group per stretch of work, a working
+  group that names its current action, and one control that folds a finished
+  turn. Codex agent and image items are ordinary tool rows instead of
+  "Unsupported Codex item".
+- **Test infrastructure.** The full `vitest run` hung on
+  `remoteMode.test.ts`: a mock factory waited for a module that imported the
+  mocked transport. The avatar contract checks moved to
+  `host-api/nanoAvatarManifest.ts`, which imports no transport. The Nano
+  environment test in `pi.test.mjs` now mirrors the adapter's allowlist.
+- **Review.** Three independent read-only reviews found 17 defects after the
+  type checks and unit tests had passed; all but three low-priority ones are
+  fixed. Left open: `/btw` while the source chat runs takes finished turns
+  only (ADR-070), the Lab fake has no refusal paths for linked chats, and
+  the turn control in the embedded conversation view stays open for the last
+  turn because that view has no running flag.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

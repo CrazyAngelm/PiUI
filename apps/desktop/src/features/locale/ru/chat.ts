@@ -13,6 +13,10 @@ export const chatRu: Readonly<Record<string, string>> = {
   'Thought for {0}m {1}s': 'Размышлял {0} мин {1} с',
   '{0} failed': 'С ошибкой: {0}',
   'Work plan': 'План работы',
+  // The control that folds a finished turn's activity.
+  'Worked for {0}s': 'Работал {0} с',
+  'Worked for {0}m {1}s': 'Работал {0} мин {1} с',
+  'Worked for {0}h {1}m': 'Работал {0} ч {1} мин',
   // Attachments: paperclip, paste and drag and drop.
   'Attach images or files': 'Прикрепить изображения или файлы',
   'Attached images': 'Прикреплённые изображения',

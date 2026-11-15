@@ -28,7 +28,12 @@ export function isPlacement(value: unknown): value is ChatPlacementV1 {
       typeof worktree.path === 'string' &&
       STATES.includes(worktree.state as WorktreeStateV1) &&
       typeof worktree.base === 'string');
-  return worktreeValid && optionalString(value.continuedFrom) && (value.adopted === undefined || value.adopted === true);
+  return (
+    worktreeValid &&
+    optionalString(value.continuedFrom) &&
+    (value.branch === undefined || value.branch === 'native' || value.branch === 'linked') &&
+    (value.adopted === undefined || value.adopted === true)
+  );
 }
 
 function isPreview(value: unknown): value is WorktreePreviewV1 {

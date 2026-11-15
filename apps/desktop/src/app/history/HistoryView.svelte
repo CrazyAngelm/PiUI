@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte';
+  import { onDestroy, onMount, untrack } from 'svelte';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import ChevronLeft from '@lucide/svelte/icons/chevron-left';
   import Folder from '@lucide/svelte/icons/folder';
@@ -14,6 +14,8 @@
   import { readWorkspaceHistory } from '../../host-api/workspaceHistory';
   import { Badge, Button, EmptyState, IconButton, Input, Picker, Skeleton, Spinner, matchesShortcut, type PickerItem } from '../../lib/ui';
   import Transcript from '../chat/transcript/Transcript.svelte';
+  import { CopyFeedback } from '../branch/copyFeedback.svelte';
+  import { buildMessageControls } from '../branch/messageActions';
   import { relativeTime } from '../format';
   import { harnessMeta } from '../harnessMeta';
   import { useWorkspace } from '../shell/context';
@@ -82,6 +84,15 @@
   );
   const selected = $derived(history.selected);
   const reader = $derived(history.reader);
+  // Read-only sessions: messages can be copied, nothing more.
+  const copied = new CopyFeedback();
+  onDestroy(() => copied.dispose());
+  const chatControls = $derived(buildMessageControls(chatReader.blocks, { readOnly: true, copiedId: copied.id }));
+  const readerControls = $derived(buildMessageControls(reader?.blocks ?? [], { readOnly: true, copiedId: copied.id }));
+  async function copyMessage(blocks: readonly Parameters<CopyFeedback['copy']>[0][], id: string): Promise<void> {
+    const block = blocks.find((item) => item.id === id);
+    if (block) await copied.copy(block);
+  }
   const hasSelection = $derived(selected !== undefined || chat !== undefined);
 
   // Route → store. Only primitive route values are dependencies, so catalog
@@ -346,6 +357,9 @@
             {#key chat.id}
               <Transcript
                 blocks={chatReader.blocks}
+                messageControls={chatControls}
+                onMessageAction={(id, action) => (action === 'copy' ? copyMessage(chatReader.blocks, id) : Promise.resolve())}
+                interactive={!store.safeMode}
                 loading={chatReader.loading}
                 sessionKey={`history-chat:${chat.id}`}
                 agentLabel={harnessMeta(chat.harness).label}
@@ -385,6 +399,8 @@
             {#key reader.sessionId}
               <Transcript
                 blocks={reader.blocks}
+                messageControls={readerControls}
+                onMessageAction={(id, action) => (action === 'copy' ? copyMessage(reader.blocks, id) : Promise.resolve())}
                 loading={reader.loading}
                 sessionKey={`history:${workspaceId}:${reader.sessionId}`}
                 {agentLabel}

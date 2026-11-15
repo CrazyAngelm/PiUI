@@ -7,7 +7,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, toNamespacedPath, win32 } from "node:path";
 import test from "node:test";
+import { PassThrough } from "node:stream";
 import { createCodexAdapter } from "./codex.mjs";
+import { runBridge } from "./runner.mjs";
 
 const fixture = fileURLToPath(new URL("./codex.test-fixture.mjs", import.meta.url));
 const config = {
@@ -19,6 +21,168 @@ const config = {
   runtimeArgs: [fixture],
   daemonSocket: "fixture-reserved-endpoint",
 };
+
+const branchTurns = [
+  { id: "source-turn-1", status: "completed", items: [
+    { type: "userMessage", id: "source-user-1", content: [{ type: "text", text: "ALPHA", text_elements: [] }] },
+    { type: "agentMessage", id: "source-answer-1", text: "First answer", phase: null, memoryCitation: null },
+  ] },
+  { id: "source-turn-2", status: "completed", items: [
+    { type: "userMessage", id: "source-user-2", content: [{ type: "text", text: "BETA", text_elements: [] }] },
+    { type: "agentMessage", id: "source-answer-2", text: "Second answer", phase: null, memoryCitation: null },
+  ] },
+];
+
+// Keep the existing app-server fake responsible for startup, permissions and
+// cwd validation. Its transport seam supplies the native fork/list responses
+// proven separately by the read-only spike, without changing the fake itself.
+function forkTransport({ pages = [{ data: branchTurns, nextCursor: null }], childTurns = branchTurns, sourcePage, forkError } = {}) {
+  const calls = [];
+  const openChild = (program, args, options) => {
+    const child = spawn(program, args, options);
+    const write = child.stdin.write.bind(child.stdin);
+    child.stdin.write = (frame, callback) => {
+      const message = JSON.parse(frame);
+      calls.push(message);
+      const respond = value => {
+        callback?.();
+        queueMicrotask(() => child.stdout.emit("data", Buffer.from(`${JSON.stringify({ id: message.id, ...value })}\n`)));
+        return true;
+      };
+      if (message.method === "thread/turns/list") {
+        const index = message.params.cursor ? Number(message.params.cursor.slice("page-".length)) : 0;
+        const page = message.params.threadId === "source-fixture"
+          ? sourcePage?.(index) ?? pages[index] ?? { data: [], nextCursor: null }
+          : { data: [...childTurns].reverse(), nextCursor: null, backwardsCursor: null };
+        return respond({ result: page });
+      }
+      if (message.method === "thread/fork") {
+        if (forkError) return respond({ error: { code: -32602, message: forkError } });
+        const params = { ...message.params, threadId: "forked-fixture", initialTurnsPage: { sortDirection: "desc", itemsView: "full" } };
+        delete params.lastTurnId;
+        return write(`${JSON.stringify({ ...message, method: "thread/resume", params })}\n`, callback);
+      }
+      return write(frame, callback);
+    };
+    return child;
+  };
+  return { calls, openChild };
+}
+
+test("Codex native forks use only the fork schema's settings and read their own history and saved tools", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "piui-codex-fork-"));
+  const sourcePath = join(directory, "source.jsonl");
+  const ownPath = join(directory, "child.jsonl");
+  const metadata = tools => `${JSON.stringify({ type: "session_meta", payload: { dynamic_tools: [{ type: "namespace", name: "piui", tools: tools.map(name => ({ type: "function", name })) }] } })}\n`;
+  const tools = ["board", "sidekick", "sessions"];
+  try {
+    for (const savedTools of [[], tools]) {
+      await writeFile(sourcePath, metadata(savedTools.length ? [] : tools));
+      await writeFile(ownPath, metadata(savedTools));
+      const sourceBefore = readFileSync(sourcePath, "utf8");
+      const { calls, openChild } = forkTransport();
+      const events = [];
+      const adapter = await createCodexAdapter({
+        ...config, fork: { nativeId: "source-fixture", nativePath: sourcePath },
+        model: { id: "fixture-model", provider: "openai", name: "Fixture Model" },
+        permissionMode: "workspace-write", thinkingLevel: "low", serviceTier: "fast",
+        baseInstructions: "Base instructions", instructions: "Chat instructions", nativeSubagents: false,
+        resourceRules: [{ kind: "skill", id: join(directory, "SKILL.md"), enabled: false }, { kind: "mcp", id: "example", enabled: false }],
+        hostTools: tools,
+        runtimeArgs: [fixture, "--expect-permission", "workspace-write", `--rollout=${ownPath}`],
+      }, event => events.push(event), undefined, openChild, async () => ({ ok: true }), async () => ({ ok: true, text: "" }), {}, async () => ({ ok: true, chats: [] }));
+      try {
+        const opened = calls.find(call => call.method === "thread/fork");
+        assert.deepEqual(opened.params, {
+          threadId: "source-fixture", cwd: config.cwd, serviceTier: "fast", model: "fixture-model", modelProvider: "openai",
+          baseInstructions: "Base instructions", developerInstructions: "Chat instructions",
+          config: { "skills.config": [{ path: join(directory, "SKILL.md"), enabled: false }], "mcp_servers.example.enabled": false, "features.multi_agent": false, "features.multi_agent_v2": false },
+          permissions: ":workspace", approvalPolicy: "never", excludeTurns: true,
+        });
+        assert.ok(!calls.some(call => call.method === "thread/start" || call.method === "thread/resume"));
+        assert.deepEqual(calls.filter(call => call.method === "thread/turns/list").map(call => call.params), [
+          { threadId: "forked-fixture", sortDirection: "desc", itemsView: "full" },
+        ]);
+        assert.equal(adapter.snapshot().nativeId, "forked-fixture");
+        assert.equal(adapter.snapshot().nativePath, ownPath);
+        assert.equal(adapter.snapshot().materialized, true);
+        assert.deepEqual(adapter.snapshot().blocks.filter(block => ["user", "assistant"].includes(block.kind)).map(block => [block.id, block.text]), [
+          ["source-user-1", "ALPHA"], ["source-answer-1", "First answer"], ["source-user-2", "BETA"], ["source-answer-2", "Second answer"],
+        ]);
+        assert.deepEqual(events.filter(event => event.type === "notice").map(event => event.code), savedTools.length ? [] : tools.map(name => `unsupported-${name}-tool-resume`));
+        assert.deepEqual(events.find(event => event.type === "binding"), { type: "binding", nativeId: "forked-fixture", nativePath: ownPath });
+        assert.equal(readFileSync(sourcePath, "utf8"), sourceBefore, "the source rollout remains untouched");
+      } finally { await adapter.dispose(); }
+    }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("Codex branch cuts page the source ascending and pass the preceding turn as lastTurnId", async () => {
+  const { calls, openChild } = forkTransport({
+    pages: [{ data: [branchTurns[0]], nextCursor: "page-1" }, { data: [branchTurns[1]], nextCursor: null }],
+    childTurns: [branchTurns[0]],
+  });
+  const adapter = await createCodexAdapter({ ...config, fork: { nativeId: "source-fixture", beforeBlockId: "source-user-2" } }, () => {}, undefined, openChild);
+  try {
+    assert.deepEqual(calls.filter(call => call.method === "thread/turns/list").map(call => call.params), [
+      { threadId: "source-fixture", sortDirection: "asc", itemsView: "full" },
+      { threadId: "source-fixture", sortDirection: "asc", itemsView: "full", cursor: "page-1" },
+      { threadId: "forked-fixture", sortDirection: "desc", itemsView: "full" },
+    ]);
+    assert.deepEqual(calls.find(call => call.method === "thread/fork").params, {
+      threadId: "source-fixture", lastTurnId: "source-turn-1", cwd: config.cwd, config: {}, excludeTurns: true,
+    });
+    assert.deepEqual(adapter.snapshot().blocks.filter(block => ["user", "assistant"].includes(block.kind)).map(block => block.text), ["ALPHA", "First answer"]);
+  } finally { await adapter.dispose(); }
+});
+
+test("a Codex cut before the first user message starts a fresh thread without dynamic tools", async () => {
+  const { calls, openChild } = forkTransport();
+  const adapter = await createCodexAdapter({ ...config, fork: { nativeId: "source-fixture", beforeBlockId: "source-user-1" }, hostTools: ["board", "sidekick", "sessions"] }, () => {}, undefined, openChild, async () => ({ ok: true }), async () => ({ ok: true, text: "" }), {}, async () => ({ ok: true, chats: [] }));
+  try {
+    assert.ok(!calls.some(call => call.method === "thread/fork"));
+    assert.deepEqual(calls.find(call => call.method === "thread/start").params, { config: {}, ephemeral: false });
+    assert.equal(calls.filter(call => call.method === "thread/turns/list").length, 1);
+    assert.equal(adapter.snapshot().materialized, false);
+    assert.deepEqual(adapter.snapshot().blocks.filter(block => ["user", "assistant"].includes(block.kind)), []);
+  } finally { await adapter.dispose(); }
+});
+
+test("Codex refuses invalid fork references before startup and bounds branch-point discovery", async () => {
+  let launched = false;
+  const neverLaunch = () => { launched = true; throw new Error("must not launch"); };
+  for (const fork of [null, {}, { nativeId: "" }, { nativeId: "x".repeat(201) }, { nativeId: "source-fixture", nativePath: 1 }, { nativeId: "source-fixture", beforeBlockId: "" }, { nativeId: "source-fixture", beforeBlockId: "x".repeat(257) }, { nativeId: "source-fixture", extra: true }]) {
+    await assert.rejects(createCodexAdapter({ ...config, fork }, () => {}, undefined, neverLaunch), { bridgeCode: "invalid-session" });
+  }
+  await assert.rejects(createCodexAdapter({ ...config, nativeId: "source-fixture", fork: { nativeId: "source-fixture" } }, () => {}, undefined, neverLaunch), { bridgeCode: "invalid-session" });
+  await assert.rejects(createCodexAdapter({ ...config, coordination: true, fork: { nativeId: "source-fixture" } }, () => {}, async () => ({}), neverLaunch), { bridgeCode: "unsupported-coordinator-resume" });
+  assert.equal(launched, false);
+  for (const [options, expectedPages] of [[{}, 1], [{ sourcePage: () => ({ data: [], nextCursor: "page-1" }) }, 200]]) {
+    const { calls, openChild } = forkTransport(options);
+    await assert.rejects(createCodexAdapter({ ...config, fork: { nativeId: "source-fixture", beforeBlockId: "unknown-user" } }, () => {}, undefined, openChild), {
+      bridgeCode: "branch-point-not-found", safeMessage: "That message is no longer in the chat this one branches from.",
+    });
+    assert.equal(calls.filter(call => call.method === "thread/turns/list").length, expectedPages);
+    assert.ok(!calls.some(call => ["thread/start", "thread/fork"].includes(call.method)));
+  }
+});
+
+test("Codex maps native fork failures safely and retains effective cwd and permission validation", async () => {
+  for (const [forkError, code, safeMessage] of [
+    ["turn not found: PRIVATE_TURN", "branch-point-not-found", "That message is no longer in the chat this one branches from."],
+    ["PRIVATE_UNSUPPORTED_METHOD", "branch-unsupported", "This chat cannot be branched natively."],
+  ]) {
+    const { openChild } = forkTransport({ forkError });
+    await assert.rejects(createCodexAdapter({ ...config, fork: { nativeId: "source-fixture" } }, () => {}, undefined, openChild), { bridgeCode: code, safeMessage });
+  }
+  for (const [args, code] of [
+    [["--wrong-cwd"], "native-cwd-mismatch"],
+    [["--effective-permission-mismatch"], "unsupported-permission-mode"],
+  ]) {
+    const { openChild } = forkTransport();
+    await assert.rejects(createCodexAdapter({ ...config, fork: { nativeId: "source-fixture" }, permissionMode: "workspace-write", runtimeArgs: [fixture, "--expect-permission", "workspace-write", ...args] }, () => {}, undefined, openChild), { bridgeCode: code });
+  }
+});
 
 test("Codex refuses a selected Nano model if its private source is absent", async () => {
   const model = { id: "free", provider: "nano-codex-subscription", name: "Free" };
@@ -87,6 +251,40 @@ test("catalog-only Codex preserves models and available resources when skill dis
     assert.deepEqual(resources.warnings, ["Skills could not be loaded from Codex."]);
     assert.equal((await adapter.catalogModels())[0].id, "fixture-model");
   } finally { await adapter.dispose(); }
+});
+
+test("catalog-only Codex preserves skills and configured servers when MCP tools never answer", async (t) => {
+  const methods = [];
+  const openChild = (program, args, options) => {
+    const child = spawn(program, args, options);
+    const write = child.stdin.write.bind(child.stdin);
+    child.stdin.write = (frame, callback) => {
+      const { method } = JSON.parse(frame);
+      methods.push(method);
+      if (method === "mcpServerStatus/list") {
+        callback?.();
+        return true;
+      }
+      return write(frame, callback);
+    };
+    return child;
+  };
+  const adapter = await createCodexAdapter({ ...config, catalogOnly: true }, () => {}, undefined, openChild);
+  try {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const pending = adapter.resources();
+    assert.deepEqual(methods.slice(-3), ["skills/list", "config/read", "mcpServerStatus/list"], "all inventories start before any answer");
+    t.mock.timers.tick(75_000);
+    const resources = await pending;
+    assert.deepEqual(resources.items, [
+      { kind: "skill", id: "/skills/review/SKILL.md", name: "Review", enabled: false, configurable: true },
+      { kind: "mcp", id: "docs", name: "docs", enabled: true, configurable: true },
+    ]);
+    assert.deepEqual(resources.warnings, ["MCP tools could not be loaded from Codex."]);
+  } finally {
+    t.mock.timers.reset();
+    await adapter.dispose();
+  }
 });
 
 test("catalog-only Codex labels models with the configured native provider when known", async () => {
@@ -254,12 +452,67 @@ test("renders web search items as safe tool activity and keeps other unknown typ
     assert.doesNotMatch(webSearch.text, /SECRET-MUST-NOT-LEAK/);
     // Item types without a dedicated projection (including 0.153's
     // functionCallOutput) stay readable through the generic fallback.
-    for (const type of ["collabAgentToolCall", "imageView", "imageGeneration", "sleep", "subAgentActivity", "hookPrompt", "functionCallOutput"]) {
+    for (const type of ["imageGeneration", "sleep", "hookPrompt", "functionCallOutput"]) {
       const block = adapter.snapshot().blocks.find((value) => value.id === `unsupported-${type}`);
       assert.equal(block.kind, "unknown");
       assert.equal(block.fallback, true);
       assert.match(block.safeSummary, new RegExp(type));
     }
+  } finally {
+    await adapter.dispose();
+  }
+});
+
+for (const history of [false, true]) test(`projects Codex agent and image items from ${history ? "history" : "live notifications"} without thread ids`, async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({
+    ...config, ...(history ? { nativeId: "resume-projected" } : {}), runtimeArgs: [fixture, "--projected-items"],
+  }, event => events.push(event));
+  try {
+    await waitFor(() => adapter.snapshot().blocks.some(block => block.id === "collab-bounded" && block.status === "complete"));
+    const block = id => adapter.snapshot().blocks.find(value => value.id === id);
+    const collab = block("collab-item");
+    assert.deepEqual(
+      [collab.kind, collab.label, collab.toolName, collab.title, collab.status, collab.truncated],
+      ["tool", "Agent", "subagent", "Start agent: Review the parser and suggest a fix.", "streaming", false],
+    );
+    assert.equal(collab.text, [
+      "Prompt: Review the parser\nand suggest a fix.", "Model: fixture-model", "Reasoning: high",
+      "Agent 1: running (Inspecting the parser and its tests.)", `Agent 2: completed (${"m".repeat(199)}…)`,
+      ...Array.from({ length: 6 }, (_, index) => `Agent ${index + 3}: completed`),
+    ].join("\n"));
+    assert.doesNotMatch(collab.text, /Agent 9:/);
+    const bare = block("collab-empty");
+    assert.deepEqual([bare.title, bare.text, bare.status], ["Wait for agents", "", "complete"]);
+    assert.doesNotMatch(bare.text, /Prompt:/);
+    const subagent = block("subagent-item");
+    assert.deepEqual(
+      [subagent.kind, subagent.label, subagent.toolName, subagent.title, subagent.text, subagent.status],
+      ["tool", "Agent", "subagent", "Agent interrupted · reviewer/parser", "Agent: reviewer/parser\nModel: fixture-model\nReasoning: medium", "interrupted"],
+    );
+    assert.deepEqual(
+      [block("subagent-complete").title, block("subagent-complete").text, block("subagent-complete").status],
+      ["Agent finished · reviewer/parser", "Agent: reviewer/parser", "complete"],
+    );
+    const image = block("image-view-item");
+    assert.deepEqual(
+      [image.kind, image.label, image.toolName, image.title, image.text, image.status],
+      ["tool", "Image", "read", "/workspace/diagram.png", "Path: /workspace/diagram.png", "complete"],
+    );
+    if (!history) assert.equal(events.find(event => event.type === "block" && event.block.id === image.id).block.status, "streaming", "event status overrides the projection");
+    const bounded = block("collab-bounded");
+    assert.equal(bounded.title, `Start agent: ${"x".repeat(99)}…`);
+    assert.equal(bounded.truncated, true);
+    assert.ok(bounded.text.length <= 16 * 1024 + 64);
+    const projected = [collab, bare, subagent, block("subagent-complete"), image, bounded];
+    for (const item of projected) {
+      assert.equal(item.collapsible, true);
+      assert.equal(item.fallback, undefined);
+      assert.equal(item.safeSummary, undefined);
+      assert.doesNotMatch(`${item.title}\n${item.text}`, /SECRET-THREAD-ID/);
+      assert.ok(Object.keys(item).every(key => ["id", "kind", "label", "status", "text", "title", "toolName", "collapsible", "truncated", "createdAt"].includes(key)));
+    }
+    assert.doesNotMatch(JSON.stringify(projected), /SECRET-THREAD-ID/);
   } finally {
     await adapter.dispose();
   }
@@ -1450,6 +1703,131 @@ async function openProxied(directory, overrides, { args = [], inject = [], callb
 }
 
 const toolNames = (dynamicTools) => dynamicTools.flatMap((spec) => spec.tools.map((tool) => `${spec.name}/${tool.name}`)).sort();
+
+test("sessions is listed only when enabled beside board and missing support leaves the chat usable", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "piui-codex-sessions-"));
+  const sessions = async () => ({ ok: true, chats: [] });
+  const board = async () => ({ ok: true });
+  try {
+    for (const [hostTools, expected] of [
+      [["sessions"], ["piui/sessions"]],
+      [["board", "sessions"], ["piui/board", "piui/sessions"]],
+      [["board"], ["piui/board"]],
+    ]) {
+      const probe = await openProxied(directory, { hostTools }, { callbacks: [board, undefined, {}, sessions] });
+      try {
+        const tools = (await probe.thread()).dynamicTools;
+        assert.deepEqual(toolNames(tools), expected);
+        const schema = tools[0].tools.find(tool => tool.name === "sessions")?.inputSchema;
+        if (schema) assert.deepEqual(schema.oneOf.map(shape => shape.properties.op.const), ["start", "list", "message", "read", "wait", "stop"]);
+      } finally { await probe.adapter.dispose(); }
+    }
+    const missing = await openProxied(directory, { hostTools: ["sessions"] }, {
+      inject: [{ id: 883, callId: "sessions-unavailable", namespace: "piui", tool: "sessions", arguments: { op: "list" } }],
+    });
+    try {
+      assert.equal((await missing.thread()).dynamicTools, null);
+      assert.deepEqual(missing.notices(), ["unsupported-sessions-tool"]);
+      const [reply] = await missing.replies(1);
+      assert.equal(reply.result.success, false);
+      assert.equal(JSON.parse(reply.result.contentItems[0].text).code, "not-allowed");
+      assert.equal(missing.adapter.snapshot().status, "idle");
+    } finally { await missing.adapter.dispose(); }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a resumed Codex thread keeps its saved sessions tool or starts without it and refuses calls", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "piui-codex-sessions-resume-"));
+  const calls = [];
+  const sessions = async operation => { calls.push(operation); return { ok: true, chats: [] }; };
+  const rollout = (name, tools) => {
+    const file = join(directory, name);
+    writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { dynamic_tools: tools.length ? [{ type: "namespace", name: "piui", tools: tools.map(name => ({ type: "function", name })) }] : [] } }) + "\n");
+    return file;
+  };
+  try {
+    const saved = rollout("with-sessions.jsonl", ["sessions"]);
+    const kept = await openProxied(directory, { nativeId: "resume-fixture", hostTools: ["sessions"] }, {
+      args: [`--rollout=${saved}`], callbacks: [undefined, undefined, {}, sessions],
+      inject: [{ id: 884, callId: "sessions-saved", namespace: "piui", tool: "sessions", arguments: { op: "list" } }],
+    });
+    try {
+      assert.equal((await kept.thread()).dynamicTools, null, "thread/resume never registers new tools");
+      assert.deepEqual(kept.notices(), []);
+      const [reply] = await kept.replies(1);
+      assert.equal(reply.result.success, true);
+      assert.deepEqual(JSON.parse(reply.result.contentItems[0].text), { ok: true, chats: [] });
+      assert.deepEqual(calls, [{ op: "list" }]);
+    } finally { await kept.adapter.dispose(); }
+    for (const file of [rollout("board-only.jsonl", ["board"]), rollout("without-tools.jsonl", []), join(directory, "missing.jsonl")]) {
+      const missing = await openProxied(directory, { nativeId: "resume-fixture", hostTools: ["sessions"] }, {
+        args: [`--rollout=${file}`], callbacks: [undefined, undefined, {}, sessions],
+        inject: [{ id: 885, callId: "sessions-missing", namespace: "piui", tool: "sessions", arguments: { op: "list" } }],
+      });
+      try {
+        assert.equal((await missing.thread()).dynamicTools, null);
+        assert.deepEqual(missing.notices(), ["unsupported-sessions-tool-resume"]);
+        const [reply] = await missing.replies(1);
+        assert.equal(reply.result.success, false);
+        assert.equal(JSON.parse(reply.result.contentItems[0].text).code, "not-allowed");
+        assert.equal(missing.adapter.snapshot().status, "idle");
+        assert.equal(calls.length, 1, "a missing saved tool never reaches the host");
+      } finally { await missing.adapter.dispose(); }
+    }
+    const missingCallback = await openProxied(directory, { nativeId: "resume-fixture", hostTools: ["sessions"] }, { args: [`--rollout=${saved}`] });
+    try {
+      await missingCallback.thread();
+      assert.deepEqual(missingCallback.notices(), ["unsupported-sessions-tool"]);
+    } finally { await missingCallback.adapter.dispose(); }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("sessions dynamic calls round-trip through runner validation and preserve JSON refusals", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "piui-codex-sessions-call-"));
+  const script = join(directory, "proxy.mjs");
+  const log = join(directory, "calls.jsonl");
+  writeFileSync(script, proxyScript());
+  const injections = [
+    { id: 881, callId: "sessions-list", namespace: "piui", tool: "sessions", arguments: { op: "list" } },
+    { id: 882, callId: "sessions-invalid", namespace: "piui", tool: "sessions", arguments: { op: "list", caller: "spoofed" } },
+  ];
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const frames = [];
+  let buffered = "";
+  output.on("data", chunk => {
+    buffered += chunk.toString("utf8");
+    let end;
+    while ((end = buffered.indexOf("\n")) >= 0) {
+      const line = buffered.slice(0, end); buffered = buffered.slice(end + 1);
+      if (line) frames.push(JSON.parse(line));
+    }
+  });
+  const send = (id, method, params) => input.write(`${JSON.stringify({ id, method, params })}\n`);
+  const entries = () => existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line)) : [];
+  runBridge((options, emit, coordinator, board, sidekick, sessions) => createCodexAdapter(options, emit, coordinator, undefined, board, sidekick, {}, sessions), input, output);
+  send("init", "initialize", { ...config, hostTools: ["sessions"], runtimeArgs: [script, `--wrapper-log=${log}`, `--wrapper-inject=${JSON.stringify(injections)}`] });
+  try {
+    assert.equal((await waitFor(() => frames.find(frame => frame.id === "init"))).ok, true);
+    const request = await waitFor(() => frames.find(frame => frame.event?.type === "sessionsRequest"));
+    assert.deepEqual(request.event.operation, { op: "list" });
+    const result = { ok: false, code: "not-allowed", message: "Linked chats are not enabled for this chat." };
+    send("answer", "sessionsResponse", { requestId: request.event.requestId, result });
+    const replies = await waitFor(() => {
+      const values = entries().filter(entry => entry.kind === "reply");
+      return values.length === 2 ? values : undefined;
+    });
+    assert.deepEqual(JSON.parse(replies.find(reply => reply.id === 881).result.contentItems[0].text), result);
+    assert.equal(replies.find(reply => reply.id === 881).result.success, false);
+    assert.equal(JSON.parse(replies.find(reply => reply.id === 882).result.contentItems[0].text).code, "invalid-operation");
+    assert.equal(frames.filter(frame => frame.event?.type === "sessionsRequest").length, 1, "invalid operations never reach the host");
+  } finally {
+    send("dispose", "dispose", {});
+    await waitFor(() => frames.find(frame => frame.id === "dispose"));
+    input.end();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("a fresh thread registers the sidekick tool in the piui namespace, beside the board when both are on", async () => {
   const directory = await mkdtemp(join(tmpdir(), "piui-codex-sidekick-"));

@@ -20,7 +20,11 @@ const card = (page: Page, name: string) => page.getByRole('article', { name, exa
 /** Opens the finished issue-tracker tool call of the "File an issue" lab chat. */
 async function expandFinishedTool(page: Page): Promise<void> {
   await expect(page.getByText(/I filed/)).toBeVisible();
-  const group = page.getByRole('button', { name: /Used 1 tool/ }).last();
+  // A finished turn folds its activity behind one control: open it, then the group of the tool call.
+  await expect(page.getByRole('button', { name: 'Stop turn' })).toBeHidden({ timeout: 30_000 });
+  const turn = page.getByRole('button', { name: /used 1 tool/ });
+  if ((await turn.getAttribute('aria-expanded')) !== 'true') await turn.click();
+  const group = page.getByRole('button', { name: /^Used 1 tool/ }).last();
   if ((await group.getAttribute('aria-expanded')) !== 'true') await group.click();
 }
 

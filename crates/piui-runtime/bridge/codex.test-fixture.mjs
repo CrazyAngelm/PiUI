@@ -74,6 +74,28 @@ const settingsIndex = process.argv.indexOf("--expect-settings");
 const expectedSettings = settingsIndex >= 0 ? JSON.parse(process.argv[settingsIndex + 1]) : undefined;
 const unknownItemsFixture = process.argv.includes("--unknown-items");
 const toolItemsFixture = process.argv.includes("--tool-items");
+const projectedItemsFixture = process.argv.includes("--projected-items");
+const collabItem = {
+  type: "collabAgentToolCall", id: "collab-item", tool: "spawnAgent", status: "inProgress",
+  senderThreadId: "SECRET-THREAD-ID-sender", receiverThreadIds: ["SECRET-THREAD-ID-receiver"],
+  prompt: "Review the parser\nand suggest a fix.", model: "fixture-model", reasoningEffort: "high",
+  agentsStates: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [
+    `SECRET-THREAD-ID-agent-${index + 1}`,
+    { status: index === 0 ? "running" : "completed", message: index === 0 ? "Inspecting the parser\nand its tests." : index === 1 ? "m".repeat(230) : null },
+  ])),
+};
+const subagentItem = {
+  type: "subAgentActivity", id: "subagent-item", kind: "interrupted",
+  agentThreadId: "SECRET-THREAD-ID-activity", agentPath: "reviewer/parser", model: "fixture-model", reasoningEffort: "medium",
+};
+const projectedItems = [
+  collabItem,
+  { ...collabItem, id: "collab-empty", tool: "wait", status: "completed", prompt: null, model: null, reasoningEffort: null, agentsStates: {} },
+  subagentItem,
+  { ...subagentItem, id: "subagent-complete", kind: "completed", model: null, reasoningEffort: null },
+  { type: "imageView", id: "image-view-item", path: "/workspace/diagram.png" },
+  { ...collabItem, id: "collab-bounded", status: "completed", prompt: "x".repeat(20_000), agentsStates: {} },
+];
 const textOnlyModel = process.argv.includes("--text-only-model");
 const skillsFixture = process.argv.includes("--skills");
 // Rollout path the thread reports, and a `piui/board` call after it opens.
@@ -258,8 +280,10 @@ input.on("line", (line) => {
     }
     const turns = activeResumeFixture && message.method === "thread/resume"
       ? [{ id: "active-resumed-turn", status: "inProgress", items: [] }]
-      : [];
-    const threadStatus = systemErrorFixture ? { type: "systemError" } : turns.length ? { type: "active", activeFlags: [] } : { type: "idle" };
+      : projectedItemsFixture && message.method === "thread/resume"
+        ? [{ id: "projected-turn", status: "completed", items: projectedItems }]
+        : [];
+    const threadStatus = systemErrorFixture ? { type: "systemError" } : activeResumeFixture && message.method === "thread/resume" ? { type: "active", activeFlags: [] } : { type: "idle" };
     send({ method: "thread/started", params: { thread: { id: threadId, path: rolloutPath, status: threadStatus } } });
     const effectiveSandbox = effectivePermissionMismatch
       ? { type: "readOnly", networkAccess: false }
@@ -357,7 +381,7 @@ input.on("line", (line) => {
     if (unknownItemsFixture) {
       send({ method: "item/started", params: { threadId, turnId: "turn-items", startedAtMs: 7, item: { type: "commandExecution", id: "command-display", command: "display command", cwd: process.cwd(), aggregatedOutput: "", status: "inProgress" } } });
       // ThreadItem types without a dedicated projection; 0.153 added functionCallOutput.
-      for (const type of ["collabAgentToolCall", "imageView", "imageGeneration", "sleep", "subAgentActivity", "hookPrompt", ...(protocolAtLeast(153) ? ["functionCallOutput"] : [])]) {
+      for (const type of ["imageGeneration", "sleep", "hookPrompt", ...(protocolAtLeast(153) ? ["functionCallOutput"] : [])]) {
         send({ method: "item/started", params: { threadId, turnId: "turn-items", startedAtMs: 8, item: { type, id: `unsupported-${type}`, status: "inProgress" } } });
       }
       send({ method: "item/started", params: { threadId, turnId: "turn-items", startedAtMs: 8, item: {
@@ -368,6 +392,12 @@ input.on("line", (line) => {
         results: [{ title: "Fixture result", secret: "SECRET-MUST-NOT-LEAK" }],
         status: "inProgress",
       } } });
+    }
+    if (projectedItemsFixture && message.method === "thread/start") {
+      for (const item of projectedItems) {
+        send({ method: "item/started", params: { threadId, turnId: "projected-turn", item } });
+        if (item.status !== "inProgress") send({ method: "item/completed", params: { threadId, turnId: "projected-turn", item } });
+      }
     }
     if (toolItemsFixture) {
       const secret = "SECRET-MUST-NOT-LEAK";

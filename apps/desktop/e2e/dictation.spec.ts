@@ -1,4 +1,5 @@
 import type { Locator, Page } from '@playwright/test';
+import { labUuid } from '../src/host-api/lab/labRandom';
 import { expect, test, type Lab } from './fixtures';
 
 // The Lab has no microphone, so no spec records: it checks the settings, the key state and when
@@ -97,5 +98,55 @@ test('safe mode says dictation is off and offers no setup', async ({ lab, page }
   await lab.nav('New chat').click();
   await expect(page.getByRole('region', { name: 'What should we work on?' })).toBeVisible();
   await expect(dictate(page)).toHaveCount(0);
+  lab.expectNoErrors();
+});
+
+test('a recording that failed to transcribe stays in the composer and Retry puts its words in', async ({ lab, page }) => {
+  await lab.open();
+  await openDictation(lab);
+  await source(page).selectOption('openai');
+  await keyGroup(page).getByRole('button', { name: 'Set API key…', exact: true }).press('Enter');
+  await expect(keyGroup(page).getByRole('status')).toHaveText('Saved in the system credential store');
+
+  // The Lab has no microphone: a clip that an earlier run could not send is put where the app keeps it.
+  const scope = `chat:${labUuid('demo:session:transport')}`;
+  await page.evaluate(async (pendingScope) => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const opening = indexedDB.open('piui-dictation-pending', 1);
+      opening.onupgradeneeded = () => opening.result.createObjectStore('recordings', { keyPath: 'scope' });
+      opening.onsuccess = () => resolve(opening.result);
+      opening.onerror = () => reject(opening.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction('recordings', 'readwrite');
+      transaction.objectStore('recordings').put({
+        id: 'seeded',
+        scope: pendingScope,
+        blob: new Blob(['FAIL-ONCE audio'], { type: 'audio/webm' }),
+        mimeType: 'audio/webm',
+        durationMs: 102_000,
+        createdAt: Date.now(),
+        reason: 'failed',
+      });
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+    database.close();
+  }, scope);
+
+  await openChat(lab);
+  const bar = page.getByRole('group', { name: 'Unsent recording', exact: true });
+  await expect(bar).toContainText('Recording 1:42 was not transcribed');
+  await expect(bar.getByRole('button', { name: 'Save audio', exact: true })).toBeVisible();
+  await expect(bar.getByRole('button', { name: 'Delete', exact: true })).toBeVisible();
+
+  // The Lab's provider refuses this clip once: the bar stays and the recording is kept.
+  await bar.getByRole('button', { name: 'Retry', exact: true }).press('Enter');
+  await expect(page.getByText('The speech service is not working right now. Try again later.')).toBeVisible();
+  await expect(bar).toBeVisible();
+
+  await bar.getByRole('button', { name: 'Retry', exact: true }).press('Enter');
+  await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue(/This is synthetic dictated text\./);
+  await expect(bar).toHaveCount(0);
   lab.expectNoErrors();
 });

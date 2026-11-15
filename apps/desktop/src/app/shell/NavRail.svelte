@@ -6,6 +6,7 @@
   import History from '@lucide/svelte/icons/history';
   import Clock from '@lucide/svelte/icons/clock-3';
   import Ellipsis from '@lucide/svelte/icons/ellipsis';
+  import PanelLeftOpen from '@lucide/svelte/icons/panel-left-open';
   import { t } from '../../features/locale/language';
   import { IconButton, Menu, StatusDot, type MenuEntry } from '../../lib/ui';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
@@ -16,8 +17,11 @@
   interface Props {
     onSearch: () => void;
     onNavigate?: () => void;
+    /** The sidebar is hidden: the first control brings it back. */
+    sidebarHidden?: boolean;
+    onShowSidebar?: () => void;
   }
-  let { onSearch, onNavigate = () => {} }: Props = $props();
+  let { onSearch, onNavigate = () => {}, sidebarHidden = false, onShowSidebar = undefined }: Props = $props();
   const store = useWorkspace();
 
   // The optional Nano account: read once after first paint, never before.
@@ -76,6 +80,13 @@
 </script>
 
 <nav class="rail" aria-label={$t('Main navigation')}>
+  {#if sidebarHidden}
+    <span class="rail__cell">
+      <IconButton size="lg" label={$t('Show sidebar')} shortcut="Mod+B" tooltipSide="right" onclick={() => onShowSidebar?.()}>
+        <PanelLeftOpen />
+      </IconButton>
+    </span>
+  {/if}
   {#each items as item (item.id)}
     <span class="rail__cell">
       <IconButton

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import SquarePen from '@lucide/svelte/icons/square-pen';
+  import Columns2 from '@lucide/svelte/icons/columns-2';
+  import PanelLeftClose from '@lucide/svelte/icons/panel-left-close';
   import Workflow from '@lucide/svelte/icons/workflow';
   import Folder from '@lucide/svelte/icons/folder';
   import MessagesSquare from '@lucide/svelte/icons/messages-square';
@@ -19,10 +21,12 @@
   import KanbanSquare from '@lucide/svelte/icons/square-kanban';
   import UsersRound from '@lucide/svelte/icons/users-round';
   import UserRound from '@lucide/svelte/icons/user-round';
+  import SmilePlus from '@lucide/svelte/icons/smile-plus';
+  import Trash from '@lucide/svelte/icons/trash-2';
   import type { BoardRegistry } from '../board/boardStore.svelte';
   import { t, language } from '../../features/locale/language';
   import { placements } from '../worktrees/placements.svelte';
-  import { Kbd, Menu, StatusDot, Skeleton, toasts, type MenuEntry, type Status } from '../../lib/ui';
+  import { IconButton, Kbd, Menu, StatusDot, Skeleton, toasts, type MenuEntry, type Status } from '../../lib/ui';
   import type { WorkspaceSession, WorkspaceSummary } from '../../../../../contracts/workspace-v15';
   import { relativeTime } from '../format';
   import { isPinned, type ProjectDialogRequest } from '../projects/projectActions';
@@ -34,12 +38,25 @@
   import { remoteMode } from '../nano/remoteMode';
   import { remoteShell } from '../nano/remoteShell.svelte';
   import { chipFor, creditsText } from '../nano/nanoView';
+  import Mark from '../marks/Mark.svelte';
+  import { marks } from '../marks/marks.svelte';
 
   interface Props {
     onTrust: (workspace: WorkspaceSummary) => void;
     onNavigate?: () => void;
+    onDeleteSession: (sessionId: string) => void;
+    /** Hides the sidebar; absent in a narrow window, where it is a drawer. */
+    onCollapse?: () => void;
+    /** Shows a chat in a new pane beside the current one (split panes). */
+    onOpenBeside?: (sessionId: string) => void;
+    /** Why a chat waits to be seen, if it does. */
+    attentionKind?: (sessionId: string) => string | undefined;
+    /** The chat a linked child (started by an agent, or a branch) is listed under; arrives after first paint. */
+    linkParentOf?: (sessionId: string) => string | undefined;
+    /** Asks the host for a chat's linked chats once (cached). */
+    linkLoad?: (sessionId: string) => void;
   }
-  let { onTrust, onNavigate = () => {} }: Props = $props();
+  let { onTrust, onNavigate = () => {}, onDeleteSession, onCollapse = undefined, onOpenBeside = undefined, attentionKind = undefined, linkParentOf = undefined, linkLoad = undefined }: Props = $props();
   const store = useWorkspace();
 
   const projects = $derived(store.catalog.workspaces.filter((workspace) => !workspace.personal));
@@ -56,13 +73,16 @@
   });
   // Worktree markers: placement v1 is loaded whenever the chat list changes.
   $effect(() => placements.sync(store.catalog.sessions.map((session) => session.id)));
-  // Fusion sidekick chats nest under their lead; every chat asks once (cached).
+  // Fusion sidekick chats nest under their lead and linked children under their parent; every chat asks once (cached).
   $effect(() => {
-    for (const session of store.catalog.sessions) void fusionMembership.load(session.id);
+    for (const session of store.catalog.sessions) {
+      void fusionMembership.load(session.id);
+      linkLoad?.(session.id);
+    }
   });
   const parentOf = (sessionId: string): string | undefined => {
     const member = fusionMembership.peek(sessionId);
-    return member?.role === 'sidekick' ? member.leadSessionId : undefined;
+    return member?.role === 'sidekick' ? member.leadSessionId : linkParentOf?.(sessionId);
   };
   /**
    * Leads whose sidekick chats are shown. A lead opens itself when one of them
@@ -94,6 +114,10 @@
     if (['starting', 'running', 'stopping'].includes(session.status)) return 'running';
     if (session.status === 'failed') return 'failed';
     return undefined;
+  }
+
+  function attentionLabel(kind: string | undefined): string {
+    return kind === 'decision' ? $t('Needs your decision') : kind === 'failed' ? $t('Failed') : $t('New result');
   }
 
   function go(action: () => void): void {
@@ -153,11 +177,31 @@
   }
 
   let projectDialog = $state<ProjectDialogRequest | undefined>();
+  // Both are loaded on first use, like the project dialogs.
+  let markTarget = $state<{ kind: 'project' | 'session'; id: string } | undefined>();
+  let renaming = $state<WorkspaceSession | undefined>();
+  /** Rename, mark and delete for one chat; a sidekick in use and a pipeline member cannot be deleted here. */
+  function chatItems(session: WorkspaceSession): MenuEntry[] {
+    const running = ['starting', 'running', 'stopping'].includes(session.status);
+    const deletable = !session.runId && !fusionMembership.isCurrentSidekick(session.id) && !remoteMode;
+    return [
+      { label: $t('Rename…'), icon: Pencil, onSelect: () => (renaming = session) },
+      { label: $t('Mark…'), icon: SmilePlus, onSelect: () => (markTarget = { kind: 'session', id: session.id }) },
+      ...(onOpenBeside ? [{ label: $t('Open to the side'), icon: Columns2, onSelect: () => onOpenBeside?.(session.id) }] : []),
+      ...(deletable
+        ? [
+            { type: 'separator' as const },
+            { label: $t('Delete chat…'), icon: Trash, danger: true, disabled: running || store.safeMode, onSelect: () => onDeleteSession(session.id) },
+          ]
+        : []),
+    ];
+  }
   /** Rename, pin and remove act on PiUI's registry only, never on the folder. */
   function manageItems(workspace: WorkspaceSummary): MenuEntry[] {
     const pinned = isPinned(store.projectSummaries, workspace.id);
     return [
       { type: 'separator' },
+      { label: $t('Mark…'), icon: SmilePlus, onSelect: () => (markTarget = { kind: 'project', id: workspace.id }) },
       { label: $t('Rename…'), icon: Pencil, onSelect: () => (projectDialog = { kind: 'rename', workspace }) },
       {
         label: pinned ? $t('Unpin') : $t('Pin to top'),
@@ -184,17 +228,35 @@
   {/await}
 {/if}
 
+{#if markTarget}
+  {#await import('../marks/MarkPicker.svelte') then picker}
+    {#key markTarget}
+      <picker.default target={markTarget} onClose={() => (markTarget = undefined)} />
+    {/key}
+  {/await}
+{/if}
+{#if renaming}
+  {#await import('./SessionRenameDialog.svelte') then dialog}
+    {#key renaming}
+      <dialog.default sessionId={renaming.id} title={renaming.title} onClose={() => (renaming = undefined)} />
+    {/key}
+  {/await}
+{/if}
+
 <nav class="sidebar" aria-label={$t('Workspace navigation')}>
   {#if remoteShell.Indicator}
     <remoteShell.Indicator onOpen={() => go(() => store.navigate({ name: 'settings', section: 'nano' }))} />
   {/if}
 
-  <div class="primary">
+  <div class="primary" class:primary--split={onCollapse}>
     <button type="button" class="nav-item nav-item--strong" onclick={() => go(() => store.goHome())}>
       <SquarePen size={16} />
       <span class="nav-item__label">{$t('New chat')}</span>
       <Kbd keys="Mod+N" />
     </button>
+    {#if onCollapse}
+      <IconButton label={$t('Hide sidebar')} shortcut="Mod+B" data-sidebar-hide="" onclick={() => onCollapse?.()}><PanelLeftClose /></IconButton>
+    {/if}
   </div>
 
   <div class="section-head">
@@ -257,6 +319,7 @@
 {#snippet chat(session: WorkspaceSession, hidden: WorkspaceSession[])}
   {@const status = sessionStatus(session) ?? hidden.map(sessionStatus).find((value) => value !== undefined)}
   {@const worktree = placements.get(session.id)?.worktree}
+  {@const mark = marks.session(session.id)}
   <button
     type="button"
     class="chat"
@@ -264,23 +327,41 @@
     aria-current={store.selectedSessionId === session.id ? 'page' : undefined}
     onclick={() => go(() => void store.openSession(session.id))}
     title={worktree ? `${session.title} · ${worktree.branch}` : session.title}
+    draggable="true"
+    ondragstart={(event) => {
+      event.dataTransfer?.setData('application/x-piui-chat', session.id);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+    }}
   >
     {#if worktree}
       <span class="chat__worktree" class:chat__worktree--gone={worktree.state !== 'ready'}><GitBranch size={12} /></span>
     {/if}
+    {#if mark}<Mark {mark} size={13} />{/if}
     <span class="chat__title">{session.title}</span>
     {#if worktree}<span class="visually-hidden">{$t('in worktree {0}', [worktree.branch])}</span>{/if}
-    {#if status}
-      <StatusDot {status} label={status === 'waiting' ? $t('Needs your decision') : status === 'running' ? $t('Running') : $t('Failed')} />
-    {:else}
-      <span class="chat__time">{relativeTime(session.updatedAt, $language, now)}</span>
-    {/if}
+    <span class="chat__end">
+      {#if status}
+        <StatusDot {status} label={status === 'waiting' ? $t('Needs your decision') : status === 'running' ? $t('Running') : $t('Failed')} />
+      {:else if attentionKind?.(session.id)}
+        <span class="chat__attention" role="img" aria-label={attentionLabel(attentionKind?.(session.id))}></span>
+      {:else}
+        <span class="chat__time">{relativeTime(session.updatedAt, $language, now)}</span>
+      {/if}
+    </span>
   </button>
+  <div class="chat__menu">
+    <Menu align="end" items={chatItems(session)}>
+      {#snippet trigger(props)}
+        <button type="button" class="tiny-action" aria-label={$t('Options for {0}', [session.title])} {...props}><Ellipsis size={14} /></button>
+      {/snippet}
+    </Menu>
+  </div>
 {/snippet}
 
 {#snippet project(workspace: WorkspaceSummary, Icon: typeof Folder, name: string)}
   {@const collapsed = store.collapsedProjects.includes(workspace.id)}
   {@const sessions = store.sessionsFor(workspace.id)}
+  {@const projectMark = marks.project(workspace.id)}
   <div class="project" role="listitem">
     <div class="project__row" class:project__row--current={workspace.id === store.selectedWorkspaceId}>
       <button
@@ -291,7 +372,7 @@
         title={name}
       >
         <span class="chevron" class:chevron--open={!collapsed}><ChevronRight size={12} /></span>
-        <Icon size={15} />
+        {#if projectMark}<Mark mark={projectMark} size={15} />{:else}<Icon size={15} />{/if}
         <span class="project__name">{name}</span>
         {#if workspace.missing}
           <span class="tag">{$t('Missing')}</span>
@@ -357,7 +438,9 @@
                 type="button"
                 class="chat__toggle"
                 aria-expanded={open}
-                aria-label={open ? $t('Hide sidekick chats') : $t('Show sidekick chats')}
+                aria-label={item.children.every((child) => fusionMembership.isSidekick(child.id))
+                  ? open ? $t('Hide sidekick chats') : $t('Show sidekick chats')
+                  : open ? $t('Hide linked chats') : $t('Show linked chats')}
                 onclick={() => toggleLead(item.session.id)}
               >
                 <span class="chevron" class:chevron--open={open}><ChevronRight size={12} /></span>
@@ -399,6 +482,12 @@
   }
   .primary {
     padding-top: var(--piui-space-2);
+  }
+  .primary--split {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--piui-space-1);
+    padding-right: var(--piui-space-1);
   }
   .footer {
     padding: var(--piui-space-2) 0;
@@ -604,6 +693,37 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .chat__end {
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+  }
+  .chat__menu {
+    position: absolute;
+    top: 3px;
+    right: 4px;
+    opacity: 0;
+  }
+  .chats > li:has(> .chat__toggle) > .chat__menu {
+    right: 32px;
+  }
+  .chats > li:hover:not(:has(> .chats:hover)) > .chat__menu,
+  .chats > li:focus-within:not(:has(> .chats:focus-within)) > .chat__menu,
+  .chat__menu:has([aria-expanded='true']) {
+    opacity: 1;
+  }
+  .chats > li:hover:not(:has(> .chats:hover)) > .chat > .chat__end,
+  .chats > li:focus-within:not(:has(> .chats:focus-within)) > .chat > .chat__end,
+  .chats > li:has(> .chat__menu [aria-expanded='true']) > .chat > .chat__end {
+    opacity: 0;
+  }
+  .chat__attention {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--piui-accent);
+    flex: none;
   }
   .chat__time {
     flex: none;

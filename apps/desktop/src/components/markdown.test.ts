@@ -103,6 +103,18 @@ describe('safe chat Markdown projection', () => {
     expect(parseInline('\\$5 and $20', true)).toEqual([{ kind: 'text', text: '\\$5 and $20' }]);
   });
 
+  it('enables widget fences independently of rich Markdown', () => {
+    const body = '{"title":"Choice","body":[]}';
+    const source = ['$a$ and $HOME and $PATH', '   ```HERMES-UI', body, '```'].join('\n');
+    expect(parseMarkdown(source, false, true)).toEqual([
+      { kind: 'paragraph', inline: [{ kind: 'text', text: '$a$ and $HOME and $PATH' }] },
+      { kind: 'code', language: 'hermes-ui', text: body },
+    ]);
+    expect(parseMarkdown('https://example.invalid\n\n![diagram](https://example.invalid/image.png)', false, true)
+      .flatMap(block => block.kind === 'paragraph' ? block.inline : [])
+      .some(node => node.kind === 'image' || node.kind === 'math' || node.kind === 'link' && node.label[0]?.kind === 'text' && node.label[0].text.startsWith('https://'))).toBe(false);
+  });
+
   it('retains balanced and escaped parentheses in an inert link destination', () => {
     expect(parseInline('[Paper](https://example.invalid/Function_(math))')).toEqual([
       { kind: 'link', label: [{ kind: 'text', text: 'Paper' }], href: 'https://example.invalid/Function_(math)' },

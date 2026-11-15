@@ -14,9 +14,32 @@ export interface TimelineActivityGroup {
   status: TimelineBlock['status'];
   /** Running and terminal-problem activity must not be hidden by default. */
   autoOpen: boolean;
+  /** The turn control that hides this group while it is closed. */
+  turnId?: string;
+  /** Still working: the last group of a turn that has not finished. */
+  live?: boolean;
 }
 
-export type TimelineViewItem = TimelineBlockItem | TimelineActivityGroup;
+/**
+ * One control that folds every tool and reasoning group of a finished turn.
+ * Replies stay visible; the groups appear when the control is opened.
+ */
+export interface TimelineTurnProcess {
+  type: 'turn-process';
+  /** `turn:<id of the turn's first process block>`: stable while later turns arrive. */
+  id: string;
+  /** Every tool and reasoning block of the turn, in order (the same objects as in its groups). */
+  blocks: readonly TimelineBlock[];
+  groups: number;
+  /** `createdAt` of the user block that opens the turn and of the turn's last block, when both exist. */
+  startedAt?: string;
+  endedAt?: string;
+}
+
+/** What the catalog view (`groupTimelineBlocks`) produces: it has no turns. */
+export type TimelineCatalogItem = TimelineBlockItem | TimelineActivityGroup;
+
+export type TimelineViewItem = TimelineCatalogItem | TimelineTurnProcess;
 
 const timelineLabels: Record<TimelineBlock['kind'], string> = {
   user: 'You',
@@ -99,8 +122,8 @@ function createActivityGroup(blocks: readonly TimelineBlock[]): TimelineActivity
  * blocks share a disclosure; generic/fallback blocks always remain visible as
  * their own compatible renderer.
  */
-export function groupTimelineBlocks(blocks: readonly TimelineBlock[]): TimelineViewItem[] {
-  const items: TimelineViewItem[] = [];
+export function groupTimelineBlocks(blocks: readonly TimelineBlock[]): TimelineCatalogItem[] {
+  const items: TimelineCatalogItem[] = [];
   let activityBlocks: TimelineBlock[] = [];
 
   const flushActivity = (): void => {
@@ -127,49 +150,132 @@ export function isSilentReasoning(block: TimelineBlock): boolean {
 }
 
 /**
- * The chat transcript's grouping. Only tool calls collapse; assistant prose and
- * reasoning with text stay visible between them, in their native order. Silent
- * reasoning next to a tool call stays inside that run, so a harness that sends
- * empty reasoning items does not cut every command into its own row. No block
- * is dropped, reordered or changed.
+ * An assistant block with no text yet (the placeholder a harness opens before
+ * it streams): it separates nothing, so it must not cut a group in two.
  */
-export function groupTranscriptBlocks(blocks: readonly TimelineBlock[]): TimelineViewItem[] {
-  const items: TimelineViewItem[] = [];
-  let run: TimelineBlock[] = [];
-  let lead: TimelineBlock[] = [];
+function isTransparent(block: TimelineBlock): boolean {
+  return (
+    block.kind === 'assistant' &&
+    (block.status === 'complete' || block.status === 'streaming') &&
+    !(block.text ?? '').trim() &&
+    !(block.safeSummary ?? '').trim()
+  );
+}
 
-  const flush = (): void => {
-    if (run.length > 0) items.push(createActivityGroup(run));
-    else for (const block of lead) items.push({ type: 'block', block });
-    run = [];
-    lead = [];
-  };
-
+/** A turn starts at each user block; blocks before the first one form a leading turn. */
+function splitTurns(blocks: readonly TimelineBlock[]): TimelineBlock[][] {
+  const turns: TimelineBlock[][] = [];
   for (const block of blocks) {
-    if (block.kind === 'tool') {
-      if (run.length === 0 && lead.length > 0) {
-        run = lead;
-        lead = [];
-      }
-      run.push(block);
-    } else if (isSilentReasoning(block)) {
-      (run.length > 0 ? run : lead).push(block);
-    } else {
-      flush();
-      items.push({ type: 'block', block });
-    }
+    if (block.kind === 'user' || turns.length === 0) turns.push([]);
+    turns[turns.length - 1]!.push(block);
   }
-  flush();
+  return turns;
+}
+
+function isProblemTurn(turn: readonly TimelineBlock[]): boolean {
+  for (let index = turn.length - 1; index >= 0; index -= 1) {
+    const block = turn[index]!;
+    if (block.kind === 'user') continue;
+    return block.kind === 'error' || block.status === 'failed' || block.status === 'interrupted';
+  }
+  return false;
+}
+
+/**
+ * The chat transcript's grouping. Every adjacent tool and reasoning block (with
+ * or without text) between two replies is one activity group. Replies, errors
+ * and every other block stay visible as their own items, in their native
+ * order; an assistant block with no text yet does not cut a group. A finished
+ * turn with two or more groups also gets one `turn-process` control before its
+ * first group, which folds all of them. No block is dropped, reordered or
+ * changed.
+ */
+export function groupTranscriptBlocks(blocks: readonly TimelineBlock[], running: boolean | 'unknown' = false): TimelineViewItem[] {
+  const turns = splitTurns(blocks);
+  const items: TimelineViewItem[] = [];
+
+  turns.forEach((turn, turnIndex) => {
+    const last = turnIndex === turns.length - 1;
+    // 'unknown': the owner cannot tell whether the agent still works. The last turn then stays open,
+    // and only a streaming block makes its trailing group live.
+    const streaming = turn.some((block) => block.status === 'streaming');
+    const closed = !last || (running === false && !streaming);
+    const turnItems: TimelineViewItem[] = [];
+    const groups: TimelineActivityGroup[] = [];
+    const process: TimelineBlock[] = [];
+    let run: TimelineBlock[] = [];
+    let held: TimelineBlock[] = [];
+
+    const flush = (): TimelineActivityGroup | undefined => {
+      if (run.length === 0) return undefined;
+      const group = createActivityGroup(run);
+      groups.push(group);
+      turnItems.push(group);
+      for (const block of held) turnItems.push({ type: 'block', block });
+      run = [];
+      held = [];
+      return group;
+    };
+
+    for (const block of turn) {
+      if (isActivityBlock(block)) {
+        run.push(block);
+        process.push(block);
+      } else if (isTransparent(block)) {
+        if (run.length > 0) held.push(block);
+        else turnItems.push({ type: 'block', block });
+      } else {
+        flush();
+        turnItems.push({ type: 'block', block });
+      }
+    }
+    // The group still open when the turn's blocks end is the one at work.
+    const trailing = flush();
+    if (trailing && last && (running === true || streaming)) trailing.live = true;
+
+    if (closed && groups.length >= 2 && !isProblemTurn(turn)) {
+      const turnId = `turn:${process[0]!.id}`;
+      for (const group of groups) group.turnId = turnId;
+      const startedAt = turn[0]!.kind === 'user' ? turn[0]!.createdAt : undefined;
+      const endedAt = turn[turn.length - 1]!.createdAt;
+      const control: TimelineTurnProcess = {
+        type: 'turn-process',
+        id: turnId,
+        blocks: process,
+        groups: groups.length,
+        ...(startedAt !== undefined && endedAt !== undefined ? { startedAt, endedAt } : {}),
+      };
+      turnItems.splice(turnItems.indexOf(groups[0]!), 0, control);
+    }
+    items.push(...turnItems);
+  });
   return items;
 }
 
+function sameBlocks(known: readonly TimelineBlock[], next: readonly TimelineBlock[]): boolean {
+  return known.length === next.length && known.every((block, index) => block === next[index]);
+}
+
 function sameItem(known: TimelineViewItem, item: TimelineViewItem): boolean {
-  if (known.type === 'block') return item.type === 'block' && known.block === item.block;
-  return (
-    item.type === 'activity-group' &&
-    known.blocks.length === item.blocks.length &&
-    known.blocks.every((block, index) => block === item.blocks[index])
-  );
+  switch (known.type) {
+    case 'block':
+      return item.type === 'block' && known.block === item.block;
+    case 'activity-group':
+      return (
+        item.type === 'activity-group' &&
+        known.turnId === item.turnId &&
+        known.live === item.live &&
+        sameBlocks(known.blocks, item.blocks)
+      );
+    case 'turn-process':
+      return (
+        item.type === 'turn-process' &&
+        known.groups === item.groups &&
+        known.startedAt === item.startedAt &&
+        known.endedAt === item.endedAt &&
+        sameBlocks(known.blocks, item.blocks)
+      );
+  }
 }
 
 /**
@@ -178,11 +284,11 @@ function sameItem(known: TimelineViewItem, item: TimelineViewItem): boolean {
  * token does not make every earlier activity group recompute its summary and
  * diff totals.
  */
-export function createTimelineGrouper(): (blocks: readonly TimelineBlock[]) => TimelineViewItem[] {
+export function createTimelineGrouper(): (blocks: readonly TimelineBlock[], running?: boolean | 'unknown') => TimelineViewItem[] {
   let previous = new Map<string, TimelineViewItem>();
-  return (blocks) => {
+  return (blocks, running = false) => {
     const next = new Map<string, TimelineViewItem>();
-    const items = groupTranscriptBlocks(blocks).map((item) => {
+    const items = groupTranscriptBlocks(blocks, running).map((item) => {
       const key = item.type === 'block' ? `block:${item.block.id}` : item.id;
       const known = previous.get(key);
       const kept = known !== undefined && sameItem(known, item) ? known : item;

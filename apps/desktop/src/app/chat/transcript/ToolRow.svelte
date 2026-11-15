@@ -1,13 +1,5 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import Terminal from '@lucide/svelte/icons/terminal';
-  import FilePen from '@lucide/svelte/icons/file-pen';
-  import FileText from '@lucide/svelte/icons/file-text';
-  import Search from '@lucide/svelte/icons/search';
-  import Globe from '@lucide/svelte/icons/globe';
-  import Workflow from '@lucide/svelte/icons/workflow';
-  import Wrench from '@lucide/svelte/icons/wrench';
-  import Brain from '@lucide/svelte/icons/brain';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import Copy from '@lucide/svelte/icons/copy';
   import { useTranslation } from '../../../features/locale/context';
@@ -20,7 +12,8 @@
   import { Badge, IconButton, Spinner } from '../../../lib/ui';
   import MarkdownContent from '../../../components/MarkdownContent.svelte';
   import DiffView from './DiffView.svelte';
-  import { looksLikeDiff, toolKind, toolTitle, type ToolKind } from './toolKinds';
+  import { toolIcons } from './toolIcons';
+  import { looksLikeDiff, reasoningPreview, toolKind, toolTitle } from './toolKinds';
   import SidekickBriefCard from '../../fusion/SidekickBriefCard.svelte';
   import { parseSidekickBlock, sidekickChip } from '../../fusion/sidekickBlock';
 
@@ -31,30 +24,26 @@
   }
   let { block, open, onToggle }: Props = $props();
 
-  const icons: Record<ToolKind, typeof Terminal> = {
-    thinking: Brain,
-    command: Terminal,
-    edit: FilePen,
-    read: FileText,
-    search: Search,
-    web: Globe,
-    agent: Workflow,
-    tool: Wrench,
-  };
   const kind = $derived(toolKind(block));
-  const Icon = $derived(icons[kind]);
+  const Icon = $derived(toolIcons[kind]);
   // A Fusion lead's `sidekick` call (ADR-043) is a brief card; anything the parser
   // does not recognize keeps the generic row.
   const sidekick = $derived(kind === 'thinking' ? undefined : parseSidekickBlock(block));
   const sidekickState = $derived(sidekick ? sidekickChip(sidekick) : undefined);
   const title = $derived(
     kind === 'thinking'
-      ? $t('Reasoning')
+      ? block.label === 'Plan'
+        ? $t('Work plan')
+        : block.status === 'streaming'
+          ? $t('Thinking…')
+          : $t('Reasoning')
       : sidekick
         ? [$t('Sidekick'), sidekick.briefId, sidekick.roundId].filter(Boolean).join(' · ')
         : toolTitle(block),
   );
   const body = $derived(block.text ?? block.safeSummary ?? '');
+  // A reasoning row names itself by its first line, so a long turn reads without opening anything.
+  const preview = $derived(kind === 'thinking' ? reasoningPreview(body, block.status === 'streaming') : '');
   const isDiff = $derived(kind === 'edit' && looksLikeDiff(block.text));
   // A plugin's own view of this tool (plugins v2). The plain view is always
   // one click away and takes over when the plugin is off or its frame fails.
@@ -77,7 +66,8 @@
     <span class="row__icon">
       {#if block.status === 'streaming'}<Spinner size={12} /><span class="visually-hidden">{$t('working…')}</span>{:else}<Icon size={14} />{/if}
     </span>
-    <span class="row__title" class:row__title--mono={kind === 'command'} title={title}>{title}</span>
+    <span class="row__title" class:row__title--mono={kind === 'command'} class:row__title--lead={preview !== ''} title={title}>{title}</span>
+    {#if preview}<span class="row__preview">{preview}</span>{/if}
     {#if sidekickState}<Badge tone={sidekickState.tone}>{$t(sidekickState.label)}</Badge>{/if}
     {#if block.status === 'failed'}<span class="row__state row__state--failed">{$t('Failed')}</span>{/if}
     {#if block.status === 'interrupted'}<span class="row__state">{$t('Stopped')}</span>{/if}
@@ -157,6 +147,19 @@
     flex: 1;
     min-width: 0;
     overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row__title--lead {
+    flex: none;
+    max-width: 40%;
+  }
+  .row__preview {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--piui-text-disabled);
+    font-size: var(--piui-text-xs);
     text-overflow: ellipsis;
     white-space: nowrap;
   }

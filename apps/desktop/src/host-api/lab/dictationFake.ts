@@ -13,6 +13,8 @@ import type { LabDictation, LabState } from './labState';
 export const LAB_DICTATION_TEXT = 'This is synthetic dictated text.';
 
 const TRANSCRIBE_MS = 400;
+/** A clip whose bytes start with this text is refused once, so a retry can be tested. */
+export const LAB_DICTATION_FAIL_ONCE = 'FAIL-ONCE';
 const OPENAI_URL = 'https://api.openai.com/v1';
 const GROQ_URL = 'https://api.groq.com/openai/v1';
 const OPENAI_MODEL = 'gpt-4o-transcribe';
@@ -86,6 +88,7 @@ function initial(): LabDictation {
 }
 
 export function dictationHandlers(state: LabState, clock: LabClock): LabHandlers {
+  const failedOnce = new Set<string>();
   const current = (): LabDictation => (state.dictation ??= initial());
 
   const providers = (settings: LabDictation): DictationSettingsV1['providers'] =>
@@ -155,7 +158,15 @@ export function dictationHandlers(state: LabState, clock: LabClock): LabHandlers
       const ready = settings.providers.some((provider) => provider.id === settings.source && provider.ready);
       if (!ready) throw refusal('not-configured');
       await clock.delay(TRANSCRIBE_MS);
+      if (atob(request.audioBase64).startsWith(LAB_DICTATION_FAIL_ONCE) && !failedOnce.has(request.audioBase64)) {
+        failedOnce.add(request.audioBase64);
+        throw refusal('provider-unavailable');
+      }
       return { text: LAB_DICTATION_TEXT };
+    },
+    // The host opens a native save dialog; the Lab has none, so the client downloads the file itself.
+    dictation_save_recording_v1: () => {
+      throw refusal('unsupported');
     },
   };
 }

@@ -265,7 +265,11 @@ export const SCREENS: readonly Screen[] = [
       await lab.chat(/File an issue for the broken docs link/).click();
       await lab.page.getByRole('button', { name: 'Accept' }).click();
       await expect(lab.page.getByText(/I filed/)).toBeVisible();
-      const group = lab.page.getByRole('button', { name: /Used 1 tool/ }).last();
+      // A finished turn folds its activity behind one control: open it, then the group of the tool call.
+      await expect(lab.page.getByRole('button', { name: 'Stop turn' })).toBeHidden({ timeout: 30_000 });
+      const turn = lab.page.getByRole('button', { name: /used 1 tool/ });
+      if ((await turn.getAttribute('aria-expanded')) !== 'true') await turn.click();
+      const group = lab.page.getByRole('button', { name: /^Used 1 tool/ }).last();
       if ((await group.getAttribute('aria-expanded')) !== 'true') await group.click();
       await expect(lab.page.frameLocator('iframe[title="Issue card (plugin view)"]').getByText('Broken link in the harness guide')).toBeVisible();
       await settled(lab.page);

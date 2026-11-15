@@ -3,7 +3,7 @@
 // over the agent's stdio (LF-framed) into the native bridge contract. The
 // host resolves the agent from a descriptor, clears its environment to an
 // allowlist and contains the whole process tree (Job / process group).
-export async function createAcpAdapter(config, emit, coordinatorRequest, boardRequest) {
+export async function createAcpAdapter(config, emit, coordinatorRequest, boardRequest, sessionsRequest) {
   const { spawn } = await import('node:child_process');
   const { createServer } = await import('node:http');
   const { createHash, randomUUID } = await import('node:crypto');
@@ -26,6 +26,9 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
   const disabled = acp.disable && typeof acp.disable === 'object' ? acp.disable : {};
   const fail = (code, message = `${name} could not complete the operation.`, details) =>
     Object.assign(new Error(code), { bridgeCode: code, safeMessage: message, ...(details ? { safeDetails: details } : {}) });
+
+  const sessionsRequested = Array.isArray(config.hostTools) && config.hostTools.includes('sessions');
+  let sessionsEnabled = sessionsRequested && typeof sessionsRequest === 'function';
 
   // The host sends only the provider name and entitled modes in the frame.
   const NANO_PROVIDER = 'nano';
@@ -621,6 +624,30 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
   const boardRequested = Array.isArray(config.hostTools) && config.hostTools.includes('board');
   let boardEnabled = boardRequested && typeof boardRequest === 'function';
   const boardStatuses = ['backlog', 'todo', 'inProgress', 'inReview', 'blocked', 'done', 'cancelled'];
+  const sessionsObject = (op, fields = {}, required = []) => ({
+    type: "object", properties: { op: { const: op }, ...fields }, required: ["op", ...required], additionalProperties: false,
+  });
+  const sessionsId = { type: "string", minLength: 1, pattern: "^[A-Za-z0-9_-]+$" };
+  const sessionsModelName = { type: "string", minLength: 1 };
+  const sessionsText = { type: "string", minLength: 1, maxLength: 16000 };
+  const sessionsWait = { type: "integer", minimum: 0, maximum: 240 };
+  const sessionsInputSchema = { type: "object", oneOf: [
+    sessionsObject("start", {
+      title: { type: "string", minLength: 1, pattern: "\\S" }, prompt: sessionsText,
+      harness: { anyOf: [{ enum: ["pi", "nano", "claude-code", "codex", "prime-agent", "hermes"] }, { type: "string", pattern: "^acp:(?!.*--)[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$" }] },
+      model: { type: "object", properties: { provider: sessionsModelName, id: sessionsModelName }, required: ["provider", "id"], additionalProperties: false },
+      permissionMode: { enum: ["native", "read-only", "workspace-write", "full-access"] },
+      wait: { type: "boolean" }, waitSeconds: sessionsWait,
+    }, ["title", "prompt"]),
+    sessionsObject("list"),
+    sessionsObject("message", { sessionId: sessionsId, text: sessionsText, wait: { type: "boolean" }, waitSeconds: sessionsWait }, ["sessionId", "text"]),
+    sessionsObject("read", { sessionId: sessionsId, page: { type: "integer", minimum: 1 } }, ["sessionId"]),
+    sessionsObject("wait", { sessionId: sessionsId, waitSeconds: sessionsWait }, ["sessionId"]),
+    sessionsObject("stop", { sessionId: sessionsId }, ["sessionId"]),
+  ] };
+  const sessionsTool = {
+    name: "sessions", description: "Work with chats linked to this one. start: begin a new linked chat for a separable piece of work and give it a complete prompt. list: the linked chats and their state. message: send a linked chat a message. read: the last answer of a linked chat. wait: wait for a linked chat to finish its turn. stop: stop a linked chat you started. With wait:true (waitSeconds up to 240) start and message return the answer. A linked chat on another harness needs permissionMode, and is refused when this chat runs in its harness's own permission mode.", inputSchema: sessionsInputSchema,
+  };
   const boardTool = {
     name: 'board',
     description: "Manage this project's PiUI board: the cards the person tracks. Call op context before create and prefer updating, commenting on or moving the active or a similar card. Moving to done or cancelled only proposes it to the person. Do not retry ALREADY_CLAIMED or FORBIDDEN. The result is JSON.",
@@ -652,7 +679,17 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
         if (message.method === 'initialize') {
           const requested = message.params?.protocolVersion;
           result = { protocolVersion: ['2025-06-18', '2025-03-26', '2024-11-05'].includes(requested) ? requested : '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'piui-workspace', version: '1' } };
-        } else if (message.method === 'tools/list') result = { tools: [...(config.coordination ? [tool] : []), ...(boardEnabled ? [boardTool] : [])] };
+        } else if (message.method === 'tools/list') result = { tools: [...(config.coordination ? [tool] : []), ...(boardEnabled ? [boardTool] : []), ...(sessionsEnabled ? [sessionsTool] : [])] };
+        else if (message.method === 'tools/call' && message.params?.name === 'sessions' && sessionsEnabled) {
+          try {
+            const value = await sessionsRequest(message.params.arguments, {});
+            result = { ...(value?.ok === false ? { isError: true } : {}), content: [{ type: 'text', text: JSON.stringify(value) }] };
+          } catch (error) {
+            const code = typeof error?.bridgeCode === 'string' ? error.bridgeCode : 'unavailable';
+            const text = typeof error?.safeMessage === 'string' ? error.safeMessage : 'Linked chats could not complete this operation.';
+            result = { isError: true, content: [{ type: 'text', text: JSON.stringify({ ok: false, code, message: text }) }] };
+          }
+        }
         else if (message.method === 'tools/call' && message.params?.name === 'board' && boardEnabled) {
           try {
             const value = await boardRequest(message.params.arguments, {});
@@ -702,7 +739,11 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
       boardEnabled = false;
       emit({ type: 'notice', code: 'unsupported-board-tool' });
     }
-    if (config.coordination || boardEnabled) await startCoordinator();
+    if (sessionsRequested && (!sessionsEnabled || agentCapabilities.mcpCapabilities?.http !== true || disabled.mcpHttp)) {
+      sessionsEnabled = false;
+      emit({ type: 'notice', code: 'unsupported-sessions-tool' });
+    }
+    if (config.coordination || boardEnabled || sessionsEnabled) await startCoordinator();
     const signIn = error => error?.nativeCode === AUTH_REQUIRED ? fail('acp-sign-in-required', `Sign in to ${name} first.`, { authMethods }) : undefined;
     // A startup request the agent does not understand (invalid request, unknown method, invalid params).
     const mismatch = (error, what) => error?.bridgeCode === 'native-request-failed' && REJECTED_REQUEST.includes(error.nativeCode) ? fail('native-protocol-mismatch', `${name} rejected the ACP ${what} request.`) : undefined;

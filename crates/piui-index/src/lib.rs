@@ -54,6 +54,8 @@ const SESSION_SEARCH_CANDIDATE_ROW_BUDGET: usize = 256;
 pub const TIMELINE_SLICE_MAX_LIMIT: usize = 200;
 const PREFERENCES_STATE_KEY: &str = "piui.preferences.v1";
 const BACKGROUND_STATE_KEY: &str = "piui.background.v1";
+const INTERACTIVE_ANSWERS_STATE_KEY: &str = "interactive-answers";
+const LINKED_CHATS_STATE_KEY: &str = "linked-chats";
 const TYPE_LIMIT: usize = 80;
 const HEADER_CWD_MAX_BYTES: usize = 32 * 1024;
 /// A complete initial header is sufficient to exclude a candidate that belongs
@@ -3797,6 +3799,63 @@ impl ProjectIndex {
         Ok(preferences)
     }
 
+    /// Whether new direct chats receive the interactive-answer instructions.
+    /// The preference is on unless a person explicitly stored "off".
+    pub fn interactive_answers(&self) -> Result<bool, IndexError> {
+        let stored: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT value FROM index_state WHERE key = ?1",
+                params![INTERACTIVE_ANSWERS_STATE_KEY],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(stored.as_deref() != Some("v1|off"))
+    }
+
+    /// Atomically replaces the interactive-answer instruction preference.
+    pub fn set_interactive_answers(&mut self, enabled: bool) -> Result<bool, IndexError> {
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO index_state (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![
+                INTERACTIVE_ANSWERS_STATE_KEY,
+                if enabled { "v1|on" } else { "v1|off" }
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(enabled)
+    }
+
+    /// Linked-chat host tools are enabled unless explicitly stored as off.
+    pub fn linked_chats(&self) -> Result<bool, IndexError> {
+        let stored: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT value FROM index_state WHERE key = ?1",
+                params![LINKED_CHATS_STATE_KEY],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(stored.as_deref() != Some("v1|off"))
+    }
+
+    /// Atomically persists the host-tool preference without modifying native configuration.
+    pub fn set_linked_chats(&mut self, enabled: bool) -> Result<bool, IndexError> {
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO index_state (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![
+                LINKED_CHATS_STATE_KEY,
+                if enabled { "v1|on" } else { "v1|off" }
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(enabled)
+    }
+
     /// Compatibility registration path. It resolves a native identity before
     /// writing, so new project rows never rely on canonical path text alone.
     pub fn register_project(
@@ -5753,6 +5812,55 @@ mod tests {
                 "{malformed}"
             );
         }
+    }
+
+    #[test]
+    fn interactive_answers_default_on_round_trip_reopen_and_malformed_on() {
+        let database =
+            std::env::temp_dir().join(format!("piui-index-interactive-{}.db", Uuid::new_v4()));
+        {
+            let mut index = ProjectIndex::open(&database).expect("opens index");
+            assert!(index.interactive_answers().expect("default is on"));
+            assert!(!index.set_interactive_answers(false).expect("stores off"));
+            assert!(!index.interactive_answers().expect("loads off"));
+        }
+        let mut index = ProjectIndex::open(&database).expect("reopens index");
+        assert!(!index.interactive_answers().expect("off survives reopening"));
+        assert!(index.set_interactive_answers(true).expect("stores on"));
+        assert!(index.interactive_answers().expect("loads on"));
+        for malformed in ["v1|maybe", "v2|off", "v1|off|extra", ""] {
+            index
+                .connection
+                .execute(
+                    "INSERT INTO index_state (key, value) VALUES (?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    params![INTERACTIVE_ANSWERS_STATE_KEY, malformed],
+                )
+                .expect("seeds malformed interactive-answer preference");
+            assert!(
+                index.interactive_answers().expect("malformed is on"),
+                "{malformed}"
+            );
+        }
+        drop(index);
+        remove_file(&database).expect("removes fixture database");
+    }
+
+    #[test]
+    fn linked_chats_default_on_round_trip_and_malformed_on() {
+        let mut index = ProjectIndex::open_in_memory().expect("opens index");
+        assert!(index.linked_chats().expect("defaults on"));
+        assert!(!index.set_linked_chats(false).expect("stores off"));
+        assert!(!index.linked_chats().expect("loads off"));
+        assert!(index.set_linked_chats(true).expect("stores on"));
+        index
+            .connection
+            .execute(
+                "UPDATE index_state SET value = 'malformed' WHERE key = ?1",
+                params![LINKED_CHATS_STATE_KEY],
+            )
+            .expect("malformed preference");
+        assert!(index.linked_chats().expect("malformed defaults on"));
     }
 
     #[test]

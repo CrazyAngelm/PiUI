@@ -280,6 +280,37 @@ describe('native harness catalog v19 with v18 catalog data', () => {
     expect((await harnessModels(other)).resources, 'the degraded full answer was not reused').toEqual(found.resources);
     expect(invoke).toHaveBeenCalledTimes(6);
   });
+  it('remembers an MCP startup failure until an explicit refresh asks the harness again', async () => {
+    localStorage.clear();
+    const request = { workspaceId: 'project', harness: 'codex' as const };
+    const warned = { protocol: 18 as const, harness: 'codex' as const, models: [], resources: { items: [], warnings: ['MCP server x could not start.'] } };
+    invoke.mockResolvedValue(warned);
+    const { catalogUnavailable, catalogDegraded } = await import('./harnessModels');
+    const first = await harnessModels(request);
+    expect(catalogUnavailable(first)).toBe(false);
+    expect(catalogDegraded(first)).toBe(true);
+    expect(await harnessModels(request)).toEqual(first);
+    expect(await cachedHarnessModels(request)).toEqual(first);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    const recovered = { ...warned, resources: { items: [], warnings: [] } };
+    invoke.mockResolvedValue(recovered);
+    expect(await harnessModels(request, true)).toEqual(recovered);
+    expect(invoke).toHaveBeenCalledTimes(4);
+  });
+  it.each([
+    { warnings: [], notices: [] },
+    { warnings: ['Codex reported a configuration warning. Review your Codex config.toml.'], notices: [] },
+    { warnings: ['MCP server x could not start.'], notices: [{ key: 'MCP server {0} could not start.', args: ['x'] }] },
+    { warnings: ['MCP server x could not start.', 'MCP server y could not start.'], notices: [{ key: 'MCP servers {0} could not start.', args: ['x, y'] }] },
+    { warnings: ['Skills, MCP servers and tools could not be loaded from the harness.'], notices: [{ key: 'Skills, MCP servers and tools could not be loaded from the harness.' }] },
+    {
+      warnings: ['MCP server x could not start.', 'Skills could not be loaded from Codex.', 'MCP server y could not start.', 'MCP tools could not be loaded from Codex.'],
+      notices: [{ key: 'Skills could not be loaded from Codex.' }, { key: 'MCP tools could not be loaded from Codex.' }, { key: 'MCP servers {0} could not start.', args: ['x, y'] }],
+    },
+  ])('reports specific resource notices for $warnings', async ({ warnings, notices }) => {
+    const { resourceNotices } = await import('./harnessModels');
+    expect(resourceNotices({ protocol: 18, harness: 'codex', models: [], resources: { items: [], warnings } })).toEqual(notices);
+  });
   it('shows a later picker the snapshot first, then the answers it already has', async () => {
     localStorage.clear();
     const request = { workspaceId: 'project', harness: 'codex' as const };
@@ -608,10 +639,10 @@ describe('native harness catalog v19 with v18 catalog data', () => {
     } finally { vi.useRealTimers(); }
   });
   it.each([
+    'Skills, MCP servers and tools could not be loaded from the harness.',
     'Skills could not be loaded from Codex.',
     'MCP servers could not be loaded from Codex.',
     'MCP tools could not be loaded from Codex.',
-    'MCP server docs could not start.',
     'Hermes tool inventory is unavailable.',
     'Hermes skill inventory is unavailable.',
     'Skills could not be loaded from Pi.',
@@ -622,8 +653,11 @@ describe('native harness catalog v19 with v18 catalog data', () => {
     const request = { workspaceId: 'project', harness: 'codex' as const };
     const listed = { protocol: 18 as const, harness: 'codex' as const, models: [], resources: { items: [], warnings: [] } };
     invoke.mockResolvedValueOnce(listed).mockResolvedValueOnce({ ...listed, resources: { items: [], warnings: [warning] } });
-    const { catalogDegraded } = await import('./harnessModels');
-    expect(catalogDegraded(await harnessModels(request))).toBe(true);
+    const { catalogUnavailable, catalogDegraded, resourceNotices } = await import('./harnessModels');
+    const failed = await harnessModels(request);
+    expect(catalogUnavailable(failed)).toBe(true);
+    expect(catalogDegraded(failed)).toBe(true);
+    expect(resourceNotices(failed)).toEqual([{ key: warning }]);
     invoke.mockResolvedValueOnce(listed);
     expect(await harnessModels(request)).toEqual(listed);
     expect(invoke).toHaveBeenCalledTimes(3);

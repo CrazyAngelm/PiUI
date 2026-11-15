@@ -55,6 +55,11 @@ const worktreeSchema = tagged('type', {
   shared: { sessionId: string },
 });
 
+const branchSchema = tagged('mode', {
+  native: { at: enumOf(['end', 'before']), blockId: option(string) },
+  linked: {},
+});
+
 const placementSchema = tagged('type', {
   list: {},
   previewWorktree: { workspaceId: string, branch: option(string) },
@@ -66,6 +71,7 @@ const placementSchema = tagged('type', {
     model: option(workspaceModelSchema),
     worktree: option(worktreeSchema),
     continuedFrom: option(string),
+    branch: option(branchSchema),
   },
   removeWorktree: { sessionId: string, discardChanges: boolean, expectedChanges: option(string) },
   worktrees: {},
@@ -84,6 +90,10 @@ const NOT_TRUSTED = failure('NOT_TRUSTED', 'Trust this project before starting a
 const NOT_FOUND = failure('NOT_FOUND', 'The workspace session was not found.');
 const INVALID = failure('INVALID_ARGUMENT', 'Check the required fields and try again.');
 const NOT_A_REPOSITORY = failure('NOT_A_REPOSITORY', 'This folder is not a git repository.');
+const BRANCH_UNSUPPORTED = failure('BRANCH_UNSUPPORTED', 'This chat cannot be branched natively.');
+const BRANCH_POINT_NOT_FOUND = failure('BRANCH_POINT_NOT_FOUND', 'That message is no longer in this chat. Refresh and try again.');
+/** The agents the fake branches natively, like the host. */
+const NATIVE_BRANCH_HARNESSES: readonly string[] = ['claude-code', 'codex'];
 const WORKTREE_REMOVED = failure(
   'WORKTREE_REMOVED',
   "This chat's worktree was removed. Its history stays readable; start a new chat to keep working.",
@@ -101,6 +111,7 @@ interface LabWorktree {
 interface LabPlacement {
   worktree?: LabWorktree;
   continuedFrom?: string;
+  branch?: 'native' | 'linked';
   adopted?: boolean;
 }
 
@@ -367,11 +378,18 @@ function placementView(sessionId: string, placement: LabPlacement): ChatPlacemen
         },
       }),
     ...(placement.continuedFrom === undefined ? {} : { continuedFrom: placement.continuedFrom }),
+    ...(placement.branch === undefined ? {} : { branch: placement.branch }),
     ...(placement.adopted ? { adopted: true as const } : {}),
   };
 }
 
-export function sessionToolsHandlers(runtime: LabSessions, history: LabNativeHistory, tools: LabSessionTools = createSessionTools(runtime)): LabHandlers {
+export function sessionToolsHandlers(
+  runtime: LabSessions,
+  history: LabNativeHistory,
+  tools: LabSessionTools = createSessionTools(runtime),
+  /** Told when a chat is created as a branch of another, to link them. */
+  onBranch: ((parentId: string, childId: string) => void) | undefined = undefined,
+): LabHandlers {
   const { state } = runtime;
   const workspace = workspaceHandlers(runtime);
 
@@ -544,6 +562,33 @@ export function sessionToolsHandlers(runtime: LabSessions, history: LabNativeHis
     }
     const placement: LabPlacement = command.continuedFrom === undefined ? {} : { continuedFrom: command.continuedFrom };
     const owner = project(command.workspaceId, true);
+    const branch = command.branch;
+    // A branch needs its source; a native one runs in the source's own folder.
+    if (branch !== undefined && command.continuedFrom === undefined) throw INVALID;
+    const cut = branch?.mode === 'native' ? (branch as { at: 'end' | 'before'; blockId?: string }) : undefined;
+    if (cut !== undefined && (command.worktree !== undefined || (cut.at === 'before') !== (cut.blockId !== undefined))) throw INVALID;
+    let kept: DesktopTimelineBlock[] | undefined;
+    if (cut !== undefined) {
+      const source = record(command.continuedFrom ?? '');
+      if (source.harness !== command.harness) throw INVALID;
+      if (!NATIVE_BRANCH_HARNESSES.includes(source.harness) || source.blocks.length === 0) throw BRANCH_UNSUPPORTED;
+      // The branch runs in the source's own folder.
+      const inherited = tools.placements.get(source.id)?.worktree;
+      if (inherited?.removed) throw WORKTREE_REMOVED;
+      if (inherited !== undefined) placement.worktree = inherited;
+      if (cut.at === 'before') {
+        const index = source.blocks.findIndex((block) => block.id === cut.blockId && block.kind === 'user');
+        if (index < 0) throw BRANCH_POINT_NOT_FOUND;
+        kept = source.blocks.slice(0, index);
+      } else if (['starting', 'running', 'stopping'].includes(source.live?.status ?? '')) {
+        // A turn in progress is not part of the branch: it holds the finished turns only.
+        const last = source.blocks.map((block) => block.kind).lastIndexOf('user');
+        kept = source.blocks.slice(0, last < 0 ? 0 : last);
+      } else {
+        kept = [...source.blocks];
+      }
+    }
+    if (branch !== undefined) placement.branch = branch.mode;
     if (command.worktree?.type === 'new') {
       const planned = preview(command.workspaceId, command.worktree.branch);
       if (planned.type !== 'preview') throw INVALID;
@@ -587,8 +632,17 @@ export function sessionToolsHandlers(runtime: LabSessions, history: LabNativeHis
       throw error;
     }
     if (created?.type !== 'session') throw INVALID;
-    tools.placements.set(created.snapshot.session.id, placement);
-    return { protocol: 1, type: 'created', snapshot: created.snapshot, placement: placementView(created.snapshot.session.id, placement) };
+    const id = created.snapshot.session.id;
+    let result = created.snapshot;
+    if (kept !== undefined) {
+      // The new chat starts with the source's own messages, ids included.
+      const fresh = record(id);
+      fresh.blocks = kept.map((block) => ({ ...block }));
+      result = { ...result, blocks: fresh.blocks.map((block) => ({ ...block })) };
+    }
+    tools.placements.set(id, placement);
+    if (branch !== undefined && command.continuedFrom !== undefined) onBranch?.(command.continuedFrom, id);
+    return { protocol: 1, type: 'created', snapshot: result, placement: placementView(id, placement) };
   }
 
   function remove(sessionId: string, discard: boolean, expected: string | undefined): WorkspacePlacementResultV1 {

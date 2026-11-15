@@ -224,3 +224,154 @@ describe('WorkspaceStore start', () => {
     store.dispose();
   });
 });
+
+describe('WorkspaceStore renameChat', () => {
+  beforeEach(() => {
+    vi.stubGlobal('localStorage', memoryStorage());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('returns the failure and leaves the selected chat error alone', async () => {
+    const store = new WorkspaceStore();
+    await store.loadCatalog();
+    const id = store.catalog.sessions[0]!.id;
+    const original = workspaceHost.request.bind(workspaceHost);
+    vi.spyOn(workspaceHost, 'request').mockImplementation((command) =>
+      command.type === 'renameSession' ? Promise.reject(new Error('This chat cannot be renamed.')) : original(command),
+    );
+    expect(await store.renameChat(id, 'New name')).toBe('This chat cannot be renamed.');
+    expect(store.sessionError).toBeUndefined();
+    expect(store.sessionActionBusy).toBe(false);
+  });
+
+  it('says so when another action is in progress and sends nothing', async () => {
+    const store = new WorkspaceStore();
+    const request = vi.spyOn(workspaceHost, 'request');
+    store.sessionActionBusy = true;
+    expect(await store.renameChat('any', 'New name')).toMatch(/in progress/);
+    expect(request).not.toHaveBeenCalled();
+  });
+});
+
+describe('WorkspaceStore split panes', () => {
+  beforeEach(() => {
+    vi.stubGlobal('localStorage', memoryStorage());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function twoChats() {
+    const store = new WorkspaceStore();
+    await store.loadCatalog();
+    const [first, second] = store.catalog.sessions.filter((session) => !session.runId && session.status !== 'closed').map((session) => session.id);
+    if (!first || !second) throw new Error('The Lab needs two open chats.');
+    return { store, first, second };
+  }
+
+  it('loads a chat for a pane without selecting it, with its own loading state', async () => {
+    const { store, first, second } = await twoChats();
+    await store.openSession(first, { navigate: false });
+    const route = store.route;
+
+    const pending = store.showSession(second);
+    expect(store.loadingFor(second)).toBe(true);
+    expect(store.loadingFor(first)).toBe(false);
+    await pending;
+
+    expect(store.snapshots[second]).toBeDefined();
+    expect(store.loadingFor(second)).toBe(false);
+    expect(store.route).toEqual(route);
+    expect(store.selectedSessionId).toBe(first);
+    store.dispose();
+  });
+
+  it('puts a failed pane load into paneErrors, not the selected chat error', async () => {
+    const { store, first, second } = await twoChats();
+    await store.openSession(first, { navigate: false });
+    store.setShownSessions([second]);
+    vi.spyOn(workspaceHost, 'request').mockRejectedValueOnce(new Error('The pane chat is unavailable.'));
+
+    await store.showSession(second);
+
+    expect(store.errorFor(second)).toBe('The pane chat is unavailable.');
+    expect(store.errorFor(first)).toBeUndefined();
+    expect(store.sessionError).toBeUndefined();
+    expect(store.loadingFor(second)).toBe(false);
+    store.dispose();
+  });
+
+  it('selects a loaded chat without a host request and carries the errors across', async () => {
+    const { store, first, second } = await twoChats();
+    await store.openSession(first, { navigate: false });
+    await store.showSession(second);
+    store.setShownSessions([second]);
+    store.sessionError = 'First chat failed.';
+    store.paneErrors = { [second]: 'Second chat failed.' };
+    const request = vi.spyOn(workspaceHost, 'request');
+    const snapshot = vi.spyOn(workspaceHost, 'snapshot');
+
+    store.focusSession(second);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(store.route).toEqual({ name: 'chat', sessionId: second });
+    expect(JSON.parse(localStorage.getItem(ROUTE_KEY) ?? 'null')).toEqual({ name: 'chat', sessionId: second });
+    expect(store.sessionError).toBe('Second chat failed.');
+    expect(store.paneErrors).toEqual({ [first]: 'First chat failed.' });
+    expect(store.sessionLoading).toBe(false);
+    store.dispose();
+  });
+
+  it('opens a chat that has no snapshot yet through the host', async () => {
+    const { store, first, second } = await twoChats();
+    await store.openSession(first, { navigate: false });
+    const { [second]: _loaded, ...others } = store.snapshots;
+    store.snapshots = others;
+    const request = vi.spyOn(workspaceHost, 'request');
+
+    store.focusSession(second);
+    await vi.waitFor(() => expect(store.snapshots[second]).toBeDefined());
+
+    expect(request).toHaveBeenCalledWith({ type: 'openSession', sessionId: second });
+    expect(store.selectedSessionId).toBe(second);
+    store.dispose();
+  });
+
+  it('routes a refresh failure to the selected chat, a pane or nowhere', async () => {
+    const { store, first, second } = await twoChats();
+    await store.openSession(first, { navigate: false });
+    vi.spyOn(workspaceHost, 'snapshot').mockRejectedValue(new Error('Refresh failed.'));
+
+    await store.reconcileSession(first);
+    expect(store.sessionError).toBe('Refresh failed.');
+    expect(store.paneErrors).toEqual({});
+
+    store.sessionError = undefined;
+    await store.reconcileSession(second);
+    expect(store.sessionError, 'a chat that is not on screen reports nothing').toBeUndefined();
+    expect(store.paneErrors).toEqual({});
+
+    store.setShownSessions([second]);
+    await store.reconcileSession(second);
+    expect(store.sessionError).toBeUndefined();
+    expect(store.paneErrors).toEqual({ [second]: 'Refresh failed.' });
+
+    store.setShownSessions([]);
+    expect(store.paneErrors, 'a chat that leaves the screen forgets its error').toEqual({});
+    store.dispose();
+  });
+
+  it('keeps the same set object when the shown chats do not change', async () => {
+    const { store, first, second } = await twoChats();
+    store.setShownSessions([first, second]);
+    const set = store.shownSessions;
+    store.setShownSessions([second, first]);
+    expect(store.shownSessions).toBe(set);
+    store.dispose();
+  });
+});

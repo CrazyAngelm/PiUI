@@ -60,7 +60,7 @@
 {:else if settings === undefined}
   <div class="loading" aria-busy="true"><Skeleton lines={3} /></div>
 {:else}
-  <p class="lead">{$t('Choose what turns your speech into text in the message box. A recording goes only to the service you choose and is not kept.')}</p>
+  <p class="lead">{$t('Choose what turns your speech into text in the message box. A recording goes only to the service you choose. One that could not be sent stays on this computer for up to 24 hours, until you send, save or delete it.')}</p>
   {#if notice}<p class="notice" role="alert">{$t(notice)}</p>{/if}
   <div class="form">
     <Field label={$t('Speech to text')} for={`${uid}-source`}>

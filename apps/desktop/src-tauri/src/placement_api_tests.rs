@@ -4,19 +4,116 @@
 //! started them.
 
 use super::{
-    PlacementCommandV1, PlacementResultV1, WorktreeRequestV1, WorktreeState, dispatch_placement,
+    ChatBranchV1, PlacementCommandV1, PlacementResultV1, WorktreeRequestV1, WorktreeState,
+    dispatch_placement,
 };
+use crate::session_links::model::{BranchMode, BranchOrigin};
 use crate::session_tools_test_support::{
     Fixture, git, git_output, init_repository, outside_any_repository,
 };
 use crate::workspace_api::{
     HarnessKind, PermissionMode, WorkspaceCommand, WorkspaceError, WorkspaceEventPublisher,
-    WorkspaceResult, dispatch_workspace_command,
+    WorkspaceModel, WorkspaceResult, dispatch_workspace_command,
 };
 use piui_index::TrustState;
 use piui_runtime::workspace_runtime::{NativeRuntime, NativeRuntimeConfig, NativeRuntimeError};
+use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+type HookFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
+
+#[derive(Default)]
+struct BranchHooks {
+    origins: Mutex<HashMap<String, BranchOrigin>>,
+    adopted: Mutex<Vec<(String, String)>>,
+    refuse_record: AtomicBool,
+}
+
+impl crate::workspace_api::SessionLinksHooks for BranchHooks {
+    fn enabled(&self) -> bool {
+        false
+    }
+    fn handle(
+        &self,
+        _: String,
+        _: serde_json::Map<String, serde_json::Value>,
+    ) -> HookFuture<serde_json::Value> {
+        Box::pin(async { serde_json::json!({"ok":false}) })
+    }
+    fn person_message(&self, _: String) -> HookFuture<()> {
+        Box::pin(async {})
+    }
+    fn session_deleted(&self, _: String) -> HookFuture<()> {
+        Box::pin(async {})
+    }
+    fn record_branch(&self, child: &str, origin: BranchOrigin) -> bool {
+        if self.refuse_record.load(Ordering::Relaxed) {
+            return false;
+        }
+        self.origins
+            .lock()
+            .expect("origins")
+            .insert(child.into(), origin);
+        true
+    }
+    fn forget_branch(&self, child: &str) {
+        self.origins.lock().expect("origins").remove(child);
+    }
+    fn branch_origin(&self, child: &str) -> Option<BranchOrigin> {
+        self.origins.lock().expect("origins").get(child).cloned()
+    }
+    fn adopt_branch(&self, parent: String, child: String) -> HookFuture<()> {
+        self.adopted.lock().expect("adopted").push((parent, child));
+        Box::pin(async {})
+    }
+}
+
+fn branch_hooks(fixture: &Fixture) -> Arc<BranchHooks> {
+    let hooks = Arc::new(BranchHooks::default());
+    fixture
+        .state
+        .workspace
+        .set_session_links_hooks(hooks.clone());
+    hooks
+}
+
+fn branch_command(
+    project: &str,
+    source: &str,
+    harness: HarnessKind,
+    branch: ChatBranchV1,
+) -> PlacementCommandV1 {
+    PlacementCommandV1::CreateChat {
+        workspace_id: project.into(),
+        harness,
+        permission_mode: PermissionMode::Native,
+        title: Some("Branch".into()),
+        model: None,
+        worktree: None,
+        continued_from: Some(source.into()),
+        branch: Some(branch),
+    }
+}
+
+fn native_source(fixture: &Fixture, project: &str) -> String {
+    let source = fixture.chat(project);
+    fixture
+        .state
+        .workspace
+        .configure_branch_source_for_test(
+            &source,
+            HarnessKind::Codex,
+            Some(uuid::Uuid::new_v4().to_string()),
+            None,
+            false,
+        )
+        .expect("native source metadata");
+    source
+}
 
 const ADAPTER: &str = r#"
     let status = 'idle';
@@ -48,6 +145,28 @@ fn record_starts(fixture: &Fixture) -> Starts {
             NativeRuntime::spawn_test_adapter(config, ADAPTER)
         });
     starts
+}
+
+fn record_branch_launches(fixture: &Fixture) -> Arc<Mutex<Vec<NativeRuntimeConfig>>> {
+    let starts = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&starts);
+    fixture
+        .state
+        .workspace
+        .replace_native_spawner(move |config: NativeRuntimeConfig| {
+            captured.lock().expect("launches").push(config.clone());
+            NativeRuntime::spawn_test_adapter(config, ADAPTER)
+        });
+    starts
+}
+
+fn branch_model(provider: &str, id: &str) -> WorkspaceModel {
+    WorkspaceModel {
+        id: id.into(),
+        provider: Some(provider.into()),
+        name: id.into(),
+        thinking_levels: None,
+    }
 }
 
 fn quiet() -> WorkspaceEventPublisher {
@@ -103,6 +222,7 @@ fn create_command(project: &str, worktree: WorktreeRequestV1) -> PlacementComman
         model: None,
         worktree: Some(worktree),
         continued_from: None,
+        branch: None,
     }
 }
 
@@ -487,6 +607,7 @@ async fn handoffs_link_back_and_can_share_the_worktree() {
             model: None,
             worktree: None,
             continued_from: Some(source.clone()),
+            branch: None,
         },
     )
     .await
@@ -502,6 +623,7 @@ async fn handoffs_link_back_and_can_share_the_worktree() {
             model: None,
             worktree: None,
             continued_from: None,
+            branch: None,
         },
     )
     .await
@@ -517,6 +639,7 @@ async fn handoffs_link_back_and_can_share_the_worktree() {
             model: None,
             worktree: None,
             continued_from: Some(source),
+            branch: None,
         },
     )
     .await
@@ -747,4 +870,607 @@ async fn safe_mode_lists_worktrees_but_never_removes_one() {
     .await
     .expect_err("safe mode");
     assert_eq!(error.code, "SAFE_MODE");
+}
+
+#[test]
+fn branch_contract_shapes_are_strict_and_match_the_placement_contract() {
+    let contract = include_str!("../../../../contracts/workspace-placement-v1.ts");
+    for shape in [
+        "{ mode: 'native'; at: 'end' }",
+        "{ mode: 'native'; at: 'before'; blockId: string }",
+        "{ mode: 'linked' }",
+    ] {
+        assert!(contract.contains(shape), "contract shape {shape}");
+    }
+    for (value, expected) in [
+        (
+            serde_json::json!({"mode":"native","at":"end"}),
+            ChatBranchV1::Native {
+                before_block_id: None,
+            },
+        ),
+        (
+            serde_json::json!({"mode":"native","at":"before","blockId":"prompt"}),
+            ChatBranchV1::Native {
+                before_block_id: Some("prompt".into()),
+            },
+        ),
+        (serde_json::json!({"mode":"linked"}), ChatBranchV1::Linked),
+    ] {
+        assert_eq!(
+            serde_json::from_value::<ChatBranchV1>(value.clone()).expect("branch"),
+            expected
+        );
+        let command = serde_json::json!({"type":"createChat","workspaceId":"w","harness":"codex","permissionMode":"native","continuedFrom":"source","branch":value});
+        assert!(serde_json::from_value::<PlacementCommandV1>(command).is_ok());
+    }
+    for value in [
+        serde_json::json!({"mode":"other"}),
+        serde_json::json!({"mode":"native"}),
+        serde_json::json!({"mode":"native","at":"other"}),
+        serde_json::json!({"mode":"native","at":"end","blockId":"prompt"}),
+        serde_json::json!({"mode":"native","at":"before"}),
+        serde_json::json!({"mode":"linked","at":"end"}),
+        serde_json::json!({"mode":"linked","blockId":"prompt"}),
+        serde_json::json!({"mode":"linked","extra":true}),
+        serde_json::json!({"mode":"linked","at":null}),
+    ] {
+        assert!(serde_json::from_value::<ChatBranchV1>(value).is_err());
+    }
+    let placement = super::ChatPlacementV1 {
+        session_id: "child".into(),
+        worktree: None,
+        continued_from: Some("source".into()),
+        branch: Some(BranchMode::Native),
+        adopted: false,
+    };
+    let wire: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&placement).expect("placement wire"))
+            .expect("parses placement");
+    assert_eq!(
+        wire,
+        serde_json::json!({"sessionId":"child","continuedFrom":"source","branch":"native"})
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn branch_native_validation_refuses_before_any_start_or_origin_is_created() {
+    let (fixture, _, project) = setup("branch-refusals");
+    let source = native_source(&fixture, &project);
+    let starts = record_starts(&fixture);
+    let hooks = branch_hooks(&fixture);
+    let valid_id = uuid::Uuid::new_v4().to_string();
+    for (source_harness, requested, native_id, run_id, nano_connector) in [
+        (
+            HarnessKind::Codex,
+            HarnessKind::ClaudeCode,
+            Some(valid_id.clone()),
+            None,
+            false,
+        ),
+        (
+            HarnessKind::Pi,
+            HarnessKind::Pi,
+            Some(valid_id.clone()),
+            None,
+            false,
+        ),
+        (
+            HarnessKind::Codex,
+            HarnessKind::Codex,
+            Some(valid_id.clone()),
+            Some("run".into()),
+            false,
+        ),
+        (HarnessKind::Codex, HarnessKind::Codex, None, None, false),
+        (
+            HarnessKind::Codex,
+            HarnessKind::Codex,
+            Some(valid_id.clone()),
+            None,
+            true,
+        ),
+    ] {
+        fixture
+            .state
+            .workspace
+            .configure_branch_source_for_test(
+                &source,
+                source_harness,
+                native_id,
+                run_id,
+                nano_connector,
+            )
+            .expect("source case");
+        let error = run(
+            &fixture,
+            branch_command(
+                &project,
+                &source,
+                requested,
+                ChatBranchV1::Native {
+                    before_block_id: None,
+                },
+            ),
+        )
+        .await
+        .expect_err("native branch refused");
+        assert_eq!(error.code, "BRANCH_UNSUPPORTED");
+        assert_eq!(error.message, "This chat cannot be branched natively.");
+    }
+    fixture
+        .state
+        .workspace
+        .configure_branch_source_for_test(&source, HarnessKind::Codex, Some(valid_id), None, false)
+        .expect("restore source");
+    for cut in ["".to_owned(), "x".repeat(257), "prompt\n".into()] {
+        let error = run(
+            &fixture,
+            branch_command(
+                &project,
+                &source,
+                HarnessKind::Codex,
+                ChatBranchV1::Native {
+                    before_block_id: Some(cut),
+                },
+            ),
+        )
+        .await
+        .expect_err("invalid cut");
+        assert_eq!(error.code, "INVALID_ARGUMENT");
+    }
+    let mut missing = branch_command(&project, &source, HarnessKind::Codex, ChatBranchV1::Linked);
+    if let PlacementCommandV1::CreateChat {
+        continued_from,
+        worktree,
+        ..
+    } = &mut missing
+    {
+        *continued_from = None;
+        *worktree = Some(WorktreeRequestV1::Shared {
+            session_id: source.clone(),
+        });
+    }
+    assert_eq!(
+        run(&fixture, missing)
+            .await
+            .expect_err("branch needs a source")
+            .code,
+        "INVALID_ARGUMENT"
+    );
+    let mut placed = branch_command(
+        &project,
+        &source,
+        HarnessKind::Codex,
+        ChatBranchV1::Native {
+            before_block_id: None,
+        },
+    );
+    if let PlacementCommandV1::CreateChat { worktree, .. } = &mut placed {
+        *worktree = Some(WorktreeRequestV1::Shared {
+            session_id: source.clone(),
+        });
+    }
+    assert_eq!(
+        run(&fixture, placed)
+            .await
+            .expect_err("native placement is inherited")
+            .code,
+        "INVALID_ARGUMENT"
+    );
+    hooks.refuse_record.store(true, Ordering::Relaxed);
+    assert_eq!(
+        run(
+            &fixture,
+            branch_command(
+                &project,
+                &source,
+                HarnessKind::Codex,
+                ChatBranchV1::Native {
+                    before_block_id: None
+                }
+            )
+        )
+        .await
+        .expect_err("origin save failed")
+        .code,
+        "BRANCH_UNSUPPORTED"
+    );
+    assert!(starts.lock().expect("starts").is_empty());
+    assert!(hooks.origins.lock().expect("origins").is_empty());
+    assert!(
+        fixture
+            .state
+            .workspace
+            .tools()
+            .placements()
+            .expect("placements")
+            .iter()
+            .all(|placement| placement.session_id == source)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn branch_creation_records_and_lists_both_modes_even_with_the_tool_preference_off() {
+    let (fixture, _, project) = setup("branch-create");
+    record_starts(&fixture);
+    let source = native_source(&fixture, &project);
+    let hooks = branch_hooks(&fixture);
+    let mut children = Vec::new();
+    for (harness, branch, mode) in [
+        (
+            HarnessKind::Codex,
+            ChatBranchV1::Native {
+                before_block_id: None,
+            },
+            BranchMode::Native,
+        ),
+        (
+            HarnessKind::Codex,
+            ChatBranchV1::Native {
+                before_block_id: Some("prompt".into()),
+            },
+            BranchMode::Native,
+        ),
+        (HarnessKind::Pi, ChatBranchV1::Linked, BranchMode::Linked),
+    ] {
+        let PlacementResultV1::Created {
+            snapshot,
+            placement,
+            ..
+        } = run(&fixture, branch_command(&project, &source, harness, branch))
+            .await
+            .expect("creates branch")
+        else {
+            panic!("created");
+        };
+        assert_eq!(placement.branch, Some(mode));
+        assert_eq!(placement.continued_from.as_deref(), Some(source.as_str()));
+        assert_eq!(
+            hooks.origins.lock().expect("origins")[&snapshot.session.id].mode,
+            mode
+        );
+        children.push(snapshot.session.id.clone());
+    }
+    let PlacementResultV1::Placements { placements, .. } =
+        run(&fixture, PlacementCommandV1::List {})
+            .await
+            .expect("list")
+    else {
+        panic!("list");
+    };
+    assert!(
+        placements
+            .iter()
+            .filter(|placement| children.contains(&placement.session_id))
+            .all(|placement| placement.branch.is_some())
+    );
+    assert!(
+        placements
+            .iter()
+            .find(|placement| placement.session_id == source)
+            .expect("ordinary placement")
+            .branch
+            .is_none()
+    );
+    assert_eq!(hooks.adopted.lock().expect("adopted").len(), 3);
+    fixture.state.workspace.shutdown_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn branch_missing_hooks_only_refuse_native_and_safe_mode_refuses_both() {
+    let (fixture, _, project) = setup("branch-no-hooks");
+    record_starts(&fixture);
+    let source = native_source(&fixture, &project);
+    assert_eq!(
+        run(
+            &fixture,
+            branch_command(
+                &project,
+                &source,
+                HarnessKind::Codex,
+                ChatBranchV1::Native {
+                    before_block_id: None
+                }
+            )
+        )
+        .await
+        .expect_err("native needs durable origin")
+        .code,
+        "BRANCH_UNSUPPORTED"
+    );
+    let PlacementResultV1::Created { placement, .. } = run(
+        &fixture,
+        branch_command(&project, &source, HarnessKind::Pi, ChatBranchV1::Linked),
+    )
+    .await
+    .expect("linked is best effort") else {
+        panic!("created");
+    };
+    assert!(placement.branch.is_none());
+    fixture.state.workspace.shutdown_all().await;
+    let safe = Fixture::new("branch-safe", true);
+    for branch in [
+        ChatBranchV1::Linked,
+        ChatBranchV1::Native {
+            before_block_id: None,
+        },
+    ] {
+        assert_eq!(
+            run(
+                &safe,
+                branch_command("project", "source", HarnessKind::Codex, branch)
+            )
+            .await
+            .expect_err("safe mode")
+            .code,
+            "SAFE_MODE"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn branch_bridge_refusal_removes_the_new_record_placement_origin_and_empty_runtime_folder() {
+    use piui_runtime::workspace_runtime::BridgeFailureCode;
+    let (fixture, _, project) = setup("branch-failed");
+    let source = native_source(&fixture, &project);
+    let hooks = branch_hooks(&fixture);
+    let child = Arc::new(Mutex::new(None));
+    for (failure, expected) in [
+        (BridgeFailureCode::BranchUnsupported, "BRANCH_UNSUPPORTED"),
+        (
+            BridgeFailureCode::BranchPointNotFound,
+            "BRANCH_POINT_NOT_FOUND",
+        ),
+    ] {
+        let capture = child.clone();
+        fixture
+            .state
+            .workspace
+            .replace_native_spawner(move |config: NativeRuntimeConfig| {
+                *capture.lock().expect("child") = config
+                    .session_dir
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned());
+                async move { Err(NativeRuntimeError::Bridge(failure)) }
+            });
+        assert_eq!(
+            run(
+                &fixture,
+                branch_command(
+                    &project,
+                    &source,
+                    HarnessKind::Codex,
+                    ChatBranchV1::Native {
+                        before_block_id: Some("prompt".into())
+                    }
+                )
+            )
+            .await
+            .expect_err("native refused")
+            .code,
+            expected
+        );
+        let id = child
+            .lock()
+            .expect("child")
+            .clone()
+            .expect("attempted child");
+        assert!(!fixture.state.workspace.session_exists(&id));
+        assert!(
+            fixture
+                .state
+                .workspace
+                .tools()
+                .placement(&id)
+                .expect("placement")
+                .is_none()
+        );
+        assert!(!hooks.origins.lock().expect("origins").contains_key(&id));
+        assert!(
+            !fixture
+                .root
+                .join("data/workspace-native-v11")
+                .join(&id)
+                .exists()
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn branch_native_inherits_the_sources_verified_worktree() {
+    let (fixture, _, project) = setup("branch-worktree");
+    let starts = record_starts(&fixture);
+    let planned = preview(&fixture, &project, Some("piui/source")).await;
+    let (source, root) = create_in_worktree(&fixture, &project, &planned).await;
+    fixture
+        .state
+        .workspace
+        .configure_branch_source_for_test(
+            &source,
+            HarnessKind::Codex,
+            Some(uuid::Uuid::new_v4().to_string()),
+            None,
+            false,
+        )
+        .expect("source harness");
+    branch_hooks(&fixture);
+    let PlacementResultV1::Created {
+        snapshot,
+        placement,
+        ..
+    } = run(
+        &fixture,
+        branch_command(
+            &project,
+            &source,
+            HarnessKind::Codex,
+            ChatBranchV1::Native {
+                before_block_id: None,
+            },
+        ),
+    )
+    .await
+    .expect("branch in worktree")
+    else {
+        panic!("created");
+    };
+    assert_eq!(placement.branch, Some(BranchMode::Native));
+    assert_eq!(
+        fixture
+            .state
+            .workspace
+            .worktree_binding(&snapshot.session.id)
+            .expect("binding")
+            .expect("worktree")
+            .root,
+        root
+    );
+    assert_eq!(
+        std::fs::canonicalize(&starts.lock().expect("starts")[1].0).expect("cwd"),
+        root
+    );
+    fixture.state.workspace.shutdown_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn branch_native_inherits_source_permission_model_and_thinking_before_validation() {
+    let (fixture, _, project) = setup("branch-native-settings");
+    let source = native_source(&fixture, &project);
+    let source_model = branch_model("openai", "source-model");
+    fixture
+        .state
+        .workspace
+        .configure_branch_settings_for_test(
+            &source,
+            PermissionMode::FullAccess,
+            Some(source_model.clone()),
+            Some("high".into()),
+        )
+        .expect("source settings");
+    branch_hooks(&fixture);
+    let starts = record_branch_launches(&fixture);
+    let mut request = branch_command(
+        &project,
+        &source,
+        HarnessKind::Codex,
+        ChatBranchV1::Native {
+            before_block_id: None,
+        },
+    );
+    if let PlacementCommandV1::CreateChat {
+        permission_mode,
+        model,
+        ..
+    } = &mut request
+    {
+        *permission_mode = PermissionMode::ReadOnly;
+        // This would select a different model source if it reached validation.
+        *model = Some(branch_model("nano", "auto"));
+    }
+    run(&fixture, request)
+        .await
+        .expect("source settings are inherited");
+    {
+        let launches = starts.lock().expect("launches");
+        assert_eq!(launches.len(), 1);
+        assert_eq!(launches[0].permission_mode, PermissionMode::FullAccess);
+        assert_eq!(
+            serde_json::to_value(&launches[0].model).expect("model"),
+            serde_json::to_value(Some(source_model)).expect("source model")
+        );
+        assert_eq!(launches[0].thinking_level.as_deref(), Some("high"));
+    }
+    fixture.state.workspace.shutdown_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn branch_linked_same_harness_inherits_permission_and_uses_requested_or_source_model() {
+    let (fixture, _, project) = setup("branch-linked-settings");
+    let source = native_source(&fixture, &project);
+    let source_model = branch_model("openai", "source-model");
+    fixture
+        .state
+        .workspace
+        .configure_branch_settings_for_test(
+            &source,
+            PermissionMode::FullAccess,
+            Some(source_model.clone()),
+            Some("high".into()),
+        )
+        .expect("source settings");
+    branch_hooks(&fixture);
+    let starts = record_branch_launches(&fixture);
+    let requested_model = branch_model("openai", "requested-model");
+    for model in [Some(requested_model.clone()), None] {
+        let mut request =
+            branch_command(&project, &source, HarnessKind::Codex, ChatBranchV1::Linked);
+        if let PlacementCommandV1::CreateChat {
+            permission_mode,
+            model: requested,
+            ..
+        } = &mut request
+        {
+            *permission_mode = PermissionMode::ReadOnly;
+            *requested = model;
+        }
+        run(&fixture, request).await.expect("linked branch");
+    }
+    {
+        let launches = starts.lock().expect("launches");
+        assert_eq!(launches.len(), 2);
+        for (launch, expected) in launches.iter().zip([requested_model, source_model]) {
+            assert_eq!(launch.permission_mode, PermissionMode::FullAccess);
+            assert_eq!(
+                serde_json::to_value(&launch.model).expect("model"),
+                serde_json::to_value(Some(expected)).expect("expected model")
+            );
+            assert!(launch.thinking_level.is_none());
+        }
+    }
+    fixture.state.workspace.shutdown_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn branch_linked_different_harness_keeps_requested_permission_and_model() {
+    let (fixture, _, project) = setup("branch-other-harness-settings");
+    let source = native_source(&fixture, &project);
+    fixture
+        .state
+        .workspace
+        .configure_branch_settings_for_test(
+            &source,
+            PermissionMode::FullAccess,
+            Some(branch_model("openai", "source-model")),
+            Some("high".into()),
+        )
+        .expect("source settings");
+    branch_hooks(&fixture);
+    let starts = record_branch_launches(&fixture);
+    let requested_model = branch_model("openai", "requested-model");
+    let mut request = branch_command(&project, &source, HarnessKind::Pi, ChatBranchV1::Linked);
+    if let PlacementCommandV1::CreateChat {
+        permission_mode,
+        model,
+        ..
+    } = &mut request
+    {
+        *permission_mode = PermissionMode::ReadOnly;
+        *model = Some(requested_model.clone());
+    }
+    run(&fixture, request)
+        .await
+        .expect("linked branch on another harness");
+    {
+        let launches = starts.lock().expect("launches");
+        assert_eq!(launches.len(), 1);
+        assert_eq!(launches[0].harness, HarnessKind::Pi);
+        assert_eq!(launches[0].permission_mode, PermissionMode::ReadOnly);
+        assert_eq!(
+            serde_json::to_value(&launches[0].model).expect("model"),
+            serde_json::to_value(Some(requested_model)).expect("request model")
+        );
+        assert!(launches[0].thinking_level.is_none());
+    }
+    fixture.state.workspace.shutdown_all().await;
 }

@@ -1,10 +1,11 @@
 import type BoardView from '../board/BoardView.svelte';
-import type ChatView from './ChatView.svelte';
+import type ChatWorkbench from './panes/ChatWorkbench.svelte';
 import type CommandPalette from './CommandPalette.svelte';
 import type HistoryView from '../history/HistoryView.svelte';
 import type InboxView from './InboxView.svelte';
 import type PipelinesView from './PipelinesView.svelte';
 import type SettingsView from './SettingsView.svelte';
+import type TabStrip from './panes/TabStrip.svelte';
 import type TeamView from '../team/TeamView.svelte';
 
 /**
@@ -13,7 +14,8 @@ import type TeamView from '../team/TeamView.svelte';
  * a loading state.
  */
 interface Views {
-  chat: typeof ChatView;
+  chat: typeof ChatWorkbench;
+  tabs: typeof TabStrip;
   inbox: typeof InboxView;
   pipelines: typeof PipelinesView;
   settings: typeof SettingsView;
@@ -26,7 +28,8 @@ interface Views {
 export type LazyView = keyof Views;
 
 const loaders: { [K in LazyView]: () => Promise<{ default: Views[K] }> } = {
-  chat: () => import('./ChatView.svelte'),
+  chat: () => import('./panes/ChatWorkbench.svelte'),
+  tabs: () => import('./panes/TabStrip.svelte'),
   inbox: () => import('./InboxView.svelte'),
   pipelines: () => import('./PipelinesView.svelte'),
   settings: () => import('./SettingsView.svelte'),
@@ -67,6 +70,7 @@ class LazyViews {
         : (callback: () => void) => setTimeout(callback, 400);
     schedule(() => {
       void this.load('chat');
+      void this.load('tabs');
       void this.load('palette');
     });
   }

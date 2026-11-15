@@ -1,4 +1,4 @@
-export async function createPrimeAdapter(config, emit, coordinatorRequest, boardRequest) {
+export async function createPrimeAdapter(config, emit, coordinatorRequest, boardRequest, sessionsRequest) {
   const sourceEnvironment = process.env.PIUI_PRIME_NANO_SOURCE;
   delete process.env.PIUI_PRIME_NANO_SOURCE;
   const { createHash } = await import("node:crypto");
@@ -8,6 +8,8 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
   const { pathToFileURL } = await import("node:url");
 
   const fail = (code, safeMessage) => Object.assign(new Error(code), { bridgeCode: code, safeMessage });
+  const sessionsRequested = Array.isArray(config.hostTools) && config.hostTools.includes("sessions");
+  let sessionsEnabled = sessionsRequested && typeof sessionsRequest === "function";
   const NANO_PROVIDER = "nano-desktop-subscription";
   const PRIME_NATIVE_PREFIX = "piui-prime-native:";
   const nanoModel = config.model?.provider === NANO_PROVIDER;
@@ -53,7 +55,7 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
   }
   if (nanoSource && (config.nativeSubagents === true || config.coordination === true || config.kernelPython !== undefined
     || (config.resourceRules ?? []).length > 0 || config.pluginMcpServers?.length
-    || config.allowedTools?.some(name => !["bash", "edit", "board"].includes(name))
+    || config.allowedTools?.some(name => !["bash", "edit", "board", "sessions"].includes(name))
     || (config.thinkingLevel && config.thinkingLevel !== "off")
     || (config.serviceTier && config.serviceTier !== "standard"))) {
     throw fail("unsupported-policy", "The Prime Nano source supports native Bash and edit tools without Prime RLM, custom resources or reasoning overrides.");
@@ -132,10 +134,12 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
   // The board host tool is optional: without the host callback it is simply
   // not registered. It does not change coordination or native subagents.
   let boardEnabled = Array.isArray(config.hostTools) && config.hostTools.includes("board") && typeof boardRequest === "function";
+  if (sessionsRequested && !sessionsEnabled) emit({ type: "notice", code: "unsupported-sessions-tool" });
   let workspaceTool;
   let boardTool;
+  let sessionsTool;
   let Type;
-  if (config.coordination === true || boardEnabled) {
+  if (config.coordination === true || boardEnabled || sessionsEnabled) {
     try {
       const requireFromPrime = createRequire(join(packageRoot, "package.json"));
       let typeboxEntry;
@@ -151,8 +155,14 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
     } catch {
       if (config.coordination === true) throw fail("runtime-unavailable", "Prime's native tool schema dependency is unavailable.");
       // The board is optional: the chat still starts, without the tool.
-      boardEnabled = false;
-      emit({ type: "notice", code: "unsupported-board-tool" });
+      if (boardEnabled) {
+        boardEnabled = false;
+        emit({ type: "notice", code: "unsupported-board-tool" });
+      }
+      if (sessionsEnabled) {
+        sessionsEnabled = false;
+        emit({ type: "notice", code: "unsupported-sessions-tool" });
+      }
     }
   }
   // Custom tools need `defineTool`: mandatory for the coordinator, optional for the board.
@@ -161,6 +171,10 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
     if (boardEnabled) {
       boardEnabled = false;
       emit({ type: "notice", code: "unsupported-board-tool" });
+    }
+    if (sessionsEnabled) {
+      sessionsEnabled = false;
+      emit({ type: "notice", code: "unsupported-sessions-tool" });
     }
   }
   if (config.coordination === true) {
@@ -227,17 +241,61 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
       },
     });
   }
+  if (sessionsEnabled) {
+    const exact = { additionalProperties: false };
+    const text = Type.String({ minLength: 1, maxLength: 16000 });
+    const id = Type.String({ minLength: 1, pattern: "^[A-Za-z0-9_-]+$" });
+    const modelName = Type.String({ minLength: 1 });
+    const wait = Type.Optional(Type.Boolean());
+    const waitSeconds = Type.Optional(Type.Integer({ minimum: 0, maximum: 240 }));
+    sessionsTool = sdk.defineTool({
+      name: "sessions", label: "Linked chats",
+      description: "Work with chats linked to this one. start: begin a new linked chat for a separable piece of work and give it a complete prompt. list: the linked chats and their state. message: send a linked chat a message. read: the last answer of a linked chat. wait: wait for a linked chat to finish its turn. stop: stop a linked chat you started. With wait:true (waitSeconds up to 240) start and message return the answer. A linked chat on another harness needs permissionMode, and is refused when this chat runs in its harness's own permission mode.",
+      parameters: Type.Union([
+        Type.Object({
+          op: Type.Literal("start"), title: Type.String({ minLength: 1, pattern: "\\S" }), prompt: text,
+          harness: Type.Optional(Type.Union([
+            ...["pi", "nano", "claude-code", "codex", "prime-agent", "hermes"].map(value => Type.Literal(value)),
+            Type.String({ pattern: "^acp:(?!.*--)[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$" }),
+          ])),
+          model: Type.Optional(Type.Object({ provider: modelName, id: modelName }, exact)),
+          permissionMode: Type.Optional(Type.Union(["native", "read-only", "workspace-write", "full-access"].map(value => Type.Literal(value)))),
+          wait, waitSeconds,
+        }, exact),
+        Type.Object({ op: Type.Literal("list") }, exact),
+        Type.Object({ op: Type.Literal("message"), sessionId: id, text, wait, waitSeconds }, exact),
+        Type.Object({ op: Type.Literal("read"), sessionId: id, page: Type.Optional(Type.Integer({ minimum: 1 })) }, exact),
+        Type.Object({ op: Type.Literal("wait"), sessionId: id, waitSeconds }, exact),
+        Type.Object({ op: Type.Literal("stop"), sessionId: id }, exact),
+      ]),
+      async execute(toolCallId, operation, signal) {
+        let result;
+        try { result = await sessionsRequest(operation, { toolCallId, ...(signal ? { signal } : {}) }); }
+        catch (error) {
+          const code = typeof error?.bridgeCode === "string" ? error.bridgeCode : "unavailable";
+          const message = typeof error?.safeMessage === "string" ? error.safeMessage : "Linked chats could not complete this operation.";
+          result = { ok: false, code, message };
+        }
+        return { content: [{ type: "text", text: JSON.stringify(result) }], details: { operation: operation?.op, ok: result?.ok === true } };
+      },
+    });
+  }
   // The board is a host grant beside the profile's tool policy (as for Claude
   // Code's MCP tool), so an allowlist gains exactly the `board` name.
-  const nativeToolAllowlist = Array.isArray(config.allowedTools)
+  const boardToolAllowlist = Array.isArray(config.allowedTools)
     ? (boardTool && !config.allowedTools.includes("board") ? [...config.allowedTools, "board"] : config.allowedTools)
     : undefined;
-  const customTools = [workspaceTool, boardTool].filter(Boolean);
+  const nativeToolAllowlist = sessionsTool && boardToolAllowlist && !boardToolAllowlist.includes("sessions")
+    ? [...boardToolAllowlist, "sessions"] : boardToolAllowlist;
+  const customTools = [workspaceTool, boardTool, sessionsTool].filter(Boolean);
   if (nanoSource && nativeToolAllowlist?.includes("board") && !boardTool) {
     throw fail("unsupported-policy", "The board tool is unavailable for this Prime session.");
   }
+  if (nanoSource && nativeToolAllowlist?.includes("sessions") && !sessionsTool) {
+    throw fail("unsupported-policy", "The sessions tool is unavailable for this Prime session.");
+  }
   const nanoTools = nanoSource ? [sdk.createBashToolDefinition(config.cwd), sdk.createEditToolDefinition(config.cwd)] : [];
-  const nanoToolNames = nanoSource ? (nativeToolAllowlist ?? [...nanoTools.map(tool => tool.name), ...(boardTool ? ["board"] : [])]) : [];
+  const nanoToolNames = nanoSource ? (nativeToolAllowlist ?? [...nanoTools.map(tool => tool.name), ...(boardTool ? ["board"] : []), ...(sessionsTool ? ["sessions"] : [])]) : [];
 
   const sessionRoot = resolve(config.sessionDir);
   const containedSessionPath = (input) => {

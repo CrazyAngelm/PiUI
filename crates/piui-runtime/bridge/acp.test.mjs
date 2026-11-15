@@ -240,6 +240,18 @@ test('managed sessions route the workspace tool over HTTP MCP or refuse before s
   try { assert.deepEqual(calls, [{ type: 'roster' }]); } finally { await a.dispose(); }
   await assert.rejects(createAcpAdapter(config(['--no-http'], { coordination: true }), () => {}, async () => ({})), { bridgeCode: 'unsupported-coordinator' });
   await assert.rejects(createAcpAdapter(config([], { coordination: true, acp: { id: 'fixture-agent', displayName: 'Fixture Agent', disable: { mcpHttp: true } } }), () => {}, async () => ({})), { bridgeCode: 'unsupported-coordinator' });
+  for (const [flags, overrides, callback] of [
+    [['--no-http'], {}, async () => ({ ok: true, chats: [] })],
+    [[], { acp: { id: 'fixture-agent', displayName: 'Fixture Agent', disable: { mcpHttp: true } } }, async () => ({ ok: true, chats: [] })],
+    [[], {}, undefined],
+  ]) {
+    const e = events();
+    const without = await createAcpAdapter(config(flags, { hostTools: ['sessions'], ...overrides }), e.emit, undefined, undefined, callback);
+    try {
+      assert.equal(without.snapshot().status, 'idle');
+      assert.deepEqual(e.values.filter(event => event.type === 'notice'), [{ type: 'notice', code: 'unsupported-sessions-tool' }]);
+    } finally { await without.dispose(); }
+  }
 });
 
 test('a plugin MCP server joins only this session as a stdio server (plugins v2)', async () => {

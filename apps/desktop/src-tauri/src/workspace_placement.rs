@@ -5,12 +5,19 @@
 use super::{
     HarnessKind, PermissionMode, PersistedSession, SessionSnapshot, SessionStatus,
     WorkspaceAuthorization, WorkspaceError, WorkspaceEventPublisher, WorkspaceHost,
-    WorkspaceLaunchRequest, lock, now_string,
+    WorkspaceLaunchRequest, WorkspaceModel, lock, now_string,
 };
 use crate::session_placement::{SessionPlacement, SessionTools, WorktreeBinding};
 use piui_platform::ProjectDirectory;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
+
+pub(crate) struct BranchSourceSettings {
+    pub harness: HarnessKind,
+    pub permission_mode: PermissionMode,
+    pub model: Option<WorkspaceModel>,
+    pub thinking_level: Option<String>,
+}
 
 pub(crate) fn worktree_removed() -> WorkspaceError {
     WorkspaceError {
@@ -55,6 +62,91 @@ fn bound_pi(
 }
 
 impl WorkspaceHost {
+    pub(crate) fn branch_source_settings(
+        &self,
+        source: &str,
+    ) -> Result<BranchSourceSettings, WorkspaceError> {
+        let record = self.record(source)?;
+        Ok(BranchSourceSettings {
+            harness: record.harness,
+            permission_mode: record.permission_mode,
+            model: record.model,
+            thinking_level: record.thinking_level,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn configure_branch_settings_for_test(
+        &self,
+        source: &str,
+        permission_mode: PermissionMode,
+        model: Option<WorkspaceModel>,
+        thinking_level: Option<String>,
+    ) -> Result<(), WorkspaceError> {
+        self.update_record(source, |record| {
+            record.permission_mode = permission_mode;
+            record.model = model;
+            record.thinking_level = thinking_level;
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn configure_branch_source_for_test(
+        &self,
+        source: &str,
+        harness: HarnessKind,
+        native_id: Option<String>,
+        run_id: Option<String>,
+        nano_connector: bool,
+    ) -> Result<(), WorkspaceError> {
+        self.update_record(source, |record| {
+            record.harness = harness;
+            record.native_id = native_id;
+            record.native_path = None;
+            record.materialized = Some(true);
+            record.run_id = run_id;
+            record.nano_connector = nano_connector;
+        })
+    }
+
+    /// Native history stays on the same harness and model source as its parent.
+    pub(crate) fn validate_native_branch(
+        &self,
+        source: &str,
+        harness: HarnessKind,
+        model: Option<&super::WorkspaceModel>,
+    ) -> Result<(), WorkspaceError> {
+        let record = self.record(source)?;
+        if record.harness != harness
+            || !harness.supports_native_branch()
+            || record.run_id.is_some()
+            || super::resume_binding(&record)?.0.is_none()
+            || (super::supports_nano_connector(harness) && super::is_nano_model(harness, model))
+                != record.nano_connector
+        {
+            return Err(crate::session_placement::tool_error(
+                "BRANCH_UNSUPPORTED",
+                "This chat cannot be branched natively.",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Only a newly generated branch id reaches this cleanup. Native history
+    /// is never removed; an empty PiUI runtime folder can be discarded.
+    pub(crate) fn discard_failed_branch(&self, session_id: &str) -> Result<(), WorkspaceError> {
+        Uuid::parse_str(session_id).map_err(|_| WorkspaceError::invalid())?;
+        lock(&self.inner.registry)?
+            .transact(|sessions| {
+                sessions.retain(|record| record.id != session_id);
+                Ok(())
+            })
+            .map_err(|_| WorkspaceError::io())?;
+        self.inner.tools.discard(session_id);
+        let _ = std::fs::remove_dir(self.inner.native_root.join(session_id));
+        Ok(())
+    }
+
     pub(crate) fn tools(&self) -> &SessionTools {
         &self.inner.tools
     }

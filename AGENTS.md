@@ -302,8 +302,12 @@ Design and behaviour: `docs/NANO_DESKTOP.md`; server contract:
   `nano/remote_dispatch.rs`; no shell, filesystem, credential, settings, plugin
   or `nano_remote_*` command. Grants are public keys stored on this computer; a
   viewer without a valid signature is dropped. Never describe it as sandboxed.
-- Dictation audio is held in memory only and goes through the host; the WebView
-  never makes a network request for it, so the CSP stays unchanged. The source
+- A dictation recording is written to the WebView's local storage while it is
+  made (every five seconds) and before it is sent, and stays there for at most
+  24 hours, until it is sent, saved or deleted (ADR-066). Where that storage is
+  unavailable it is kept in memory only and the interface says so. It still
+  goes through the host; the
+  WebView never makes a network request for it, so the CSP stays unchanged. The source
   is the Nano account or a provider set in Settings (ADR-061,
   `contracts/dictation-v1.ts`). A provider API key is typed only in the host's
   native dialog and lives only in the OS credential store, bound to the exact

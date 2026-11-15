@@ -5,6 +5,10 @@
 //! of a request come from the host's own settings and credential store. A key
 //! is typed in the native dialog and never crosses IPC. Safe mode reads the
 //! settings and refuses everything else; no audio leaves in safe mode.
+//!
+//! `dictation_save_recording_v1` (ADR-066) writes an unsent recording to a file
+//! the person picks in the native save dialog. It sends nothing anywhere, so it
+//! works in safe mode too: a recording must never be lost.
 
 use std::sync::Arc;
 
@@ -84,6 +88,79 @@ impl std::fmt::Debug for DictationTranscribeRequestV1 {
 #[serde(rename_all = "camelCase")]
 pub struct DictationAnswerV1 {
     pub text: String,
+}
+
+/// Largest recording the save command writes (32 MiB).
+const SAVE_RECORDING_MAX_BYTES: u64 = 32 * 1024 * 1024;
+
+/// `dictation_save_recording_v1` request: one recording and its media type.
+/// There is no field for a path or a name: the person picks them.
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DictationSaveRecordingRequestV1 {
+    pub audio_base64: String,
+    pub mime_type: String,
+}
+
+impl std::fmt::Debug for DictationSaveRecordingRequestV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DictationSaveRecordingRequestV1")
+            .field("audio_chars", &self.audio_base64.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// `dictation_save_recording_v1` answer: `saved` is false when the dialog was
+/// closed without saving.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct DictationSavedV1 {
+    pub saved: bool,
+}
+
+/// The file extension of a container the recorder produces.
+fn recording_extension(mime: &str) -> &'static str {
+    match mime {
+        "audio/ogg" => "ogg",
+        "audio/mp4" => "m4a",
+        _ => "webm",
+    }
+}
+
+/// `nano-voice-YYYYMMDD-HHMM.<ext>`, the dialog's suggested name.
+fn recording_file_name(now: chrono::NaiveDateTime, extension: &str) -> String {
+    format!("nano-voice-{}.{extension}", now.format("%Y%m%d-%H%M"))
+}
+
+/// A checked recording: its bytes and the extension of its container.
+struct RecordingToSave {
+    audio: Vec<u8>,
+    extension: &'static str,
+}
+
+/// Validates a save request before any dialog opens: the media type is one a
+/// dictation clip may have, the clip fits the cap (by encoded length first, so
+/// an oversized one is never decoded) and holds audio.
+fn prepare_recording(
+    request: &DictationSaveRecordingRequestV1,
+) -> Result<RecordingToSave, DictationError> {
+    let mime = dictation_mime(&request.mime_type).ok_or(DictationError::Invalid)?;
+    if request.audio_base64.len() as u64 > SAVE_RECORDING_MAX_BYTES.div_ceil(3).saturating_mul(4) {
+        return Err(DictationError::TooLarge);
+    }
+    let audio = base64::engine::general_purpose::STANDARD
+        .decode(request.audio_base64.as_bytes())
+        .map_err(|_| DictationError::Invalid)?;
+    if audio.is_empty() {
+        return Err(DictationError::Invalid);
+    }
+    if audio.len() as u64 > SAVE_RECORDING_MAX_BYTES {
+        return Err(DictationError::TooLarge);
+    }
+    Ok(RecordingToSave {
+        audio,
+        extension: recording_extension(mime),
+    })
 }
 
 impl NanoHost {
@@ -218,6 +295,32 @@ pub async fn dictation_transcribe_v1(
     request: DictationTranscribeRequestV1,
 ) -> Result<DictationAnswerV1, DictationErrorV1> {
     Ok(host.dictation_transcribe(request).await?)
+}
+
+/// Writes a recording to a file chosen in the native save dialog. Nothing
+/// leaves the computer and the audio is never logged.
+#[tauri::command]
+pub async fn dictation_save_recording_v1(
+    request: DictationSaveRecordingRequestV1,
+) -> Result<DictationSavedV1, DictationErrorV1> {
+    let recording = prepare_recording(&request)?;
+    drop(request);
+    let name = recording_file_name(chrono::Local::now().naive_local(), recording.extension);
+    let chosen = rfd::AsyncFileDialog::new()
+        .set_file_name(name)
+        .add_filter("Audio", &[recording.extension])
+        .save_file()
+        .await;
+    let Some(file) = chosen else {
+        return Ok(DictationSavedV1 { saved: false });
+    };
+    let path = file.path().to_path_buf();
+    let audio = recording.audio;
+    tokio::task::spawn_blocking(move || std::fs::write(path, audio))
+        .await
+        .map_err(|_| DictationError::Storage)?
+        .map_err(|_| DictationError::Storage)?;
+    Ok(DictationSavedV1 { saved: true })
 }
 
 #[cfg(test)]
@@ -513,6 +616,90 @@ mod tests {
         let file = std::fs::read_to_string(directory.join("dictation-v1.json")).expect("file");
         assert!(!file.contains(KEY));
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    fn save_clip(audio_base64: &str, mime_type: &str) -> DictationSaveRecordingRequestV1 {
+        DictationSaveRecordingRequestV1 {
+            audio_base64: audio_base64.to_owned(),
+            mime_type: mime_type.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_save_request_carries_audio_and_a_type_only() {
+        let ok = json!({ "audioBase64": "AAAA", "mimeType": "audio/webm" });
+        let parsed: DictationSaveRecordingRequestV1 =
+            serde_json::from_value(ok.clone()).expect("save request");
+        assert!(!format!("{parsed:?}").contains("AAAA"));
+        for field in ["path", "fileName", "url", "provider"] {
+            let mut bad = ok.clone();
+            bad[field] = json!("synthetic");
+            assert!(
+                serde_json::from_value::<DictationSaveRecordingRequestV1>(bad).is_err(),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_recording_is_checked_before_the_save_dialog_opens() {
+        // The media type uses the same allowlist as the dictation commands.
+        assert_eq!(
+            prepare_recording(&save_clip("AAAA", "text/plain")).err(),
+            Some(DictationError::Invalid)
+        );
+        assert_eq!(
+            prepare_recording(&save_clip("AAAA", "video/webm")).err(),
+            Some(DictationError::Invalid)
+        );
+        assert_eq!(
+            prepare_recording(&save_clip("!!!", "audio/webm")).err(),
+            Some(DictationError::Invalid)
+        );
+        assert_eq!(
+            prepare_recording(&save_clip("", "audio/webm")).err(),
+            Some(DictationError::Invalid)
+        );
+        // The cap is checked on the encoded length, so the clip is never decoded.
+        let limit = SAVE_RECORDING_MAX_BYTES.div_ceil(3) * 4;
+        let oversized = "A".repeat(limit as usize + 4);
+        assert_eq!(
+            prepare_recording(&save_clip(&oversized, "audio/webm")).err(),
+            Some(DictationError::TooLarge)
+        );
+        // The longest encoded length that fits still decodes to one byte over the cap.
+        let over_when_decoded = "A".repeat(limit as usize);
+        assert_eq!(
+            prepare_recording(&save_clip(&over_when_decoded, "audio/webm")).err(),
+            Some(DictationError::TooLarge)
+        );
+        let fits = "A".repeat(4096);
+        assert!(prepare_recording(&save_clip(&fits, "audio/webm;codecs=opus")).is_ok());
+    }
+
+    #[test]
+    fn a_recording_is_named_after_its_container() {
+        for (mime, extension) in [
+            ("audio/webm;codecs=opus", "webm"),
+            ("audio/webm", "webm"),
+            ("audio/ogg;codecs=opus", "ogg"),
+            ("audio/mp4", "m4a"),
+        ] {
+            let checked = prepare_recording(&save_clip("AAAA", mime)).expect("recording");
+            assert_eq!(checked.extension, extension, "{mime}");
+            assert_eq!(checked.audio, vec![0, 0, 0]);
+        }
+        let when = chrono::NaiveDate::from_ymd_opt(2026, 11, 16)
+            .and_then(|date| date.and_hms_opt(9, 5, 30))
+            .expect("date");
+        assert_eq!(
+            recording_file_name(when, "webm"),
+            "nano-voice-20261116-0905.webm"
+        );
+        assert_eq!(
+            recording_file_name(when, "m4a"),
+            "nano-voice-20261116-0905.m4a"
+        );
     }
 
     #[test]

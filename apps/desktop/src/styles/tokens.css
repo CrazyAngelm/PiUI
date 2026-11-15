@@ -590,3 +590,42 @@
   --piui-decoration-meter-shape: none;
   --piui-decoration-radius: var(--piui-radius-sm);
 }
+
+/* Marks: colours a person gives to chats and projects. They are data, not theme tokens, so a palette plugin leaves them alone. */
+:root {
+  --piui-mark-red: #f87171;
+  --piui-mark-orange: #fb923c;
+  --piui-mark-yellow: #facc15;
+  --piui-mark-green: #4ade80;
+  --piui-mark-teal: #2dd4bf;
+  --piui-mark-blue: #60a5fa;
+  --piui-mark-purple: #a78bfa;
+  --piui-mark-pink: #f472b6;
+  --piui-mark-gray: #9ca3af;
+}
+
+:root[data-theme="light"] {
+  --piui-mark-red: #dc2626;
+  --piui-mark-orange: #c2410c;
+  --piui-mark-yellow: #a16207;
+  --piui-mark-green: #15803d;
+  --piui-mark-teal: #0f766e;
+  --piui-mark-blue: #2563eb;
+  --piui-mark-purple: #7c3aed;
+  --piui-mark-pink: #db2777;
+  --piui-mark-gray: #6b7280;
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    --piui-mark-red: #dc2626;
+    --piui-mark-orange: #c2410c;
+    --piui-mark-yellow: #a16207;
+    --piui-mark-green: #15803d;
+    --piui-mark-teal: #0f766e;
+    --piui-mark-blue: #2563eb;
+    --piui-mark-purple: #7c3aed;
+    --piui-mark-pink: #db2777;
+    --piui-mark-gray: #6b7280;
+  }
+}

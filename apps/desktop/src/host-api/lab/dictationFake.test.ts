@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDictationClient, type DictationClient, type DictationSettingsUpdateV1, type DictationSettingsV1 } from '../dictationClient';
-import { LAB_DICTATION_TEXT } from './dictationFake';
+import { LAB_DICTATION_FAIL_ONCE, LAB_DICTATION_TEXT } from './dictationFake';
 import { labHost } from './labTestKit';
 import type { LabScenarioName } from './labState';
 
@@ -101,6 +101,22 @@ describe('dictation sources in the UI Lab', () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(await text).toEqual({ text: LAB_DICTATION_TEXT });
     await expect(dictation.transcribe({ audioBase64: 'AAAA', mimeType: 'audio/wav' })).rejects.toMatchObject({ code: 'invalid' });
+  });
+
+  it('refuses a marked clip once so a retry can be tried, and has no native save dialog', async () => {
+    const dictation = client();
+    await dictation.settings({ type: 'save', settings: update('openai') });
+    await dictation.settings({ type: 'set-key', provider: 'openai', language: 'en' });
+    const marked = { audioBase64: Buffer.from(`${LAB_DICTATION_FAIL_ONCE} audio`).toString('base64'), mimeType: 'audio/webm' };
+    const first = dictation.transcribe(marked).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await first).toMatchObject({ code: 'provider-unavailable' });
+    const second = dictation.transcribe(marked);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await second).toEqual({ text: LAB_DICTATION_TEXT });
+    // The client falls back to a download on this refusal; here it is visible as the code.
+    const host = labHost('demo');
+    await expect(host.invoke('dictation_save_recording_v1', { request: CLIP })).rejects.toMatchObject({ code: 'unsupported' });
   });
 
   it('reads in safe mode and refuses everything else', async () => {

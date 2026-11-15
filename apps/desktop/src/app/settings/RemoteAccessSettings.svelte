@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
   import { language, t } from '../../features/locale/language';
@@ -33,7 +33,7 @@
   const refused = $derived(status !== undefined && reason === undefined && status.enabled && link === 'refused');
 
   /** The switch's own state; it follows the host and snaps back when the host refuses. */
-  let on = $state(false);
+  let on = $state(untrack(() => !safeMode && (remote.status?.enabled ?? false)));
   $effect(() => {
     on = !safeMode && (status?.enabled ?? false);
   });

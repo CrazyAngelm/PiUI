@@ -3,17 +3,20 @@
   import Mic from '@lucide/svelte/icons/mic';
   import Square from '@lucide/svelte/icons/square';
   import { t } from '../../features/locale/language';
-  import { DictationOperationError, dictationHost, type DictationClient } from '../../host-api/dictationClient';
-  import { nanoAccountError, nanoAccountHost, type NanoAccountClient } from '../../host-api/nanoAccountClient';
+  import { dictationHost, type DictationClient } from '../../host-api/dictationClient';
+  import { nanoAccountHost, type NanoAccountClient } from '../../host-api/nanoAccountClient';
   import { Spinner, Tooltip, toasts } from '../../lib/ui';
-  import { dictationClock } from './dictation';
-  import { DICTATION_SOURCE_ERROR_COPY } from './dictationCopy';
+  import { DICTATION_NOTICE_COPY, dictationClockWithLimit, dictationNearLimit } from './dictation';
+  import { dictationPending, type PendingRecordings } from './dictationPendingStore.svelte';
   import { Dictation, type DictationEnvironment } from './dictationSession.svelte';
+  import { dictationErrorCopy, dictationTransport } from './dictationTransport';
   import { dictationSource as sharedSource, whenKeyChanges, type DictationSource } from './dictationSource.svelte';
 
   interface Props {
     /** Receives the recognized words; the composer puts them at its caret. */
     onText: (text: string) => void;
+    /** The composer this button belongs to: `chat:<sessionId>` or `new:<workspaceId or "personal">`. One unsent recording is kept per scope. */
+    scope: string;
     /** The composer cannot take input now (safe mode, sending). */
     disabled?: boolean;
     /** Test seams; the desktop uses the host client and the browser's recorder. */
@@ -21,18 +24,30 @@
     provider?: Pick<DictationClient, 'transcribe'>;
     source?: DictationSource;
     environment?: DictationEnvironment;
+    pending?: PendingRecordings;
   }
-  let { onText, disabled = false, client = nanoAccountHost, provider = dictationHost, source = sharedSource, environment = undefined }: Props = $props();
+  let {
+    onText,
+    scope,
+    disabled = false,
+    client = nanoAccountHost,
+    provider = dictationHost,
+    source = sharedSource,
+    environment = undefined,
+    pending = dictationPending,
+  }: Props = $props();
 
   const dictation = untrack(
     () =>
       new Dictation(
         // The clip goes to the source that is active when it is sent.
-        { dictate: (request) => (source.active === 'nano' ? client.dictate(request) : provider.transcribe(request)) },
+        dictationTransport(source, client, provider),
         {
           maxBytes: () => source.maxBytes,
           onText: (text) => onText(text),
-          errorCopy: (cause) => (cause instanceof DictationOperationError ? DICTATION_SOURCE_ERROR_COPY[cause.code] : nanoAccountError(cause).message),
+          errorCopy: dictationErrorCopy,
+          scope: () => scope,
+          pending,
         },
         environment,
       ),
@@ -41,8 +56,9 @@
   const working = $derived(dictation.phase === 'requesting' || dictation.phase === 'sending');
   const label = $derived(recording ? $t('Stop dictation') : $t('Dictate'));
   const tooltip = $derived(recording ? $t('Stop dictation (Esc cancels)') : $t('Dictate'));
+  const nearLimit = $derived(recording && dictationNearLimit(dictation.elapsedMs));
   const status = $derived(
-    recording ? $t('Recording {0}', [dictationClock(dictation.elapsedMs)]) : dictation.phase === 'sending' ? $t('Transcribing…') : '',
+    recording ? $t('Recording {0}', [dictationClockWithLimit(dictation.elapsedMs)]) : dictation.phase === 'sending' ? $t('Transcribing…') : '',
   );
 
   // A failure is told once, then forgotten with the toast.
@@ -53,14 +69,22 @@
     dictation.clearError();
   });
 
-  // Nothing is left recording when the composer goes away.
-  onDestroy(() => dictation.cancel());
+  // A fact that is not a failure (the limit was reached, a recording is waiting) is told once as well.
+  $effect(() => {
+    const notice = dictation.notice;
+    if (notice === undefined) return;
+    toasts.show({ tone: notice === 'limit-reached' ? 'neutral' : 'warning', title: $t(DICTATION_NOTICE_COPY[notice]), duration: 6000 });
+    dictation.clearNotice();
+  });
+
+  // Nothing is left recording when the composer goes away; what was said stays as a pending recording.
+  onDestroy(() => dictation.cancel('teardown'));
 
   // A recording belongs to the source it started with: it is cancelled when the source changes or goes away.
   // Only a change of the key counts: the account status is replaced by every token refresh, and that
   // must not discard a clip that is being transcribed.
   const sourceKey = $derived(source.key);
-  const cancelWhenSourceChanges = untrack(() => whenKeyChanges(source.key, () => dictation.cancel()));
+  const cancelWhenSourceChanges = untrack(() => whenKeyChanges(source.key, () => dictation.cancel('teardown')));
   $effect(() => cancelWhenSourceChanges(sourceKey));
 
   function keydown(event: KeyboardEvent): void {
@@ -81,6 +105,7 @@
         type="button"
         class="dictate"
         class:dictate--recording={recording}
+        class:dictate--near-limit={nearLimit}
         aria-label={label}
         aria-busy={working || undefined}
         disabled={disabled || working}
@@ -90,7 +115,7 @@
           <Spinner size={14} />
         {:else if recording}
           <Square size={13} />
-          <span class="dictate__clock" aria-hidden="true">{dictationClock(dictation.elapsedMs)}</span>
+          <span class="dictate__clock" aria-hidden="true">{dictationClockWithLimit(dictation.elapsedMs)}</span>
         {:else}
           <Mic size={16} />
         {/if}
@@ -143,6 +168,13 @@
     font-family: var(--piui-font-mono);
     font-size: var(--piui-text-xs);
     font-variant-numeric: tabular-nums;
+  }
+  /* The last thirty seconds: the clock turns to the warning colour. */
+  .dictate--near-limit {
+    border-color: var(--piui-warning-border);
+    background: var(--piui-warning-surface);
+    color: var(--piui-warning-text);
+    box-shadow: none;
   }
   @keyframes dictate-pulse {
     50% {

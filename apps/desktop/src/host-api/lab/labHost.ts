@@ -1,5 +1,7 @@
 import type { HostTransport } from '../transport';
+import { attentionHandlers } from './attentionFake';
 import { backgroundHandlers } from './backgroundFake';
+import { interactiveAnswersHandlers } from './interactiveAnswersFake';
 import { boardHandlers, createLabBoards, seedLabBoard } from './boardFake';
 import { acpHandlers } from './acpFake';
 import { appUpdateHandlers, updateScenarioFromSearch, type LabUpdateScenario } from './appUpdateFake';
@@ -28,6 +30,7 @@ import { scriptTestHandlers } from './orchestration/scriptTestFake';
 import { runDebuggingHandlers } from './orchestration/runDebuggingFake';
 import { buildSeed, type SeedActivity } from './scenarios';
 import { sessionToolsHandlers } from './sessionToolsFake';
+import { createLabSessionLinks } from './sessionLinksFake';
 import { createLabTeam, seedLabTeam, teammatesHandlers } from './teammatesFake';
 import { withSignedOutClaude } from './scenarios/signedOutClaude';
 import { LabSessions } from './sessionRuntime';
@@ -58,6 +61,8 @@ export interface LabHostOptions {
   readonly remote?: LabRemoteScenario;
   /** Native catalog probe behavior. Defaults to `?catalog=`, then `normal`. */
   readonly catalog?: LabCatalogBehavior;
+  /** Seeds one linked child under the first demo chat (see `sessionLinksFake.ts`). Defaults to `?links=seed`. */
+  readonly links?: 'seed';
 }
 
 export interface LabHost extends HostTransport {
@@ -161,6 +166,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
   const fusion = createLabFusion(runtime, bus, {
     codexSandbox: typeof window === 'undefined' ? true : codexSandboxFromSearch(window.location.search),
   });
+  const sessionLinks = createLabSessionLinks(runtime, bus, (options.links ?? (typeof window === 'undefined' ? undefined : new URLSearchParams(window.location.search).get('links'))) === 'seed');
   // The catalog and session fakes gate Nano on this account, as the desktop host does.
   const nanoAccount = createLabNanoAccount(
     options.nano ?? (typeof window === 'undefined' ? 'signed-out' : nanoScenarioFromSearch(window.location.search)),
@@ -187,6 +193,8 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ...piHistoryHandlers(runtime, seed.nativeHistory ?? EMPTY_NATIVE_HISTORY, bus),
     ...extensionHandlers(scenario === 'empty' ? [] : demoExtensions()),
     ...backgroundHandlers(state),
+    ...interactiveAnswersHandlers(state),
+    ...attentionHandlers(),
     ...acpHandlers(runtime, bus),
     ...harnessConnectHandlers(state),
     ...runDebuggingHandlers(runtime),
@@ -200,11 +208,12 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     nano_providers_v1: (args) => nanoProvidersHandler(state, args),
     nano_chatgpt_v1: (args) => nanoChatGptHandler(state, args),
     ...dictationHandlers(state, clock),
-    ...sessionToolsHandlers(runtime, seed.nativeHistory ?? EMPTY_NATIVE_HISTORY),
+    ...sessionToolsHandlers(runtime, seed.nativeHistory ?? EMPTY_NATIVE_HISTORY, undefined, sessionLinks.adopt),
     ...pipelineLibraryHandlers(runtime),
     ...teammatesHandlers(runtime, bus, team),
     ...boardHandlers(runtime, bus, team, boards),
     ...fusionHandlers(fusion),
+    ...sessionLinks.handlers,
     // After the ACP registry: plugin ACP agents join it.
     ...pluginHandlers(runtime, bus),
   };
@@ -220,6 +229,11 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
       if (handler === undefined) throw `Command ${command} not found`;
       try {
         const result = await handler(wire(args));
+        const operation = args.command;
+        if (typeof operation === 'object' && operation !== null && 'sessionId' in operation && typeof operation.sessionId === 'string') {
+          if (command === 'workspace_composer_v19' && 'type' in operation && operation.type === 'send') sessionLinks.personMessage(operation.sessionId);
+          if (command === 'workspace_lifecycle_v17') sessionLinks.sessionDeleted(operation.sessionId);
+        }
         return (result === undefined ? null : wire(result)) as T;
       } catch (error) {
         if (error instanceof LabDecodeFailure) throw tauriArgumentError(command, error);

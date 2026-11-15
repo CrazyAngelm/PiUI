@@ -49,6 +49,15 @@ test('catalog-only Hermes lists models while independent resource discovery is p
   } finally { await adapter.dispose(); }
 });
 
+test('missing optional sessions callback leaves Hermes usable with a notice', async () => {
+  const e = events();
+  const adapter = await createHermesAdapter({ ...config, hostTools: ['sessions'] }, e.emit);
+  try {
+    assert.equal(adapter.snapshot().status, 'idle');
+    assert.deepEqual(e.values.filter(event => event.type === 'notice'), [{ type: 'notice', code: 'unsupported-sessions-tool' }]);
+  } finally { await adapter.dispose(); }
+});
+
 test('native ACP streams LF-framed text and preserves generic fallback', async () => {
   const e = events(); const a = await createHermesAdapter(config, e.emit);
   try {

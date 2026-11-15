@@ -230,11 +230,20 @@ A signed-out `nano` session fails before launch with `NANO_SIGN_IN_REQUIRED`.
 # Dictation v1
 
 `dictation-v1.ts` is the WebView <-> host IPC of dictation sources (ADR-061):
-`dictation_settings_v1` and `dictation_transcribe_v1`. The host owns the
+`dictation_settings_v1`, `dictation_transcribe_v1` and
+`dictation_save_recording_v1` (writes an unsent recording to a file picked in the
+native save dialog, ADR-066; additive, protocol stays 1). The host owns the
 settings, every API key (typed only in the native dialog, kept in the OS
 credential store bound to the exact transcription address) and the upload; no
 key and no address for a request crosses it. The Nano source keeps using
 `nano_dictation_v1`.
+
+# Attention v1
+
+`attention-v1.ts` is the WebView <-> host IPC of the taskbar badge and flash (ADR-065):
+`attention_set_v1` takes `{ count, flash }`. The WebView decides what needs a person; the host draws a
+numbered overlay icon (Windows) or sets the badge count (macOS, Linux) and flashes the taskbar button only
+while the window is not focused. Local only, works in safe mode.
 
 # App update v1
 

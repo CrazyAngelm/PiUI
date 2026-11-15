@@ -1,4 +1,4 @@
-import type { WorktreePreviewV1, WorktreeRequestV1 } from '../../../../../contracts/workspace-placement-v1';
+import type { ChatBranchV1, WorktreePreviewV1, WorktreeRequestV1 } from '../../../../../contracts/workspace-placement-v1';
 
 /** A worktree the person confirmed in the new chat composer. */
 export interface ConfirmedWorktree {
@@ -27,6 +27,8 @@ export interface PendingHandoff {
 export interface PlacementRequest {
   worktree?: WorktreeRequestV1;
   continuedFrom?: string;
+  /** A branch of `continuedFrom` (needs it). */
+  branch?: ChatBranchV1;
 }
 
 export function confirmedWorktree(preview: WorktreePreviewV1): ConfirmedWorktree {

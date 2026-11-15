@@ -10,6 +10,10 @@
   import { RUNTIME_LABEL } from '../pipelines/executors';
   import ScriptEditor from '../pipelines/code/ScriptEditor.svelte';
   import { t } from '../../features/locale/language';
+  import { onDestroy } from 'svelte';
+  import { readWorkspaceHistory } from '../../host-api/workspaceHistory';
+  import { CopyFeedback } from '../branch/copyFeedback.svelte';
+  import { buildMessageControls } from '../branch/messageActions';
   import MarkdownContent from '../../components/MarkdownContent.svelte';
   import type { OrchestrationRunV6, ReconcileUncertainTaskRequest, TaskRecord } from '../../host-api/orchestrationClient';
   import type { SessionSnapshot } from '../../host-api/workspaceClient';
@@ -82,6 +86,14 @@
   const mappings = $derived(subpipeline ? Object.entries(subpipeline.inputs) : []);
   const sessionId = $derived(script || pluginNode || subpipeline ? undefined : record?.execution?.id);
   const snapshot = $derived(sessionId ? snapshotFor(sessionId) : undefined);
+  // A run's agent history is read-only here: messages can be copied, nothing more.
+  const copied = new CopyFeedback();
+  onDestroy(() => copied.dispose());
+  const copyControls = $derived(buildMessageControls(snapshot?.blocks ?? [], { readOnly: true, copiedId: copied.id }));
+  async function copyAction(id: string, action: string): Promise<void> {
+    const block = snapshot?.blocks.find((item) => item.id === id);
+    if (action === 'copy' && block && sessionId) await copied.copy(block, () => readWorkspaceHistory(sessionId));
+  }
   const entries = $derived(resultEntries(view.step, record?.resultData));
   const answer = $derived.by(() => {
     const blocks = snapshot?.blocks ?? [];
@@ -337,10 +349,14 @@
           <div class="conversation">
             <Transcript
               blocks={snapshot.blocks}
+              messageControls={copyControls}
+              onMessageAction={copyAction}
+              interactive={!runs.safeMode}
               loading={false}
               sessionKey={`run:${sessionId}`}
               historySessionId={sessionId}
               agentLabel={profile?.name ?? view.name}
+              running={shown === 'running'}
               bind:searchOpen
             />
           </div>

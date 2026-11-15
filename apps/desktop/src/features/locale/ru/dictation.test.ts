@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DICTATION_NOTICE_COPY } from '../../../app/nano/dictation';
 import { DICTATION_SOURCE_ERROR_COPY } from '../../../app/nano/dictationCopy';
 import { lookupRussian } from '../ruCatalog';
 import { dictationRu } from './dictation';
@@ -7,7 +8,7 @@ import { dictationRu } from './dictation';
 const SCREEN_STRINGS = [
   'Dictation',
   'Safe mode is on: dictation is off.',
-  'Choose what turns your speech into text in the message box. A recording goes only to the service you choose and is not kept.',
+  'Choose what turns your speech into text in the message box. A recording goes only to the service you choose. One that could not be sent stays on this computer for up to 24 hours, until you send, save or delete it.',
   'Speech to text',
   'Off',
   'Nano subscription',
@@ -24,6 +25,18 @@ const SCREEN_STRINGS = [
   'Replace API key…',
   'Remove API key',
   'API keys can be entered only on Windows in this version.',
+  ...Object.values(DICTATION_NOTICE_COPY),
+  'Unsent recording',
+  'Recording {0} was not transcribed',
+  'Recording {0} was not sent',
+  'Recording {0} was too large to send',
+  'Kept only until the app closes',
+  'Retry',
+  'Save audio',
+  'Delete',
+  'Confirm delete',
+  'Audio saved.',
+  'Could not save the audio.',
 ];
 
 describe('dictation Russian copy', () => {

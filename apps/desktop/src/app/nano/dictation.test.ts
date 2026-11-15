@@ -1,19 +1,27 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  DICTATION_CHECKPOINT_MS,
   DICTATION_DEFAULT_MAX_BYTES,
   DICTATION_ERROR_COPY,
+  DICTATION_KEEP_ON_ESCAPE_MS,
   DICTATION_MAX_MS,
+  DICTATION_NOTICE_COPY,
+  DICTATION_WARNING_MS,
   bytesToBase64,
   canRecordAudio,
   dictationByteLimit,
   dictationClipError,
   dictationClock,
+  dictationClockWithLimit,
   dictationFailure,
   dictationLimitReached,
+  dictationNearLimit,
   insertAtCaret,
   pickDictationMime,
 } from './dictation';
+import { PendingRecordings, type PendingRecording, type PendingStorage } from './dictationPendingStore.svelte';
 import { Dictation, type DictationEnvironment, type RecorderLike } from './dictationSession.svelte';
+import { retryRecording } from './dictationTransport';
 import { DictationSource, whenKeyChanges } from './dictationSource.svelte';
 
 describe('dictation guards', () => {
@@ -35,10 +43,10 @@ describe('dictation guards', () => {
     }
   });
 
-  it('stops at two minutes or just below the size limit', () => {
-    expect(DICTATION_MAX_MS).toBe(120_000);
-    expect(dictationLimitReached(119_999, 0, undefined)).toBe(false);
-    expect(dictationLimitReached(120_000, 0, undefined)).toBe(true);
+  it('stops at ten minutes or just below the size limit', () => {
+    expect(DICTATION_MAX_MS).toBe(600_000);
+    expect(dictationLimitReached(599_999, 0, undefined)).toBe(false);
+    expect(dictationLimitReached(600_000, 0, undefined)).toBe(true);
     expect(dictationLimitReached(1_000, 10_000, 1_000_000)).toBe(false);
     // Room for the chunk in flight (an eighth of the limit, at most 256 KiB) stays below the limit.
     expect(dictationLimitReached(1_000, 1_000_000 - 70_000, 1_000_000)).toBe(true);
@@ -72,6 +80,16 @@ describe('dictation guards', () => {
   it('formats the running clock', () => {
     expect([0, 999, 7_400, 61_000, 120_000].map(dictationClock)).toEqual(['0:00', '0:00', '0:07', '1:01', '2:00']);
     expect(dictationClock(-5)).toBe('0:00');
+  });
+
+  it('shows the clock against the limit and warns in the last thirty seconds', () => {
+    expect(dictationClockWithLimit(0)).toBe('0:00 / 10:00');
+    expect(dictationClockWithLimit(61_000)).toBe('1:01 / 10:00');
+    expect(DICTATION_WARNING_MS).toBe(30_000);
+    expect(dictationNearLimit(DICTATION_MAX_MS - DICTATION_WARNING_MS - 1)).toBe(false);
+    expect(dictationNearLimit(DICTATION_MAX_MS - DICTATION_WARNING_MS)).toBe(true);
+    expect(dictationNearLimit(DICTATION_MAX_MS)).toBe(true);
+    expect(Object.values(DICTATION_NOTICE_COPY).every((copy) => copy.length > 10)).toBe(true);
   });
 
   it('encodes a long clip to base64 without overflowing the stack', () => {
@@ -125,10 +143,15 @@ class FakeRecorder implements RecorderLike {
   }
 }
 
-function rig(options: { available?: boolean; denied?: unknown; supported?: string[]; errorCopy?: (cause: unknown) => string } = {}) {
+const SCOPE = 'chat:session-1';
+/** The fake clock of the recording environment; stores under test read the same time. */
+const CLOCK_START = 1_000_000;
+
+function rig(options: { available?: boolean; denied?: unknown; supported?: string[]; errorCopy?: (cause: unknown) => string; pending?: PendingRecordings; scope?: () => string } = {}) {
   const recorder = new FakeRecorder();
+  const pending = options.pending ?? new PendingRecordings(undefined, () => CLOCK_START);
   const track = { stop: vi.fn() };
-  let clock = 1_000_000;
+  let clock = CLOCK_START;
   const intervals = new Map<number, () => void>();
   let nextHandle = 1;
   const requests: string[] = [];
@@ -160,11 +183,12 @@ function rig(options: { available?: boolean; denied?: unknown; supported?: strin
   let maxBytes: number | undefined;
   const session = new Dictation(
     { dictate: (request) => answer(request) },
-    { maxBytes: () => maxBytes, onText: (text) => texts.push(text), ...(options.errorCopy ? { errorCopy: options.errorCopy } : {}) },
+    { maxBytes: () => maxBytes, onText: (text) => texts.push(text), scope: options.scope ?? (() => SCOPE), pending, ...(options.errorCopy ? { errorCopy: options.errorCopy } : {}) },
     environment,
   );
   return {
     session,
+    pending,
     recorder,
     track,
     sent,
@@ -277,7 +301,7 @@ describe('dictation session', () => {
     expect(test.session.error).toBeUndefined();
   });
 
-  it('stops by itself at two minutes and sends what it has', async () => {
+  it('stops by itself at ten minutes, says so and sends what it has', async () => {
     const test = rig();
     await test.session.start();
     test.recorder.emit(5);
@@ -286,6 +310,7 @@ describe('dictation session', () => {
     test.advance(1_000);
     await settle();
     expect(test.recorder.stops).toBe(1);
+    expect(test.session.notice).toBe('limit-reached');
     expect(test.texts).toEqual(['hello there']);
     // Later ticks of the dead recording do nothing.
     test.advance(10_000);
@@ -391,7 +416,7 @@ describe('a recording and the source it started with', () => {
     const source = new DictationSource({ settings: () => Promise.reject(new Error('not read')) }, account);
     const test = rig();
     // What the dictation button wires: the guard runs whenever the effect re-runs.
-    const guard = whenKeyChanges(source.key, () => test.session.cancel());
+    const guard = whenKeyChanges(source.key, () => test.session.cancel('teardown'));
     return {
       test,
       source,
@@ -428,7 +453,7 @@ describe('a recording and the source it started with', () => {
     expect(test.session.error).toBeUndefined();
   });
 
-  it('drops the clip when the source stops being available', async () => {
+  it('keeps the clip as unsent when the source stops being available', async () => {
     const { test, source, refresh } = nanoRig();
     const finish = await upload(test);
     refresh({ dictation: false });
@@ -436,6 +461,344 @@ describe('a recording and the source it started with', () => {
     expect(test.session.phase).toBe('idle');
     finish('too late');
     await settle();
+    // The late words are dropped; the audio is not.
     expect(test.texts).toEqual([]);
+    expect(test.pending.get(SCOPE)?.reason).toBe('unsent');
+  });
+
+  it('keeps a recording whose source changes while it runs', async () => {
+    const { test, refresh } = nanoRig();
+    await test.session.start();
+    test.recorder.emit(6);
+    refresh({ dictation: false });
+    await settle();
+    expect(test.session.phase).toBe('idle');
+    expect(test.sent).toEqual([]);
+    expect(test.pending.get(SCOPE)?.reason).toBe('unsent');
+    expect(test.pending.get(SCOPE)?.blob.size).toBe(7);
+  });
+});
+
+describe('a recording is never lost', () => {
+  const kept = (test: ReturnType<typeof rig>) => test.pending.get(SCOPE);
+
+  it('keeps the clip when transcription fails, with the error copy', async () => {
+    const test = rig();
+    test.setAnswer(async () => {
+      throw { code: 'credits-exhausted' };
+    });
+    await test.session.start();
+    test.recorder.emit(3);
+    test.advance(2_500);
+    await test.session.toggle();
+    await settle();
+    expect(test.session.error).toBe('You are out of Nano credits.');
+    const pending = kept(test);
+    expect(pending).toMatchObject({ scope: SCOPE, reason: 'failed', mimeType: 'audio/webm;codecs=opus', durationMs: 2_500, error: 'You are out of Nano credits.' });
+    expect(pending?.blob.size).toBe(4);
+  });
+
+  it('keeps the clip when no speech was recognized', async () => {
+    const test = rig();
+    test.setAnswer(async () => ({ text: '  ' }));
+    await test.session.start();
+    await test.session.toggle();
+    await settle();
+    expect(kept(test)?.reason).toBe('empty');
+    expect(test.texts).toEqual([]);
+  });
+
+  it('keeps a clip that is too large to send', async () => {
+    const test = rig();
+    test.setMaxBytes(10);
+    test.recorder.last = new Blob([new Uint8Array(100)]);
+    await test.session.start();
+    await test.session.toggle();
+    await settle();
+    expect(test.sent).toEqual([]);
+    expect(kept(test)?.reason).toBe('too-large');
+  });
+
+  it('leaves nothing behind after a success', async () => {
+    const test = rig();
+    await test.session.start();
+    await test.session.toggle();
+    await settle();
+    expect(test.texts).toEqual(['hello there']);
+    expect(kept(test)).toBeUndefined();
+  });
+
+  it('retries a kept clip with the source active now and reports the new error', async () => {
+    const test = rig();
+    test.setAnswer(async () => {
+      throw { code: 'credits-exhausted' };
+    });
+    await test.session.start();
+    test.recorder.emit(3);
+    await test.session.toggle();
+    await settle();
+    const clip = kept(test);
+    expect(clip).toBeDefined();
+    const failing = await retryRecording(clip!, { dictate: async () => Promise.reject({ code: 'credits-exhausted' }) }, undefined);
+    expect(failing).toEqual({ ok: false, reason: 'failed', error: 'You are out of Nano credits.' });
+    expect(await retryRecording(clip!, { dictate: async () => ({ text: '  ' }) }, undefined)).toMatchObject({ ok: false, reason: 'empty' });
+    expect(await retryRecording(clip!, { dictate: async () => ({ text: 'x' }) }, 1)).toMatchObject({ ok: false, reason: 'too-large' });
+    const sent: string[] = [];
+    const retried = await retryRecording(
+      clip!,
+      {
+        dictate: async (request) => {
+          sent.push(request.mimeType);
+          return { text: ' recovered ' };
+        },
+      },
+      undefined,
+    );
+    expect(retried).toEqual({ ok: true, text: 'recovered' });
+    expect(sent).toEqual(['audio/webm;codecs=opus']);
+    // Success is the caller's cue to delete the clip.
+    await test.pending.remove(SCOPE, clip!.id);
+    expect(kept(test)).toBeUndefined();
+  });
+
+  it('drops a recording that Esc ends before five seconds', async () => {
+    const test = rig();
+    await test.session.start();
+    test.recorder.emit(100);
+    test.advance(DICTATION_KEEP_ON_ESCAPE_MS - 1);
+    test.session.cancel();
+    await settle();
+    expect(kept(test)).toBeUndefined();
+    expect(test.sent).toEqual([]);
+    expect(test.session.phase).toBe('idle');
+  });
+
+  it('keeps a recording that Esc ends after five seconds, unsent', async () => {
+    const test = rig();
+    await test.session.start();
+    test.recorder.emit(100);
+    test.advance(DICTATION_KEEP_ON_ESCAPE_MS);
+    test.session.cancel();
+    await settle();
+    expect(test.session.phase).toBe('idle');
+    expect(test.sent).toEqual([]);
+    expect(test.texts).toEqual([]);
+    expect(kept(test)).toMatchObject({ reason: 'unsent', durationMs: DICTATION_KEEP_ON_ESCAPE_MS });
+    expect(kept(test)?.blob.size).toBe(101);
+    expect(test.track.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a recording when the composer is destroyed, however short', async () => {
+    const test = rig();
+    await test.session.start();
+    test.recorder.emit(8);
+    test.session.cancel('teardown');
+    await settle();
+    expect(test.sent).toEqual([]);
+    expect(kept(test)?.reason).toBe('unsent');
+    expect(test.session.phase).toBe('idle');
+  });
+
+  it('keeps what was said when the recorder fails mid-speech', async () => {
+    const test = rig();
+    await test.session.start();
+    test.recorder.emit(7);
+    test.advance(3_000);
+    test.recorder.onerror?.(new Error('device lost'));
+    await settle();
+    expect(test.session.error).toBe(DICTATION_ERROR_COPY.failed);
+    expect(kept(test)).toMatchObject({ reason: 'failed', durationMs: 3_000, error: DICTATION_ERROR_COPY.failed });
+    expect(kept(test)?.blob.size).toBe(7);
+    expect(test.sent).toEqual([]);
+  });
+
+  it('refuses a new recording while one is waiting in the scope', async () => {
+    const test = rig();
+    test.setAnswer(async () => {
+      throw { code: 'credits-exhausted' };
+    });
+    await test.session.start();
+    await test.session.toggle();
+    await settle();
+    test.requests.length = 0;
+    await test.session.start();
+    expect(test.session.phase).toBe('idle');
+    expect(test.session.notice).toBe('previous-recording');
+    expect(test.requests).toEqual([]);
+    await test.pending.remove(SCOPE);
+    await test.session.start();
+    expect(test.session.phase).toBe('recording');
+  });
+});
+
+// ---- written before sending, checkpoints, the scope fixed at start ---------
+
+/** A storage over a map, to see what a fresh window would load. */
+function rowsStorage() {
+  const rows = new Map<string, PendingRecording>();
+  const storage: PendingStorage = {
+    load: async () => [...rows.values()],
+    put: async (item) => void rows.set(item.scope, item),
+    delete: async (scope) => void rows.delete(scope),
+  };
+  return { rows, storage };
+}
+
+describe('a recording survives a closed or dead app', () => {
+  it('has the clip in the storage before the upload starts and nothing after a success', async () => {
+    const { rows, storage } = rowsStorage();
+    const test = rig({ pending: new PendingRecordings(storage, () => CLOCK_START) });
+    const seen: (string | undefined)[] = [];
+    test.setAnswer(async () => {
+      seen.push(rows.get(SCOPE)?.reason);
+      return { text: 'done' };
+    });
+    await test.session.start();
+    test.recorder.emit(3);
+    await test.session.toggle();
+    await settle();
+    expect(seen).toEqual(['unsent']);
+    expect(test.texts).toEqual(['done']);
+    expect(rows.size).toBe(0);
+  });
+
+  it('leaves an unsent clip that a fresh store loads when the app dies during the upload', async () => {
+    const { rows, storage } = rowsStorage();
+    const test = rig({ pending: new PendingRecordings(storage, () => CLOCK_START) });
+    test.setAnswer(() => new Promise(() => undefined));
+    await test.session.start();
+    test.recorder.emit(3);
+    test.advance(2_000);
+    await test.session.toggle();
+    await settle();
+    expect(test.session.phase).toBe('sending');
+    expect(rows.get(SCOPE)).toMatchObject({ reason: 'unsent', durationMs: 2_000 });
+    const reopened = new PendingRecordings(storage, () => CLOCK_START);
+    await reopened.load();
+    expect(reopened.get(SCOPE)).toMatchObject({ reason: 'unsent', mimeType: 'audio/webm;codecs=opus' });
+    expect(reopened.get(SCOPE)?.blob.size).toBe(4);
+  });
+
+  it('saves a checkpoint after five seconds of recording and not before, then every five seconds', async () => {
+    const { rows, storage } = rowsStorage();
+    const test = rig({ pending: new PendingRecordings(storage, () => CLOCK_START) });
+    await test.session.start();
+    test.recorder.emit(10);
+    test.advance(DICTATION_CHECKPOINT_MS - 1);
+    await settle();
+    expect(rows.size).toBe(0);
+    test.advance(1);
+    await settle();
+    expect(rows.get(SCOPE)).toMatchObject({ reason: 'unsent', durationMs: DICTATION_CHECKPOINT_MS });
+    expect(rows.get(SCOPE)?.blob.size).toBe(10);
+    test.recorder.emit(5);
+    test.advance(DICTATION_CHECKPOINT_MS - 1);
+    await settle();
+    expect(rows.get(SCOPE)?.blob.size).toBe(10);
+    test.advance(1);
+    await settle();
+    expect(rows.get(SCOPE)?.blob.size).toBe(15);
+    expect(rows.get(SCOPE)?.durationMs).toBe(2 * DICTATION_CHECKPOINT_MS);
+  });
+
+  it('keeps the checkpoint as the clip when the app comes back, and does not offer it while recording', async () => {
+    const { storage } = rowsStorage();
+    const pending = new PendingRecordings(storage, () => CLOCK_START);
+    const test = rig({ pending });
+    await test.session.start();
+    test.recorder.emit(10);
+    test.advance(DICTATION_CHECKPOINT_MS);
+    await settle();
+    expect(pending.get(SCOPE)).toBeDefined();
+    expect(pending.visible(SCOPE)).toBeUndefined();
+    const reopened = new PendingRecordings(storage, () => CLOCK_START);
+    await reopened.load();
+    expect(reopened.visible(SCOPE)?.reason).toBe('unsent');
+  });
+
+  it('leaves nothing when Esc ends a recording, or an upload of a clip, shorter than five seconds', async () => {
+    const { rows, storage } = rowsStorage();
+    const pending = new PendingRecordings(storage, () => CLOCK_START);
+    const test = rig({ pending });
+    await test.session.start();
+    test.recorder.emit(10);
+    test.advance(1_000);
+    test.session.cancel();
+    await settle();
+    expect(rows.size).toBe(0);
+    expect(pending.get(SCOPE)).toBeUndefined();
+
+    test.setAnswer(() => new Promise(() => undefined));
+    await test.session.start();
+    test.recorder.emit(10);
+    test.advance(2_000);
+    await test.session.toggle();
+    await settle();
+    expect(rows.get(SCOPE)?.reason).toBe('unsent');
+    test.session.cancel();
+    await settle();
+    expect(rows.size).toBe(0);
+    expect(pending.get(SCOPE)).toBeUndefined();
+    expect(test.session.phase).toBe('idle');
+  });
+
+  it('keeps an upload that Esc ends after five seconds', async () => {
+    const { rows, storage } = rowsStorage();
+    const test = rig({ pending: new PendingRecordings(storage, () => CLOCK_START) });
+    test.setAnswer(() => new Promise(() => undefined));
+    await test.session.start();
+    test.recorder.emit(10);
+    test.advance(DICTATION_KEEP_ON_ESCAPE_MS);
+    await test.session.toggle();
+    await settle();
+    test.session.cancel();
+    await settle();
+    expect(rows.get(SCOPE)?.reason).toBe('unsent');
+  });
+
+  it('keeps the clip under the scope the recording started in when the composer moves on', async () => {
+    const { rows, storage } = rowsStorage();
+    let scope = 'chat:a';
+    const test = rig({ pending: new PendingRecordings(storage, () => CLOCK_START), scope: () => scope });
+    test.setAnswer(async () => {
+      throw { code: 'credits-exhausted' };
+    });
+    await test.session.start();
+    test.recorder.emit(10);
+    test.advance(DICTATION_CHECKPOINT_MS);
+    scope = 'chat:b';
+    await test.session.toggle();
+    await settle();
+    expect(rows.get('chat:a')).toMatchObject({ reason: 'failed' });
+    expect(rows.has('chat:b')).toBe(false);
+    expect(test.pending.get('chat:b')).toBeUndefined();
+  });
+
+  it('holds the clip while it records or sends and lets go when idle again', async () => {
+    const test = rig();
+    test.setAnswer(async () => {
+      throw { code: 'credits-exhausted' };
+    });
+    await test.session.start();
+    test.recorder.emit(10);
+    test.advance(DICTATION_CHECKPOINT_MS);
+    expect(test.pending.visible(SCOPE)).toBeUndefined();
+    await test.session.toggle();
+    await settle();
+    expect(test.session.phase).toBe('idle');
+    expect(test.pending.visible(SCOPE)?.reason).toBe('failed');
+  });
+
+  it('keeps what was recorded under the same id when the recorder fails', async () => {
+    const { rows, storage } = rowsStorage();
+    const test = rig({ pending: new PendingRecordings(storage, () => CLOCK_START) });
+    await test.session.start();
+    test.recorder.emit(10);
+    test.advance(DICTATION_CHECKPOINT_MS);
+    await settle();
+    const checkpoint = rows.get(SCOPE);
+    test.recorder.onerror?.(new Error('device lost'));
+    await settle();
+    expect(rows.get(SCOPE)).toMatchObject({ id: checkpoint?.id, reason: 'failed' });
   });
 });

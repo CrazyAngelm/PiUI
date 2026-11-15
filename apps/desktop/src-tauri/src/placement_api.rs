@@ -17,6 +17,7 @@
 //! (it lists the changes that would be lost).
 
 use crate::api::verified_project_directory;
+use crate::session_links::model::{BranchMode, BranchOrigin};
 use crate::session_placement::{
     SessionPlacement, SessionTools, WorktreeBinding, display_path, folder_slug, git_error,
     project_folder, safe_mode_error, stale_error, tool_error,
@@ -56,6 +57,46 @@ pub enum WorktreeRequestV1 {
     Shared { session_id: String },
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawChatBranchV1 {
+    mode: String,
+    #[serde(default, deserialize_with = "branch_field")]
+    at: Option<String>,
+    #[serde(default, deserialize_with = "branch_field")]
+    block_id: Option<String>,
+}
+
+fn branch_field<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error> {
+    T::deserialize(deserializer).map(Some)
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(try_from = "RawChatBranchV1")]
+pub enum ChatBranchV1 {
+    Native { before_block_id: Option<String> },
+    Linked,
+}
+
+impl TryFrom<RawChatBranchV1> for ChatBranchV1 {
+    type Error = &'static str;
+
+    fn try_from(value: RawChatBranchV1) -> Result<Self, Self::Error> {
+        match (value.mode.as_str(), value.at.as_deref(), value.block_id) {
+            ("native", Some("end"), None) => Ok(Self::Native {
+                before_block_id: None,
+            }),
+            ("native", Some("before"), Some(block_id)) => Ok(Self::Native {
+                before_block_id: Some(block_id),
+            }),
+            ("linked", None, None) => Ok(Self::Linked),
+            _ => Err("Check the branch mode and cut."),
+        }
+    }
+}
+
 // A decoded command lives for one request; boxing its largest variant would
 // only complicate the serde grammar.
 #[allow(clippy::large_enum_variant)]
@@ -85,6 +126,8 @@ pub enum PlacementCommandV1 {
         worktree: Option<WorktreeRequestV1>,
         #[serde(default)]
         continued_from: Option<String>,
+        #[serde(default)]
+        branch: Option<ChatBranchV1>,
     },
     RemoveWorktree {
         session_id: String,
@@ -128,6 +171,8 @@ pub struct ChatPlacementV1 {
     pub worktree: Option<ChatWorktreeV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub continued_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) branch: Option<BranchMode>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub adopted: bool,
 }
@@ -257,8 +302,19 @@ pub(crate) fn placement_view(placement: &SessionPlacement) -> ChatPlacementV1 {
             base: short(&binding.base_commit),
         }),
         continued_from: placement.continued_from.clone(),
+        branch: None,
         adopted: placement.adopted,
     }
+}
+
+fn placement_wire_view(host: &HostState, placement: &SessionPlacement) -> ChatPlacementV1 {
+    let mut view = placement_view(placement);
+    view.branch = host
+        .workspace
+        .session_links_hooks()
+        .and_then(|hooks| hooks.branch_origin(&placement.session_id))
+        .map(|origin| origin.mode);
+    view
 }
 
 /// Git confirms that `binding` is a PiUI-managed worktree of the project's
@@ -581,11 +637,12 @@ async fn create_chat(
     publisher: WorkspaceEventPublisher,
     workspace_id: String,
     harness: HarnessKind,
-    permission_mode: PermissionMode,
+    mut permission_mode: PermissionMode,
     title: Option<String>,
-    model: Option<WorkspaceModel>,
+    mut model: Option<WorkspaceModel>,
     worktree: Option<WorktreeRequestV1>,
     continued_from: Option<String>,
+    branch: Option<ChatBranchV1>,
 ) -> Result<PlacementResultV1, WorkspaceError> {
     if host.safe_mode {
         return Err(safe_mode_error());
@@ -596,6 +653,17 @@ async fn create_chat(
             "Check the required fields and try again.",
         ));
     }
+    if branch.is_some() && continued_from.is_none() {
+        return Err(WorkspaceError::invalid());
+    }
+    if let Some(ChatBranchV1::Native { before_block_id }) = &branch
+        && (worktree.is_some()
+            || before_block_id.as_ref().is_some_and(|id| {
+                id.is_empty() || id.chars().count() > 256 || id.chars().any(char::is_control)
+            }))
+    {
+        return Err(WorkspaceError::invalid());
+    }
     if let Some(source) = &continued_from
         && (Uuid::parse_str(source).is_err()
             || host.workspace.session_workspace_id(source)? != workspace_id)
@@ -605,44 +673,111 @@ async fn create_chat(
             "The chat this one continues is no longer available.",
         ));
     }
-    let session_id = Uuid::new_v4().to_string();
-    let mut placement = SessionPlacement::new(&session_id, &workspace_id);
-    placement.continued_from = continued_from;
-    let mut created_worktree: Option<(GitRunner, PathBuf, PathBuf)> = None;
-    match worktree {
-        None => {}
-        Some(WorktreeRequestV1::New {
-            branch,
-            folder,
-            expected_base,
-        }) => {
-            let (binding, git, top) =
-                create_worktree(host, &workspace_id, branch, folder, &expected_base).await?;
-            created_worktree = Some((git, top, binding.root.clone()));
-            placement.worktree = Some(binding);
-        }
-        Some(WorktreeRequestV1::Shared { session_id: source }) => {
-            if Uuid::parse_str(&source).is_err()
-                || host.workspace.session_workspace_id(&source)? != workspace_id
-            {
-                return Err(tool_error("NOT_FOUND", "That chat is no longer available."));
+    let mut thinking_level = None;
+    if branch.is_some() {
+        let source = continued_from
+            .as_deref()
+            .ok_or_else(WorkspaceError::invalid)?;
+        let settings = host.workspace.branch_source_settings(source)?;
+        if settings.harness == harness {
+            permission_mode = settings.permission_mode;
+            if matches!(branch, Some(ChatBranchV1::Native { .. })) {
+                model = settings.model;
+                thinking_level = settings.thinking_level;
+            } else {
+                model = model.or(settings.model);
             }
-            let binding = host
-                .workspace
-                .worktree_binding(&source)?
-                .ok_or_else(|| tool_error("NOT_FOUND", "That chat does not run in a worktree."))?;
+        }
+    }
+    let mut inherited_worktree = None;
+    if matches!(branch, Some(ChatBranchV1::Native { .. })) {
+        let source = continued_from
+            .as_deref()
+            .ok_or_else(WorkspaceError::invalid)?;
+        host.workspace
+            .validate_native_branch(source, harness, model.as_ref())?;
+        inherited_worktree = host.workspace.worktree_binding(source)?;
+        if let Some(binding) = &inherited_worktree {
             if binding.removed() {
                 return Err(worktree_removed());
             }
             let project = project_for_worktrees(host, &workspace_id)?;
-            verify_worktree(host.workspace.tools(), &binding, &project).await?;
-            placement.worktree = Some(binding);
+            verify_worktree(host.workspace.tools(), binding, &project).await?;
         }
+    }
+    let session_id = Uuid::new_v4().to_string();
+    let mut placement = SessionPlacement::new(&session_id, &workspace_id);
+    placement.continued_from = continued_from.clone();
+    placement.worktree = inherited_worktree;
+    let hooks = host.workspace.session_links_hooks();
+    if let Some(branch) = &branch {
+        let origin = BranchOrigin {
+            source_session_id: continued_from.clone().ok_or_else(WorkspaceError::invalid)?,
+            mode: match branch {
+                ChatBranchV1::Native { .. } => BranchMode::Native,
+                ChatBranchV1::Linked => BranchMode::Linked,
+            },
+            before_block_id: match branch {
+                ChatBranchV1::Native { before_block_id } => before_block_id.clone(),
+                ChatBranchV1::Linked => None,
+            },
+        };
+        let recorded = hooks
+            .as_ref()
+            .is_some_and(|hooks| hooks.record_branch(&session_id, origin));
+        if matches!(branch, ChatBranchV1::Native { .. }) && !recorded {
+            return Err(tool_error(
+                "BRANCH_UNSUPPORTED",
+                "This chat cannot be branched natively.",
+            ));
+        }
+    }
+    let mut created_worktree: Option<(GitRunner, PathBuf, PathBuf)> = None;
+    let prepared: Result<(), WorkspaceError> = async {
+        match worktree {
+            None => {}
+            Some(WorktreeRequestV1::New {
+                branch,
+                folder,
+                expected_base,
+            }) => {
+                let (binding, git, top) =
+                    create_worktree(host, &workspace_id, branch, folder, &expected_base).await?;
+                created_worktree = Some((git, top, binding.root.clone()));
+                placement.worktree = Some(binding);
+            }
+            Some(WorktreeRequestV1::Shared { session_id: source }) => {
+                if Uuid::parse_str(&source).is_err()
+                    || host.workspace.session_workspace_id(&source)? != workspace_id
+                {
+                    return Err(tool_error("NOT_FOUND", "That chat is no longer available."));
+                }
+                let binding = host.workspace.worktree_binding(&source)?.ok_or_else(|| {
+                    tool_error("NOT_FOUND", "That chat does not run in a worktree.")
+                })?;
+                if binding.removed() {
+                    return Err(worktree_removed());
+                }
+                let project = project_for_worktrees(host, &workspace_id)?;
+                verify_worktree(host.workspace.tools(), &binding, &project).await?;
+                placement.worktree = Some(binding);
+            }
+        };
+        Ok(())
+    }
+    .await;
+    if let Err(error) = prepared {
+        if branch.is_some()
+            && let Some(hooks) = &hooks
+        {
+            hooks.forget_branch(&session_id);
+        }
+        return Err(error);
     }
     let authorize =
         |id: &str| verified_project_directory(host, id, true).map_err(WorkspaceError::from);
     let request = WorkspaceLaunchRequest {
-        session_id: Some(session_id),
+        session_id: Some(session_id.clone()),
         workspace_id: workspace_id.clone(),
         harness,
         title,
@@ -651,7 +786,7 @@ async fn create_chat(
         member_id: None,
         task_id: None,
         model,
-        thinking_level: None,
+        thinking_level,
         instructions: None,
         base_instructions: None,
         service_tier: None,
@@ -664,7 +799,7 @@ async fn create_chat(
         dependency_outputs: Vec::new(),
         coordinator: None,
     };
-    let view = placement_view(&placement);
+    let view = placement_wire_view(host, &placement);
     match host
         .workspace
         .create_placed_session(
@@ -676,12 +811,25 @@ async fn create_chat(
         )
         .await
     {
-        Ok(snapshot) => Ok(PlacementResultV1::Created {
-            protocol: WORKSPACE_PLACEMENT_PROTOCOL,
-            snapshot: Box::new(snapshot),
-            placement: view,
-        }),
+        Ok(snapshot) => {
+            if branch.is_some()
+                && let (Some(hooks), Some(source)) = (&hooks, continued_from)
+            {
+                hooks.adopt_branch(source, session_id).await;
+            }
+            Ok(PlacementResultV1::Created {
+                protocol: WORKSPACE_PLACEMENT_PROTOCOL,
+                snapshot: Box::new(snapshot),
+                placement: view,
+            })
+        }
         Err(error) => {
+            if branch.is_some() {
+                if let Some(hooks) = &hooks {
+                    hooks.forget_branch(&session_id);
+                }
+                let _ = host.workspace.discard_failed_branch(&session_id);
+            }
             // The worktree was created for this chat and is still pristine;
             // git refuses to remove it otherwise. The branch stays.
             if let Some((git, top, root)) = created_worktree {
@@ -771,7 +919,7 @@ async fn remove_worktree(
     Ok(PlacementResultV1::Removed {
         protocol: WORKSPACE_PLACEMENT_PROTOCOL,
         session_id,
-        placement: placement_view(&placement),
+        placement: placement_wire_view(host, &placement),
     })
 }
 
@@ -946,7 +1094,7 @@ fn list(host: &HostState) -> Result<PlacementResultV1, WorkspaceError> {
         .placements()?
         .iter()
         .filter(|placement| host.workspace.session_exists(&placement.session_id))
-        .map(placement_view)
+        .map(|placement| placement_wire_view(host, placement))
         .collect();
     placements.sort_by(|left, right| left.session_id.cmp(&right.session_id));
     Ok(PlacementResultV1::Placements {
@@ -975,6 +1123,7 @@ pub(crate) async fn dispatch_placement(
             model,
             worktree,
             continued_from,
+            branch,
         } => {
             create_chat(
                 host,
@@ -986,6 +1135,7 @@ pub(crate) async fn dispatch_placement(
                 model,
                 worktree,
                 continued_from,
+                branch,
             )
             .await
         }

@@ -17,6 +17,7 @@ import { deleteWorkspaceSession } from '../host-api/workspaceLifecycle';
 import { harnessRegistryHost } from '../host-api/harnessRegistry';
 import { fusionHost } from '../host-api/fusionClient';
 import { fusionMembership } from './fusion/fusionMembership.svelte';
+import { marks } from './marks/marks.svelte';
 import { fusionErrorText } from './fusion/fusionPair';
 import {
   workspaceHost,
@@ -49,7 +50,7 @@ import { placementRequest, placements } from './worktrees/placements.svelte';
 import { REMOTE_UNAVAILABLE_COPY, remoteMode } from './nano/remoteMode';
 
 export type PipelineSection = 'systems' | 'runs' | 'schedules' | 'agents' | 'teams' | 'pipelines';
-export type SettingsSection = 'general' | 'nano' | 'harnesses' | 'extensions' | 'projects' | 'worktrees' | 'background' | 'macros' | 'dictation' | 'shortcuts' | 'about' | 'plugins';
+export type SettingsSection = 'general' | 'nano' | 'harnesses' | 'extensions' | 'projects' | 'worktrees' | 'background' | 'notifications' | 'macros' | 'dictation' | 'shortcuts' | 'about' | 'plugins';
 
 export type Route =
   | { name: 'home' }
@@ -136,7 +137,7 @@ function refuseRemote(): void {
 }
 
 const PIPELINE_SECTIONS: readonly PipelineSection[] = ['systems', 'runs', 'schedules', 'agents', 'teams', 'pipelines'];
-const SETTINGS_SECTIONS: readonly SettingsSection[] = ['general', 'nano', 'harnesses', 'extensions', 'projects', 'worktrees', 'background', 'macros', 'dictation', 'shortcuts', 'about', 'plugins'];
+const SETTINGS_SECTIONS: readonly SettingsSection[] = ['general', 'nano', 'harnesses', 'extensions', 'projects', 'worktrees', 'background', 'notifications', 'macros', 'dictation', 'shortcuts', 'about', 'plugins'];
 
 function isRoute(value: unknown): value is Route {
   if (typeof value !== 'object' || value === null || !('name' in value)) return false;
@@ -188,6 +189,10 @@ export class WorkspaceStore {
   selectedWorkspaceId = $state('');
   sessionLoading = $state(false);
   sessionError = $state<string>();
+  /** Chats shown beside the selected one (split panes); set by the workbench. */
+  shownSessions = $state.raw<ReadonlySet<string>>(new Set());
+  paneLoading = $state.raw<ReadonlySet<string>>(new Set());
+  paneErrors = $state.raw<Readonly<Record<string, string>>>({});
   drafts = $state.raw<Record<string, string>>({});
   /** Pending composer images per draft key (session id or the new-chat key). */
   attachmentDrafts = $state.raw<Record<string, ComposerImage[]>>({});
@@ -607,16 +612,14 @@ export class WorkspaceStore {
       receivedRevision = snapshot.revision;
       this.storeSnapshot(snapshot, allowClosedReopen);
     } catch (error) {
-      if (this.selectedSessionId === sessionId) this.sessionError = errorMessage(error);
+      this.reportSessionError(sessionId, errorMessage(error));
     } finally {
       this.reconciling.delete(sessionId);
       if (this.reconcileAgain.has(sessionId)) {
         this.reconcileAgain.delete(sessionId);
         const reopen = this.reopenReconcile.delete(sessionId);
         if (reopen || receivedRevision > beforeRevision) void this.reconcileSession(sessionId, reopen);
-        else if (this.selectedSessionId === sessionId) {
-          this.sessionError = 'Session events changed while reconnecting. Check status to refresh from the host.';
-        }
+        else this.reportSessionError(sessionId, 'Session events changed while reconnecting. Check status to refresh from the host.');
       }
     }
   }
@@ -649,9 +652,7 @@ export class WorkspaceStore {
       if (result.type === 'applied') {
         snapshots = { ...snapshots, [incoming.sessionId]: result.snapshot };
         if (incoming.event.type === 'session') catalog = mergeCatalogSession(catalog, result.snapshot.session);
-        if (incoming.event.type === 'error' && incoming.sessionId === this.selectedSessionId) {
-          this.sessionError = incoming.event.message;
-        }
+        if (incoming.event.type === 'error') this.reportSessionError(incoming.sessionId, incoming.event.message);
         changed = true;
       } else if (result.type === 'gap') {
         this.queuePending(incoming);
@@ -703,6 +704,83 @@ export class WorkspaceStore {
     }
   }
 
+  setShownSessions(ids: readonly string[]): void {
+    const current = this.shownSessions;
+    if (current.size === ids.length && ids.every((id) => current.has(id))) return;
+    const next = new Set(ids);
+    this.shownSessions = next;
+    const kept = Object.entries(this.paneErrors).filter(([id]) => next.has(id));
+    if (kept.length !== Object.keys(this.paneErrors).length) this.paneErrors = Object.fromEntries(kept);
+  }
+
+  loadingFor(sessionId: string): boolean {
+    return sessionId === this.selectedSessionId ? this.sessionLoading : this.paneLoading.has(sessionId);
+  }
+
+  errorFor(sessionId: string): string | undefined {
+    return sessionId === this.selectedSessionId ? this.sessionError : this.paneErrors[sessionId];
+  }
+
+  /** The selected chat shows its error in the header banner; a chat in a pane keeps its own. */
+  private reportSessionError(sessionId: string, message: string): void {
+    if (this.selectedSessionId === sessionId) this.sessionError = message;
+    else if (this.shownSessions.has(sessionId)) this.paneErrors = { ...this.paneErrors, [sessionId]: message };
+  }
+
+  private forgetPaneError(sessionId: string): void {
+    if (!(sessionId in this.paneErrors)) return;
+    const { [sessionId]: _error, ...rest } = this.paneErrors;
+    this.paneErrors = rest;
+  }
+
+  /** Selects a chat that is already loaded and on screen: no host request. */
+  focusSession(sessionId: string): void {
+    if (sessionId === this.selectedSessionId) return;
+    if (!this.snapshots[sessionId]) {
+      void this.openSession(sessionId);
+      return;
+    }
+    this.guard(() => {
+      const session = this.catalog.sessions.find((item) => item.id === sessionId);
+      if (session) this.selectWorkspace(session.workspaceId);
+      // The chat being left stays on screen, so its error moves to its pane.
+      const leaving = this.selectedSessionId;
+      if (leaving && this.sessionError && this.shownSessions.has(sessionId)) {
+        this.paneErrors = { ...this.paneErrors, [leaving]: this.sessionError };
+      }
+      this.sessionError = this.paneErrors[sessionId];
+      this.forgetPaneError(sessionId);
+      this.sessionRequest++;
+      this.sessionLoading = false;
+      this.route = { name: 'chat', sessionId };
+      writeJson(ROUTE_KEY, this.route);
+    });
+  }
+
+  /** Loads a chat for a pane without selecting it: same host calls as openSession, own loading and error. */
+  async showSession(sessionId: string): Promise<void> {
+    if (sessionId === this.selectedSessionId || this.paneLoading.has(sessionId)) return;
+    this.paneLoading = new Set(this.paneLoading).add(sessionId);
+    this.forgetPaneError(sessionId);
+    try {
+      const session = this.catalog.sessions.find((item) => item.id === sessionId);
+      if (this.catalog.safeMode || session?.runId) {
+        await this.reconcileSession(sessionId);
+        return;
+      }
+      const result = await workspaceHost.request({ type: 'openSession', sessionId });
+      if (this.disposed) return;
+      if (result.type === 'session') this.storeSnapshot(result.snapshot, true);
+      else if (result.type === 'accepted') await this.reconcileSession(sessionId, true);
+    } catch (error) {
+      if (!this.disposed) this.reportSessionError(sessionId, errorMessage(error));
+    } finally {
+      const next = new Set(this.paneLoading);
+      next.delete(sessionId);
+      this.paneLoading = next;
+    }
+  }
+
   /**
    * Creates a native session and queues the first message through the durable
    * composer outbox, so the prompt is delivered once the harness is idle.
@@ -732,6 +810,7 @@ export class WorkspaceStore {
       ...(title ? { title } : {}),
       ...(placement.worktree ? { worktree: placement.worktree } : {}),
       ...(placement.continuedFrom ? { continuedFrom: placement.continuedFrom } : {}),
+      ...(placement.branch ? { branch: placement.branch } : {}),
     });
     if (result.type !== 'created') throw new WorkspaceOperationError('CONFLICT', 'The host returned an unexpected create-session result.');
     placements.put(result.placement);
@@ -868,6 +947,24 @@ export class WorkspaceStore {
     }
   }
 
+  /** Renames a chat from the list. Returns the error text instead of writing `sessionError`, which belongs to the selected chat. */
+  async renameChat(sessionId: string, title: string): Promise<string | undefined> {
+    const trimmed = title.trim();
+    if (!trimmed) return 'Enter a chat title.';
+    if (this.sessionActionBusy) return 'Another chat action is still in progress. Try again in a moment.';
+    this.sessionActionBusy = true;
+    try {
+      const result = await workspaceHost.request({ type: 'renameSession', sessionId, title: trimmed });
+      if (result.type === 'session') this.storeSnapshot(result.snapshot);
+      else if (result.type === 'accepted') await this.reconcileSession(sessionId);
+      return undefined;
+    } catch (error) {
+      return errorMessage(error);
+    } finally {
+      this.sessionActionBusy = false;
+    }
+  }
+
   async close(sessionId: string): Promise<void> {
     if (this.sessionActionBusy) return;
     const closing = this.catalog.sessions.find((session) => session.id === sessionId);
@@ -907,10 +1004,12 @@ export class WorkspaceStore {
     refuseRemote();
     await deleteWorkspaceSession(sessionId);
     this.deleted.add(sessionId);
+    marks.forgetSession(sessionId);
     // A deleted lead takes its pair with it: its sidekick chats are asked about again.
     fusionMembership.forgetLead(sessionId);
     const { [sessionId]: _snapshot, ...snapshots } = this.snapshots;
     this.snapshots = snapshots;
+    this.forgetPaneError(sessionId);
     const { [sessionId]: _draft, ...drafts } = this.drafts;
     this.drafts = drafts;
     this.persistDraftsNow();
@@ -1006,6 +1105,7 @@ export class WorkspaceStore {
   async removeProject(workspaceId: string): Promise<void> {
     refuseRemote();
     await host.removeProject(workspaceId);
+    marks.forgetProject(workspaceId);
     const route = this.route;
     const affected =
       (route.name === 'chat' && this.catalog.sessions.find((session) => session.id === route.sessionId)?.workspaceId === workspaceId) ||

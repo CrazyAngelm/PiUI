@@ -23,6 +23,7 @@
   import { chatPipelines, type ChatPipelineDetail } from '../chatPipelines/chatPipelines.svelte';
   import AttachButton from './composer/AttachButton.svelte';
   import DictateButton from '../nano/DictateButton.svelte';
+  import DictationPending from '../nano/DictationPending.svelte';
   import { insertAtCaret } from '../nano/dictation';
   import AttachmentChips from './composer/AttachmentChips.svelte';
   import AttachmentNotices from './composer/AttachmentNotices.svelte';
@@ -42,6 +43,9 @@
   import { rankTeammates } from '../team/handle';
   import { teammates } from '../team/teammatesStore.svelte';
   import { remoteMode } from '../nano/remoteMode';
+  import { btwQuestion, startBranch } from '../branch/branchChat';
+  import { announceBranch } from '../branch/branchFeedback';
+  import { useWorkspace } from '../shell/context';
 
   interface Props {
     snapshot: SessionSnapshot;
@@ -55,8 +59,12 @@
     interruptBusy?: boolean;
     safeMode?: boolean;
     onEditMacro?: (macroId: string) => void;
+    /** False in a split pane that is not the selected chat: it takes neither focus on open nor dropped files. */
+    active?: boolean;
   }
-  let { snapshot, draft, updateDraft, images = [], updateImages = () => undefined, refresh, interrupt, interruptBusy = false, safeMode = false, onEditMacro }: Props = $props();
+  let { snapshot, draft, updateDraft, images = [], updateImages = () => undefined, refresh, interrupt, interruptBusy = false, safeMode = false, onEditMacro, active = true }: Props = $props();
+
+  const store = useWorkspace();
 
   interface Pending {
     id: string;
@@ -103,6 +111,8 @@
     { name: 'stop', description: 'Stop the current turn', enabled: running },
     // Pipelines run on the desktop's screen; a remote browser has no `/run`.
     ...(remoteMode ? [] : [{ name: 'run', description: 'Run a saved pipeline of this project', enabled: true }]),
+    // A branch is made by the desktop host; a remote browser has no `/btw`.
+    ...(remoteMode ? [] : [{ name: 'btw', description: 'Ask a side question in a branch of this chat', enabled: !safeMode }]),
   ]);
   // A PiUI command wins over a native one of the same name: PiUI runs it on send.
   const nativeCommands = $derived(catalog.commands.filter((command) => !commands.some((own) => own.name === command.name)));
@@ -332,15 +342,18 @@
         void read();
       }
     });
-    // Files dropped on the desktop window belong to the desktop; a remote browser takes text only.
-    const unregister = remoteMode ? () => undefined : composerDropTargets.register((dropId) => void attachments.redeem(workspaceId, dropId, imageState));
-    queueMicrotask(() => input?.focus());
+    if (untrack(() => active)) queueMicrotask(() => input?.focus());
     return () => {
       disposed = true;
       unlisten?.();
-      unregister();
       fileMentions.dispose();
     };
+  });
+  // Files dropped on the desktop window belong to the desktop and go to the selected chat's composer only,
+  // not to every pane. A remote browser takes text only.
+  $effect(() => {
+    if (remoteMode || !active) return;
+    return composerDropTargets.register((dropId) => void attachments.redeem(workspaceId, dropId, imageState));
   });
 
   async function action(command: ComposerCommand): Promise<boolean> {
@@ -385,7 +398,32 @@
     void place(next.text, next.caret);
   }
 
-  async function runCommand(name: string): Promise<void> {
+  /** `/btw`: a branch of this chat at its end, opened beside it; the question is the branch's first message. */
+  async function branchBeside(question: string): Promise<boolean> {
+    if (busy) return false;
+    // A side question carries text only: the text and the attachments stay where they are.
+    if (attachments.images.length) {
+      error = 'A side question carries text only. Remove the attachments or send them in this chat.';
+      return false;
+    }
+    busy = true;
+    error = '';
+    try {
+      const result = await startBranch(store, snapshot, { at: 'end' }, { ...(question ? { prompt: question } : {}), open: 'beside', translate: $t });
+      if (!result.ok) {
+        error = result.error;
+        return false;
+      }
+      // The branch exists with the question as its draft: nothing is lost.
+      if (result.error) error = result.error;
+      announceBranch(result, $t, (id) => void store.openSession(id));
+      return true;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function runCommand(name: string, argument: string | undefined = undefined): Promise<void> {
     const command = commands.find((item) => item.name === name);
     if (!command || !command.enabled) {
       error = 'This command is unavailable in the current session state.';
@@ -395,6 +433,8 @@
       // Opens the run dialog; nothing is sent to the chat.
       runLauncher.open(snapshot.session.workspaceId, sessionId);
       setText('');
+    } else if (name === 'btw') {
+      if (await branchBeside(argument ?? '')) setText('');
     } else if (name === 'stop') {
       if (await interrupt()) setText('');
     } else if (await action({ type: 'compact', sessionId })) {
@@ -443,6 +483,12 @@
 
   async function send(): Promise<void> {
     if (busy || !text.trim() || !composer) return;
+    // `/btw` also takes a question after it; the other commands are the whole message.
+    const question = commands.some((command) => command.name === 'btw') ? btwQuestion(text) : undefined;
+    if (question !== undefined) {
+      await runCommand('btw', question);
+      return;
+    }
     if (commands.some((command) => text.trim() === `/${command.name}`)) {
       await runCommand(text.trim().slice(1));
       return;
@@ -640,7 +686,7 @@
     class="composer"
     data-nano-composer="surface"
     class:composer--running={running}
-    class:composer--drop={htmlDragging || composerDropTargets.dragging}
+    class:composer--drop={htmlDragging || (active && composerDropTargets.dragging)}
     ondragover={(event) => {
       if (!carriesFiles(event)) return;
       event.preventDefault();
@@ -703,12 +749,15 @@
         <MacroLayer {input} {text} tokens={macroTokens} syntax={skillSyntax} quiet={Boolean(menu)} onEdit={onEditMacro ? (macro) => onEditMacro(macro.id) : undefined} />
       {/if}
     </div>
+    {#if !remoteMode}
+      <DictationPending scope={`chat:${sessionId}`} onText={dictated} disabled={busy || safeMode} />
+    {/if}
     <div data-nano-composer="bar">
       <div class="composer__left">
         <!-- Attachments, dictation and pipelines need this computer's files, microphone and library: not offered to a remote browser. -->
         {#if !remoteMode}
           <AttachButton images={imageState} busy={attachments.busy} disabled={busy || Boolean(pipelineId)} onPick={() => void attachments.pick(workspaceId, imageState)} />
-          <DictateButton onText={dictated} disabled={busy || safeMode} />
+          <DictateButton onText={dictated} scope={`chat:${sessionId}`} disabled={busy || safeMode} />
           <ExecutorPicker
             {workspaceId}
             value={executor}
@@ -754,7 +803,7 @@
         </button>
       </div>
     </div>
-    {#if htmlDragging || composerDropTargets.dragging}
+    {#if htmlDragging || (active && composerDropTargets.dragging)}
       <div class="composer__drop" aria-hidden="true">{$t('Drop images or files to attach')}</div>
     {/if}
   </div>

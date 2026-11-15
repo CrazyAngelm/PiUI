@@ -25,6 +25,8 @@ export const SESSION_TOOL_ERROR_COPY: Readonly<Record<string, string>> = {
   GIT_FAILED: 'Git could not complete the operation.',
   TRASH_UNAVAILABLE: 'This system has no trash Nano Desktop can use. The file was not changed.',
   TRASH_FAILED: 'The file could not be moved to the trash and was left in place.',
+  BRANCH_UNSUPPORTED: 'This chat cannot be branched natively.',
+  BRANCH_POINT_NOT_FOUND: 'That message is no longer in this chat. Refresh and try again.',
   WORKTREE_REMOVED: "This chat's worktree was removed. Its history stays readable; start a new chat to keep working.",
   WORKTREE_UNAVAILABLE: "This chat's worktree folder is missing or no longer belongs to the project's repository.",
   SESSION_ALREADY_ACTIVE: 'This session was written moments ago and may still be open in the Pi terminal app. Close it there, then try again.',

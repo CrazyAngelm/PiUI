@@ -26,7 +26,7 @@ async function html(settings: DictationSettingsV1, canDictate: boolean): Promise
   const source = new DictationSource({ settings: async () => settings }, { canDictate, dictationMaxBytes: 5_000_000 });
   await source.start();
   const children = createRawSnippet(() => ({
-    render: () => `<div>${render(DictateButton, { props: { onText: () => undefined, source }, context: getAllContexts() }).body}</div>`,
+    render: () => `<div>${render(DictateButton, { props: { onText: () => undefined, scope: 'chat:test', source }, context: getAllContexts() }).body}</div>`,
   }));
   return render(Tooltip.Provider, { props: { children } }).body;
 }

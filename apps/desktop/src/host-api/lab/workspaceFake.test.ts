@@ -9,6 +9,7 @@ import type {
   HarnessKind, HarnessModelsResult, RuntimeSettings, SessionSnapshot, WorkspaceEvent, WorkspaceHistoryResultV1, WorkspaceResult,
 } from './labContracts';
 import type { LabHost } from './labHost';
+import { LabSessions } from './sessionRuntime';
 import { consecutive, labHost, record, rejection, settle, untilStreaming } from './labTestKit';
 
 const EVENTS = 'piui://workspace-event';
@@ -240,6 +241,62 @@ describe('UI Lab workspace host', () => {
     expect(consecutive(streamed, id, (streamed[0]?.revision ?? 1) - 1)).toBe(true);
     expect(streamed.some((event) => event.event.type === 'textDelta')).toBe(true);
     expect((await snapshot(host, id)).session.status).toBe('running');
+  });
+
+  it.each(['ordinary chat', 'run member'] as const)('renames a closed %s through metadata and publishes the new title without opening a runtime', async (kind) => {
+    const host = labHost();
+    const selected = kind === 'ordinary chat'
+      ? host.state.sessions.get(sessionId(host, 'Plan a weekend in Lisbon'))
+      : [...host.state.sessions.values()].find((candidate) => candidate.runId !== undefined && candidate.live === undefined);
+    if (selected === undefined) throw new Error(`No closed ${kind} fixture`);
+    expect(selected.live).toBeUndefined();
+    const before = { revision: selected.revision, turnSerial: selected.turnSerial, blocks: selected.blocks, runId: selected.runId, memberId: selected.memberId, profileId: selected.profileId };
+    const events = await record<WorkspaceEvent>(host, EVENTS);
+    const open = vi.spyOn(LabSessions.prototype, 'open');
+    try {
+      expect(await command(host, { type: 'renameSession', sessionId: selected.id, title: '  A renamed closed chat  ' }))
+        .toEqual({ type: 'accepted', sessionId: selected.id });
+      expect(selected).toMatchObject({ title: 'A renamed closed chat', revision: before.revision + 1, turnSerial: before.turnSerial });
+      expect(selected.live).toBeUndefined();
+      expect(selected.blocks).toBe(before.blocks);
+      expect({ runId: selected.runId, memberId: selected.memberId, profileId: selected.profileId })
+        .toEqual({ runId: before.runId, memberId: before.memberId, profileId: before.profileId });
+      const catalog = await command(host, { type: 'catalog' });
+      if (catalog.type !== 'catalog') throw new Error('Expected the catalog');
+      expect(catalog.catalog.sessions.find((candidate) => candidate.id === selected.id))
+        .toMatchObject({ title: 'A renamed closed chat', status: 'closed', updatedAt: selected.updatedAt });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events.items.filter((event) => event.sessionId === selected.id)).toEqual([
+        expect.objectContaining({ sessionId: selected.id, revision: before.revision + 1, event: { type: 'session', session: expect.objectContaining({ title: 'A renamed closed chat', status: 'closed', updatedAt: selected.updatedAt }) } }),
+      ]);
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+      events.stop();
+    }
+  });
+
+  it('refuses invalid closed-chat titles and keeps rename authorization and live failure behavior', async () => {
+    const host = labHost();
+    const id = sessionId(host, 'Plan a weekend in Lisbon');
+    const selected = host.state.sessions.get(id)!;
+    const before = { title: selected.title, revision: selected.revision };
+    for (const title of ['', '   ', 'Bad\nname', 'Bad\u0000name']) {
+      expect(await rejection(command(host, { type: 'renameSession', sessionId: id, title }))).toMatchObject({ code: 'INVALID_ARGUMENT' });
+    }
+    expect(selected).toMatchObject(before);
+    expect(selected.live).toBeUndefined();
+    const untrusted = sessionId(host, 'Audit legacy auth module');
+    expect(await rejection(command(host, { type: 'renameSession', sessionId: untrusted, title: 'A valid title' }))).toMatchObject({ code: 'NOT_TRUSTED' });
+    const failed = [...host.state.sessions.values()].find((candidate) => candidate.live?.status === 'failed');
+    if (failed === undefined) throw new Error('No failed live fixture');
+    const failedTitle = failed.title;
+    expect(await rejection(command(host, { type: 'renameSession', sessionId: failed.id, title: 'A valid title' }))).toMatchObject({ code: 'RUNTIME_FAILED' });
+    expect(failed.title).toBe(failedTitle);
+    const safe = labHost('safe');
+    const safeId = sessionId(safe, 'Plan a weekend in Lisbon');
+    expect(await rejection(command(safe, { type: 'renameSession', sessionId: safeId, title: 'A valid title' }))).toMatchObject({ code: 'SAFE_MODE' });
+    expect(safe.state.sessions.get(safeId)?.live).toBeUndefined();
   });
 
   it('opens and closes native runtimes with the host revision watermark', async () => {

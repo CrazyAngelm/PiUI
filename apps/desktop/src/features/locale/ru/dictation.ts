@@ -1,8 +1,8 @@
 export const dictationRu: Readonly<Record<string, string>> = {
   'Dictation': 'Диктовка',
   'Safe mode is on: dictation is off.': 'Безопасный режим включён: диктовка отключена.',
-  'Choose what turns your speech into text in the message box. A recording goes only to the service you choose and is not kept.':
-    'Выберите, что превращает речь в текст в поле сообщения. Запись уходит только в выбранный сервис и не сохраняется.',
+  'Choose what turns your speech into text in the message box. A recording goes only to the service you choose. One that could not be sent stays on this computer for up to 24 hours, until you send, save or delete it.':
+    'Выберите, что превращает речь в текст в поле сообщения. Запись уходит только в выбранный сервис. Неотправленная запись остаётся на этом компьютере до 24 часов, пока вы не отправите, не сохраните или не удалите её.',
   'Speech to text': 'Распознавание речи',
   'Nano subscription': 'Подписка Nano',
   'Nano subscription (sign in required)': 'Подписка Nano (нужен вход)',
@@ -33,4 +33,15 @@ export const dictationRu: Readonly<Record<string, string>> = {
     'Не удалось связаться с сервисом распознавания. Проверьте соединение и адрес.',
   'The speech service sent an answer Nano Desktop could not read.': 'Сервис распознавания прислал ответ, который Nano Desktop не смог прочитать.',
   'Dictation could not be completed.': 'Не удалось выполнить диктовку.',
+  'Recording limit reached.': 'Достигнут предел длины записи.',
+  'Send, save or delete the previous recording first.': 'Сначала отправьте, сохраните или удалите предыдущую запись.',
+  'Unsent recording': 'Неотправленная запись',
+  'Recording {0} was not transcribed': 'Запись {0} не расшифрована',
+  'Recording {0} was not sent': 'Запись {0} не отправлена',
+  'Recording {0} was too large to send': 'Запись {0} слишком велика для отправки',
+  'Kept only until the app closes': 'Сохранится только до закрытия приложения',
+  'Save audio': 'Сохранить аудио',
+  'Confirm delete': 'Подтвердить удаление',
+  'Audio saved.': 'Аудио сохранено.',
+  'Could not save the audio.': 'Не удалось сохранить аудио.',
 };

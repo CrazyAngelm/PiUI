@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionSnapshot, WorkspaceEvent } from '../../../../../contracts/workspace-v15';
-import { boardToolNotice, sessionNotices, sidekickToolNotice, withNotice } from './sessionNotices';
+import { boardToolNotice, sessionNotices, sessionsToolNotice, sidekickToolNotice, withNotice } from './sessionNotices';
 import { applyWorkspaceEvent } from './workspaceState';
 
 function snapshot(extra: Record<string, unknown> = {}): SessionSnapshot {
@@ -32,18 +32,20 @@ describe('session notices', () => {
       .toEqual(['unsupported-board-tool-resume']);
     expect(sessionNotices(snapshot({ notices: ['settings-not-restored', 'settings-not-remembered'] })))
       .toEqual(['settings-not-restored', 'settings-not-remembered']);
+    expect(sessionNotices(snapshot({ notices: ['unsupported-sessions-tool', 'unsupported-sessions-tool-resume', 'unsupported-sessions-tool'] })))
+      .toEqual(['unsupported-sessions-tool', 'unsupported-sessions-tool-resume']);
   });
 
-  it('applies a notice event without touching the transcript', () => {
+  it.each(['unsupported-board-tool', 'unsupported-sessions-tool', 'unsupported-sessions-tool-resume'] as const)('applies %s without touching the transcript', (code) => {
     const current = snapshot();
-    const incoming = { protocol: 15, sessionId: 'session-a', revision: 5, event: { type: 'notice', code: 'unsupported-board-tool' } } as unknown as WorkspaceEvent;
+    const incoming = { protocol: 15, sessionId: 'session-a', revision: 5, event: { type: 'notice', code } } as unknown as WorkspaceEvent;
     const result = applyWorkspaceEvent(current, incoming);
     expect(result.type).toBe('applied');
     expect(result.snapshot.revision).toBe(5);
     expect(result.snapshot.blocks).toBe(current.blocks);
-    expect(sessionNotices(result.snapshot)).toEqual(['unsupported-board-tool']);
+    expect(sessionNotices(result.snapshot)).toEqual([code]);
     // The same notice twice is kept once.
-    expect(withNotice(result.snapshot, 'unsupported-board-tool')).toBe(result.snapshot);
+    expect(withNotice(result.snapshot, code)).toBe(result.snapshot);
   });
 
   it('shows the board-tool notice for reported codes and for Pi and Nano chats', () => {
@@ -55,5 +57,15 @@ describe('session notices', () => {
     expect(boardToolNotice('codex', ['unsupported-sidekick-tool'])).toBeUndefined();
     expect(sidekickToolNotice(['unsupported-sidekick-tool', 'unsupported-sidekick-tool-resume'])).toBe('unsupported-sidekick-tool-resume');
     expect(sidekickToolNotice(['unsupported-board-tool'])).toBeUndefined();
+  });
+
+  it('selects linked-chat notices with resume first and a generic fallback for Pi and Nano', () => {
+    expect(sessionsToolNotice('codex', [])).toBeUndefined();
+    expect(sessionsToolNotice('claude-code', ['unsupported-sessions-tool'])).toBe('unsupported-sessions-tool');
+    expect(sessionsToolNotice('codex', ['unsupported-sessions-tool', 'unsupported-sessions-tool-resume'])).toBe('unsupported-sessions-tool-resume');
+    expect(sessionsToolNotice('pi', [])).toBe('unsupported-sessions-tool');
+    expect(sessionsToolNotice('nano', [])).toBe('unsupported-sessions-tool');
+    expect(sessionsToolNotice('pi', ['unsupported-sessions-tool-resume'])).toBe('unsupported-sessions-tool-resume');
+    expect(sessionsToolNotice('codex', ['unsupported-board-tool', 'unsupported-sidekick-tool'])).toBeUndefined();
   });
 });

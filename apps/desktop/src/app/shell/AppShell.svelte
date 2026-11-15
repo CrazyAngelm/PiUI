@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Tooltip as TooltipPrimitive } from 'bits-ui';
-  import { onMount, untrack } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import Menu from '@lucide/svelte/icons/menu';
   import { t } from '../../features/locale/language';
   import type { WorkspaceSummary } from '../../../../../contracts/workspace-v15';
@@ -12,6 +12,7 @@
   import { lazyViews, type LazyView } from './lazyViews.svelte';
   import { EmptyState, Skeleton } from '../../lib/ui';
   import { provideWorkspace } from './context';
+  import { marks } from '../marks/marks.svelte';
   import { runLauncher } from '../triggers/runLauncher.svelte';
   import { syncTrayLabels } from '../settings/trayLabels';
   import { scheduleUpdateNotices } from '../settings/updateNoticeLoader';
@@ -38,6 +39,48 @@
   let deleteBusy = $state(false);
   // Plugin status items and keybindings: their own chunk, after first paint.
   let PluginShell = $state<typeof import('../plugins/PluginShellContributions.svelte').default | undefined>();
+  // Sounds and the taskbar badge (ADR-065): their own chunk, after first paint.
+  let AttentionController = $state<typeof import('../attention/AttentionController.svelte').default | undefined>();
+  // Dots for chats that wait to be seen (ADR-065): the store arrives with the controller's chunk.
+  let attentionKind = $state.raw<((id: string) => string | undefined) | undefined>(undefined);
+  // Linked chats (ADR-069): the store arrives in its own chunk after first paint.
+  let linkParentOf = $state.raw<((id: string) => string | undefined) | undefined>(undefined);
+  let linkLoad = $state.raw<((id: string) => void) | undefined>(undefined);
+  // The sidebar can be hidden (a person's choice, remembered); a narrow window keeps its drawer.
+  let sidebarCollapsed = $state(readSidebar());
+
+  function readSidebar(): boolean {
+    try {
+      return localStorage.getItem('piui.shell.sidebar') === 'collapsed';
+    } catch {
+      return false;
+    }
+  }
+  function toggleSidebar(): void {
+    const active = document.activeElement;
+    sidebarCollapsed = !sidebarCollapsed;
+    if (sidebarCollapsed) {
+      // Focus inside the hidden sidebar would be lost; focus elsewhere (the composer) stays put.
+      if (active && document.querySelector('.sidebar-slot')?.contains(active)) document.getElementById('main')?.focus();
+    } else if (active?.closest('.rail')) {
+      // The rail's "Show sidebar" button is gone now; focus would fall to <body>.
+      void tick().then(() => document.querySelector<HTMLElement>('.sidebar-slot [data-sidebar-hide]')?.focus());
+    }
+    try {
+      localStorage.setItem('piui.shell.sidebar', sidebarCollapsed ? 'collapsed' : 'open');
+    } catch {
+      // Optional UI preference.
+    }
+  }
+  /** Split panes live in their own chunk (ADR-068). */
+  function openBeside(id: string): void {
+    void import('./panes/workbench.svelte')
+      .then(({ workbench }) => {
+        if (workbench.openBeside(id)) void store.openSession(id);
+        else if (workbench.full) toasts.error($t('Four chats are on screen. Close one first.'));
+      })
+      .catch(() => undefined);
+  }
 
   const deleteSession = $derived(store.catalog.sessions.find((session) => session.id === deleteTarget));
 
@@ -102,6 +145,10 @@
   $effect(() => {
     if (paletteOpen) void lazyViews.load('palette');
   });
+  // Chat tabs sit above the home composer and the chats.
+  $effect(() => {
+    if (store.route.name === 'home' || store.route.name === 'chat') void lazyViews.load('tabs');
+  });
   // A chunk that failed to load (a stale or interrupted fetch) is requested again on demand.
   let retryingView = $state(false);
   async function retryView(): Promise<void> {
@@ -116,6 +163,11 @@
   }
 
   onMount(() => {
+    // Marks of chats and projects that are gone may only be pruned once the catalog is known.
+    marks.liveIds = () =>
+      store.catalog.workspaces.length === 0
+        ? undefined
+        : { projects: new Set(store.catalog.workspaces.map((item) => item.id)), sessions: new Set(store.catalog.sessions.map((item) => item.id)) };
     void store.start();
     lazyViews.prefetch();
     // A remote browser has no updater: update notices, plugins and the plugin theme stay out of it.
@@ -128,6 +180,12 @@
     if (!remoteMode) setTimeout(() => {
       void import('../plugins/pluginTheme.svelte').then((module) => module.startPluginTheme()).catch(() => undefined);
       void import('../plugins/PluginShellContributions.svelte').then((module) => (PluginShell = module.default)).catch(() => undefined);
+      void import('../attention/AttentionController.svelte').then((module) => (AttentionController = module.default)).catch(() => undefined);
+      void import('../attention/attention.svelte').then((module) => (attentionKind = (id) => module.attention.kind(id))).catch(() => undefined);
+      void import('../links/sessionLinks.svelte').then((module) => {
+        linkParentOf = (id) => module.sessionLinks.parentOf(id);
+        linkLoad = (id) => void module.sessionLinks.load(id);
+      }).catch(() => undefined);
     }, 800);
     const query = window.matchMedia('(max-width: 760px)');
     const update = () => (narrow = query.matches);
@@ -157,6 +215,9 @@
     } else if (!remoteMode && matchesShortcut(event, 'Mod+,')) {
       event.preventDefault();
       store.navigate({ name: 'settings', section: 'general' });
+    } else if (!narrow && matchesShortcut(event, 'Mod+B')) {
+      event.preventDefault();
+      toggleSidebar();
     } else if (matchesShortcut(event, 'Mod+Shift+I')) {
       event.preventDefault();
       store.navigate({ name: 'inbox' });
@@ -219,7 +280,7 @@
 <svelte:window onkeydown={keydown} />
 
 <TooltipPrimitive.Provider delayDuration={450} skipDelayDuration={150}>
-  <div class="app" class:app--narrow={narrow}>
+  <div class="app" class:app--narrow={narrow} class:app--no-sidebar={!narrow && sidebarCollapsed}>
     <a class="skip-link" href="#main">{$t('Skip to main content')}</a>
     {#if store.safeMode}
       <div class="safe-mode" role="status">{$t('Safe mode: history is read-only and agents are not started.')}</div>
@@ -231,10 +292,19 @@
       </div>
     {/if}
     <div class="frame">
-      <NavRail onSearch={() => (paletteOpen = true)} onNavigate={() => (drawerOpen = false)} />
-      {#if !narrow || drawerOpen}
+      <NavRail onSearch={() => (paletteOpen = true)} onNavigate={() => (drawerOpen = false)} sidebarHidden={!narrow && sidebarCollapsed} onShowSidebar={toggleSidebar} />
+      {#if narrow ? drawerOpen : !sidebarCollapsed}
         <div class="sidebar-slot" class:sidebar-slot--drawer={narrow}>
-          <Sidebar onTrust={openTrust} onNavigate={() => (drawerOpen = false)} />
+          <Sidebar
+            onTrust={openTrust}
+            onNavigate={() => (drawerOpen = false)}
+            onDeleteSession={(id) => (deleteTarget = id)}
+            onCollapse={narrow ? undefined : toggleSidebar}
+            onOpenBeside={narrow ? undefined : openBeside}
+            {attentionKind}
+            {linkParentOf}
+            {linkLoad}
+          />
         </div>
         {#if narrow}
           <button type="button" class="scrim" aria-label={$t('Close navigation')} onclick={() => (drawerOpen = false)}></button>
@@ -257,6 +327,10 @@
             <Button size="sm" variant="ghost" onclick={() => void store.retryCatalog()}>{$t('Retry')}</Button>
           </div>
         {/if}
+        {#if (store.route.name === 'home' || store.route.name === 'chat') && lazyViews.loaded.tabs}
+          {@const TabStrip = lazyViews.loaded.tabs}
+          <TabStrip />
+        {/if}
         <div class="view">
           {#if store.route.name === 'home'}
             <HomeView onTrust={openTrust} />
@@ -267,10 +341,8 @@
               {/snippet}
             </EmptyState>
           {:else if store.route.name === 'chat' && lazyViews.loaded.chat}
-            {@const ChatView = lazyViews.loaded.chat}
-            {#key store.route.sessionId}
-              <ChatView sessionId={store.route.sessionId} onDelete={(id) => (deleteTarget = id)} />
-            {/key}
+            {@const ChatWorkbench = lazyViews.loaded.chat}
+            <ChatWorkbench onDelete={(id) => (deleteTarget = id)} />
           {:else if store.route.name === 'inbox' && lazyViews.loaded.inbox}
             {@const InboxView = lazyViews.loaded.inbox}
             <InboxView />
@@ -300,6 +372,7 @@
       </main>
     </div>
     {#if PluginShell}<PluginShell />{/if}
+    {#if AttentionController}<AttentionController />{/if}
   </div>
 
   {#if lazyViews.loaded.palette}
@@ -375,7 +448,8 @@
     flex: 1;
     min-height: 0;
   }
-  .app--narrow .frame {
+  .app--narrow .frame,
+  .app--no-sidebar .frame {
     grid-template-columns: var(--piui-rail-width) minmax(0, 1fr);
   }
   .sidebar-slot {
