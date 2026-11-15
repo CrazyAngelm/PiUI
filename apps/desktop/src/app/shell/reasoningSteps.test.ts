@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { litFrontier, reasoningSteps, stepForKey, stepTone, sweepSlot, type StepTone } from './reasoningSteps';
+import { nearestStop, railPosition, railStops, RailGesture, reasoningSteps, stepForKey } from './reasoningSteps';
 
 const CODEX = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 
@@ -11,23 +11,22 @@ describe('reasoningSteps', () => {
     expect(reasoningSteps(CODEX, false).map((step) => step.value)).toEqual(CODEX);
   });
 
-  it('ranks only the rising levels and spreads their rise from 0 to 1', () => {
-    const steps = reasoningSteps(CODEX, true);
-    expect(steps.map((step) => step.rank)).toEqual([-1, -1, 0, 1, 2, 3, 4]);
-    expect(steps.map((step) => step.rise)).toEqual([0, 0, 0, 0.25, 0.5, 0.75, 1]);
+  it('gives every level a slot on the rail and keeps Auto beside it', () => {
+    expect(reasoningSteps(CODEX, true).map((step) => step.slot)).toEqual([-1, 0, 1, 2, 3, 4, 5]);
+    expect(reasoningSteps(CODEX, false).map((step) => step.slot)).toEqual([0, 1, 2, 3, 4, 5]);
   });
 
   it('treats off and none as zero levels wherever the catalog lists them', () => {
     expect(reasoningSteps(['off', 'low', 'high'], false).map((step) => step.kind)).toEqual(['zero', 'level', 'level']);
-    expect(reasoningSteps(['low', 'None', 'high'], false).map((step) => [step.kind, step.rank])).toEqual([
+    expect(reasoningSteps(['low', 'None', 'high'], false).map((step) => [step.kind, step.slot])).toEqual([
       ['level', 0],
-      ['zero', -1],
-      ['level', 1],
+      ['zero', 1],
+      ['level', 2],
     ]);
   });
 
-  it('gives a single level the full rise', () => {
-    expect(reasoningSteps(['high'], false)).toEqual([{ value: 'high', kind: 'level', rank: 0, rise: 1 }]);
+  it('puts a single level on the first slot', () => {
+    expect(reasoningSteps(['high'], false)).toEqual([{ value: 'high', kind: 'level', slot: 0 }]);
   });
 
   it('offers no steps without levels, so Auto never stands alone', () => {
@@ -41,68 +40,46 @@ describe('reasoningSteps', () => {
   });
 });
 
-describe('stepTone', () => {
-  // 0 Auto, 1 none, 2 minimal, 3 low, 4 medium, 5 high, 6 xhigh
-  const steps = reasoningSteps(CODEX, true);
-  const tones = (active: number, peek = -1): StepTone[] => steps.map((_, index) => stepTone(steps, index, active, peek));
-
-  it('lights every bar up to the selected level and never the zero level below it', () => {
-    expect(tones(4)).toEqual(['off', 'off', 'lit', 'lit', 'lit', 'off', 'off']);
-    expect(tones(6)).toEqual(['off', 'off', 'lit', 'lit', 'lit', 'lit', 'lit']);
+describe('the rail', () => {
+  it('counts every step except Auto as a stop', () => {
+    expect(railStops(reasoningSteps(CODEX, true))).toBe(6);
+    expect(railStops(reasoningSteps(CODEX, false))).toBe(6);
+    expect(railStops(reasoningSteps([], true))).toBe(0);
   });
 
-  it('lights only its own step for Auto and for a zero level', () => {
-    expect(tones(0)).toEqual(['lit', 'off', 'off', 'off', 'off', 'off', 'off']);
-    expect(tones(1)).toEqual(['off', 'lit', 'off', 'off', 'off', 'off', 'off']);
+  it('spreads the slots from 0 at the first stop to 1 at the last', () => {
+    expect([0, 1, 2, 3, 4, 5].map((slot) => railPosition(slot, 6))).toEqual([0, 0.2, 0.4, 0.6, 0.8, 1]);
+    expect(railPosition(2, 3)).toBe(1);
   });
 
-  it('lights nothing without a selection', () => {
-    expect(tones(-1)).toEqual(['off', 'off', 'off', 'off', 'off', 'off', 'off']);
+  it('fills nothing for Auto, for the first stop and for a rail of one stop', () => {
+    expect(railPosition(-1, 6)).toBe(0);
+    expect(railPosition(0, 6)).toBe(0);
+    expect(railPosition(0, 1)).toBe(0);
+    expect(railPosition(3, 0)).toBe(0);
   });
 
-  it('previews a higher level as ghost bars above the selection', () => {
-    expect(tones(3, 5)).toEqual(['off', 'off', 'lit', 'lit', 'ghost', 'ghost', 'off']);
-    expect(tones(-1, 3)).toEqual(['off', 'off', 'ghost', 'ghost', 'off', 'off', 'off']);
-  });
-
-  it('previews a lower level by fading the bars that would go out', () => {
-    expect(tones(5, 3)).toEqual(['off', 'off', 'lit', 'lit', 'fade', 'fade', 'off']);
-    // Auto or a zero level would put every bar out.
-    expect(tones(5, 1)).toEqual(['off', 'ghost', 'fade', 'fade', 'fade', 'fade', 'off']);
-    expect(tones(5, 0)).toEqual(['ghost', 'off', 'fade', 'fade', 'fade', 'fade', 'off']);
-  });
-
-  it('keeps the selected Auto or zero step lit while a level is previewed', () => {
-    expect(tones(0, 3)).toEqual(['lit', 'off', 'ghost', 'ghost', 'off', 'off', 'off']);
-    expect(tones(1, 2)).toEqual(['off', 'lit', 'ghost', 'off', 'off', 'off', 'off']);
-  });
-
-  it('ignores a preview of the selected step and one outside the steps', () => {
-    expect(tones(4, 4)).toEqual(tones(4));
-    expect(tones(4, 99)).toEqual(tones(4));
-    expect(stepTone(steps, 99, 4, -1)).toBe('off');
+  it('never runs past the last stop', () => {
+    expect(railPosition(9, 6)).toBe(1);
   });
 });
 
-describe('the lighting sweep', () => {
-  const steps = reasoningSteps(CODEX, true);
+describe('nearestStop', () => {
+  const centers = [10, 50, 90];
 
-  it('finds the lit frontier of a selection', () => {
-    expect(litFrontier(steps, 5)).toBe(3);
-    expect(litFrontier(steps, 2)).toBe(0);
-    expect(litFrontier(steps, 0)).toBe(-1);
-    expect(litFrontier(steps, 1)).toBe(-1);
-    expect(litFrontier(steps, -1)).toBe(-1);
+  it('finds the centre closest to the pointer', () => {
+    expect(nearestStop(0, centers)).toBe(0);
+    expect(nearestStop(29, centers)).toBe(0);
+    expect(nearestStop(31, centers)).toBe(1);
+    expect(nearestStop(500, centers)).toBe(2);
   });
 
-  it('staggers only the bars above the previous frontier', () => {
-    expect([0, 1, 2, 3, 4].map((rank) => sweepSlot(rank, 1))).toEqual([0, 0, 0, 1, 2]);
-    // One step up never waits.
-    expect(sweepSlot(3, 2)).toBe(0);
+  it('keeps the earlier stop on a tie', () => {
+    expect(nearestStop(30, centers)).toBe(0);
   });
 
-  it('caps a long sweep at three slots', () => {
-    expect([0, 1, 2, 3, 4, 5, 6].map((rank) => sweepSlot(rank, -1))).toEqual([0, 1, 2, 3, 3, 3, 3]);
+  it('finds nothing without stops', () => {
+    expect(nearestStop(30, [])).toBe(-1);
   });
 });
 
@@ -125,5 +102,70 @@ describe('stepForKey', () => {
   it('leaves every other key alone', () => {
     for (const key of ['Enter', ' ', 'Tab', 'Escape', 'a', 'PageDown']) expect(stepForKey(key, 2, 7)).toBe(-1);
     expect(stepForKey('End', 0, 0)).toBe(-1);
+  });
+});
+
+describe('RailGesture', () => {
+  it('belongs to the pointer that pressed, so a second finger neither steers nor ends it', () => {
+    const gesture = new RailGesture();
+    expect(gesture.active).toBe(false);
+    expect(gesture.owns(7)).toBe(false);
+    gesture.begin(7, 2);
+    expect(gesture.active).toBe(true);
+    expect([gesture.owns(7), gesture.owns(8)]).toEqual([true, false]);
+    // The other pointer's release picks nothing and leaves the press running.
+    expect(gesture.release(8, 5)).toBe(-1);
+    expect(gesture.active).toBe(true);
+    expect(gesture.owns(7)).toBe(true);
+    expect(gesture.release(7, 5)).toBe(5);
+    expect(gesture.active).toBe(false);
+    expect(gesture.owns(7)).toBe(false);
+  });
+
+  it('picks nothing for a release on the stop the press began on, or over no stop', () => {
+    const gesture = new RailGesture();
+    gesture.begin(1, 3);
+    expect(gesture.release(1, 3)).toBe(-1);
+    expect(gesture.active).toBe(false);
+    gesture.begin(1, 3);
+    expect(gesture.release(1, -1)).toBe(-1);
+    // Neither was a slide, so the plain click that follows is not swallowed.
+    expect(gesture.swallowsClick(1)).toBe(false);
+  });
+
+  it('swallows the pointer click that trails a handled slide, once', () => {
+    const gesture = new RailGesture();
+    gesture.begin(1, 1);
+    expect(gesture.release(1, 4)).toBe(4);
+    expect(gesture.swallowsClick(1)).toBe(true);
+    expect(gesture.swallowsClick(1)).toBe(false);
+  });
+
+  it('never swallows a keyboard click, and a stale slide does not outlive it', () => {
+    const gesture = new RailGesture();
+    gesture.begin(1, 1);
+    expect(gesture.release(1, 4)).toBe(4);
+    // Enter and Space click with detail 0.
+    expect(gesture.swallowsClick(0)).toBe(false);
+    expect(gesture.swallowsClick(1)).toBe(false);
+  });
+
+  it('forgets a slide when the next press begins', () => {
+    const gesture = new RailGesture();
+    gesture.begin(1, 1);
+    gesture.release(1, 4);
+    gesture.begin(1, 2);
+    expect(gesture.swallowsClick(1)).toBe(false);
+  });
+
+  it('ends a press without picking and lets a later pointer press', () => {
+    const gesture = new RailGesture();
+    gesture.begin(5, 0);
+    gesture.end();
+    expect(gesture.active).toBe(false);
+    expect(gesture.owns(5)).toBe(false);
+    expect(gesture.release(5, 2)).toBe(-1);
+    gesture.begin(6, 1);
+    expect([gesture.owns(5), gesture.owns(6)]).toEqual([false, true]);
   });
 });

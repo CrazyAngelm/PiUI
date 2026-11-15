@@ -1,13 +1,10 @@
 /**
- * The reasoning control without its markup: the radios in display order, how
- * far each bar rises, how each one is drawn, and where a key moves the choice.
+ * The reasoning control without its markup: the radios in display order, where
+ * each one sits on the rail, and where a key or the pointer moves the choice.
  */
 
-/** Levels that switch reasoning off: a flat dash that a higher choice never lights. */
+/** Levels that switch reasoning off: a hollow stop instead of a tick. */
 const ZERO_LEVELS: ReadonlySet<string> = new Set(['off', 'none']);
-
-/** A long sweep staggers at most this many bars, so it ends within `--piui-duration`. */
-const SWEEP_SLOTS = 3;
 
 export type ReasoningStepKind = 'auto' | 'zero' | 'level';
 
@@ -15,14 +12,9 @@ export interface ReasoningStep {
   /** The level as the harness names it; '' is the native default ("Auto"). */
   value: string;
   kind: ReasoningStepKind;
-  /** Position among the rising levels, lowest first; -1 for Auto and zero levels. */
-  rank: number;
-  /** How far the bar rises: 0 for the lowest level, 1 for the highest; 0 for Auto and zero levels. */
-  rise: number;
+  /** Stop on the rail, the first one 0; -1 for Auto, which sits beside the rail. */
+  slot: number;
 }
-
-/** How a step is drawn. Picking the previewed step would turn a `ghost` on and a `fade` off. */
-export type StepTone = 'off' | 'ghost' | 'fade' | 'lit';
 
 function isZeroLevel(level: string): boolean {
   return ZERO_LEVELS.has(level.toLowerCase());
@@ -36,55 +28,102 @@ function isZeroLevel(level: string): boolean {
 export function reasoningSteps(levels: readonly string[], levelDefault: boolean): ReasoningStep[] {
   const values = [...new Set(levels)].filter((level) => level !== '');
   if (values.length === 0) return [];
-  const top = values.filter((level) => !isZeroLevel(level)).length - 1;
-  const steps: ReasoningStep[] = levelDefault ? [{ value: '', kind: 'auto', rank: -1, rise: 0 }] : [];
-  let rank = 0;
-  for (const value of values) {
-    if (isZeroLevel(value)) {
-      steps.push({ value, kind: 'zero', rank: -1, rise: 0 });
-    } else {
-      steps.push({ value, kind: 'level', rank, rise: top > 0 ? rank / top : 1 });
-      rank += 1;
-    }
-  }
+  const steps: ReasoningStep[] = levelDefault ? [{ value: '', kind: 'auto', slot: -1 }] : [];
+  values.forEach((value, slot) => {
+    steps.push({ value, kind: isZeroLevel(value) ? 'zero' : 'level', slot });
+  });
   return steps;
 }
 
-/** Rank of the highest lit bar; -1 when the selection lights none (Auto, a zero level, nothing). */
-export function litFrontier(steps: readonly ReasoningStep[], active: number): number {
-  const chosen: ReasoningStep | undefined = steps[active];
-  return chosen?.kind === 'level' ? chosen.rank : -1;
+/** Number of stops on the rail: every step except Auto. */
+export function railStops(steps: readonly ReasoningStep[]): number {
+  return steps.filter((step) => step.slot >= 0).length;
 }
 
 /**
- * How the step at `index` is drawn while `active` is selected and `peek` is
- * hovered or focused (-1 for none). Every bar up to the selection is lit; the
- * selected Auto or zero step lights only itself.
+ * How far along the rail a slot sits: 0 at the first stop, 1 at the last.
+ * Auto (-1) and a rail of one stop are 0, so nothing is filled.
  */
-export function stepTone(steps: readonly ReasoningStep[], index: number, active: number, peek: number): StepTone {
-  const step: ReasoningStep | undefined = steps[index];
-  if (step === undefined) return 'off';
-  const target: ReasoningStep | undefined = peek === active ? undefined : steps[peek];
-  if (step.kind !== 'level') {
-    if (index === active) return 'lit';
-    return target === step ? 'ghost' : 'off';
+export function railPosition(slot: number, stops: number): number {
+  if (slot <= 0 || stops <= 1) return 0;
+  return Math.min(1, slot / (stops - 1));
+}
+
+/** Index of the centre closest to `x`, the earlier one on a tie; -1 without centres. */
+export function nearestStop(x: number, centers: readonly number[]): number {
+  let nearest = -1;
+  let gap = Number.POSITIVE_INFINITY;
+  centers.forEach((center, index) => {
+    const distance = Math.abs(center - x);
+    if (distance < gap) {
+      gap = distance;
+      nearest = index;
+    }
+  });
+  return nearest;
+}
+
+/**
+ * One pointer gesture on the rail: a press that may slide, ending in a pick.
+ * It belongs to the pointer that pressed, so a second finger can neither steer
+ * nor end it, and it remembers a handled slide so the click the browser sends
+ * after it (a touch pointer is captured by the stop it landed on) can be ignored.
+ */
+export class RailGesture {
+  private pointer = -1;
+  private origin = -1;
+  private slid = false;
+
+  /** A press is in progress. */
+  get active(): boolean {
+    return this.origin >= 0;
   }
-  const lit = step.rank <= litFrontier(steps, active);
-  if (target === undefined) return lit ? 'lit' : 'off';
-  const wanted = target.kind === 'level' && step.rank <= target.rank;
-  if (lit) return wanted ? 'lit' : 'fade';
-  return wanted ? 'ghost' : 'off';
+
+  /** Whether `pointerId` is the pointer that pressed. */
+  owns(pointerId: number): boolean {
+    return this.origin >= 0 && this.pointer === pointerId;
+  }
+
+  /** A pointer pressed the step at `index`. A new press forgets the slide before it. */
+  begin(pointerId: number, index: number): void {
+    this.pointer = pointerId;
+    this.origin = index;
+    this.slid = false;
+  }
+
+  /** The press is over without a pick (cancelled, or the control went away). */
+  end(): void {
+    this.pointer = -1;
+    this.origin = -1;
+  }
+
+  /**
+   * The owning pointer was released over step `next`. Returns the step to pick,
+   * or -1 for a release on the step the press began on (a plain click) and for
+   * any other pointer, which leaves the press as it was.
+   */
+  release(pointerId: number, next: number): number {
+    if (!this.owns(pointerId)) return -1;
+    const from = this.origin;
+    this.end();
+    if (next < 0 || next === from) return -1;
+    this.slid = true;
+    return next;
+  }
+
+  /**
+   * Whether a click must be ignored: a pointer click (detail above 0) that
+   * trails a handled slide. It is spent either way, so Enter and Space, which
+   * click with detail 0, are never swallowed.
+   */
+  swallowsClick(detail: number): boolean {
+    const swallow = this.slid && detail > 0;
+    this.slid = false;
+    return swallow;
+  }
 }
 
-/**
- * Stagger slot of a bar that lights up after the frontier moved up from `from`:
- * 0 for the first new bar, so a single step never waits.
- */
-export function sweepSlot(rank: number, from: number): number {
-  return Math.min(SWEEP_SLOTS, Math.max(0, rank - from - 1));
-}
-
-/** The step a key moves to from `index`, or -1 for any other key. The ramp does not wrap. */
+/** The step a key moves to from `index`, or -1 for any other key. The rail does not wrap. */
 export function stepForKey(key: string, index: number, count: number): number {
   if (count <= 0) return -1;
   const last = count - 1;

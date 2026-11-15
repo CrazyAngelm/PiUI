@@ -17,6 +17,7 @@ Nano Desktop is currently a developer preview. Versions before 1.0 may change wi
 - While a Fusion pair works, the sidekick's chat is shown under its lead in the chat list without being opened first.
 - Russian: the send choice while an agent works reads **В очередь / Сразу** instead of **В очередь / Уточнить ход**.
 - A new chat is named after its first message instead of `New Claude Code session`. A Fusion sidekick's chat is named `Sidekick · ` and the name of its lead. An older chat that still has the generated name takes its first message as the name the next time it is opened.
+- The reasoning control is a gauge instead of a row of bars: a tapered rail with a stop for each level, a thumb on the chosen one and Auto as its own button beside it. Press and slide along the rail to choose a level. Keyboard and screen-reader behaviour is unchanged.
 
 ### Fixed
 

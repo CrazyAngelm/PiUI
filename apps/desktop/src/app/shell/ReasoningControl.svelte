@@ -1,9 +1,10 @@
 <script lang="ts">
   import Brain from '@lucide/svelte/icons/brain';
+  import Sparkles from '@lucide/svelte/icons/sparkles';
   import Zap from '@lucide/svelte/icons/zap';
   import { t } from '../../features/locale/language';
   import { Switch } from '../../lib/ui';
-  import { litFrontier, reasoningSteps, stepForKey, stepTone, sweepSlot } from './reasoningSteps';
+  import { nearestStop, railPosition, railStops, RailGesture, reasoningSteps, stepForKey, type ReasoningStep } from './reasoningSteps';
 
   interface Props {
     /** Reasoning levels of the selected model, lowest first. */
@@ -33,25 +34,28 @@
 
   const uid = $props.id();
   const steps = $derived(reasoningSteps(levels, levelDefault));
+  const stops = $derived(railStops(steps));
   const active = $derived(steps.findIndex((step) => step.value === level));
-  // The hovered or focused step: the readout names it and the ramp previews it.
+  // The hovered, focused or slid-over step: the readout names it and the ghost thumb marks it.
   let peek = $state(-1);
   const shown = $derived(peek >= 0 && peek < steps.length ? peek : active);
+  const activeSlot = $derived(slotOf(active));
+  const peekSlot = $derived(peek === active ? -1 : slotOf(peek));
   let group = $state<HTMLDivElement | null>(null);
+  // The pointer press in progress. Plain state: only the handlers below read it.
+  const gesture = new RailGesture();
 
-  // The frontier painted before the latest change, so only newly lit bars are staggered.
-  const frontier = $derived(litFrontier(steps, active));
-  let painted = -1;
-  const sweepFrom = $derived.by(() => {
-    void frontier;
-    return painted;
-  });
-  $effect(() => {
-    painted = frontier;
-  });
+  function slotOf(index: number): number {
+    const step: ReasoningStep | undefined = steps[index];
+    return step ? step.slot : -1;
+  }
 
   function name(value: string): string {
     return value === '' ? $t('Auto') : $t(value);
+  }
+
+  function radios(): HTMLElement[] {
+    return group ? Array.from(group.querySelectorAll<HTMLElement>('[role="radio"]')) : [];
   }
 
   function pick(index: number): void {
@@ -66,7 +70,7 @@
     event.preventDefault();
     if (busy) return;
     pick(next);
-    group?.querySelectorAll<HTMLElement>('[role="radio"]')[next]?.focus();
+    radios()[next]?.focus();
   }
 
   function preview(index: number): void {
@@ -74,8 +78,76 @@
   }
 
   function settle(index: number): void {
-    if (peek === index) peek = -1;
+    if (!gesture.active && peek === index) peek = -1;
   }
+
+  /** The step whose centre is nearest to a pointer position. */
+  function stopAt(x: number): number {
+    return nearestStop(
+      x,
+      radios().map((radio) => {
+        const box = radio.getBoundingClientRect();
+        return (box.left + box.right) / 2;
+      }),
+    );
+  }
+
+  function scrub(event: PointerEvent): void {
+    if (!gesture.owns(event.pointerId)) return;
+    const next = stopAt(event.clientX);
+    if (next >= 0) peek = next;
+  }
+
+  function endPress(): void {
+    gesture.end();
+    window.removeEventListener('pointermove', scrub);
+    window.removeEventListener('pointerup', release);
+    window.removeEventListener('pointercancel', cancel);
+  }
+
+  function release(event: PointerEvent): void {
+    if (!gesture.owns(event.pointerId)) return;
+    // A release on the stop the press began on is a click, which picks it.
+    const next = gesture.release(event.pointerId, stopAt(event.clientX));
+    endPress();
+    if (next < 0) return;
+    peek = -1;
+    pick(next);
+    radios()[next]?.focus();
+  }
+
+  function cancel(event: PointerEvent): void {
+    if (!gesture.owns(event.pointerId)) return;
+    endPress();
+    peek = -1;
+  }
+
+  // A touch pointer is captured by the stop it lands on, which would send its release, and the click after it, there.
+  function releaseCapture(event: PointerEvent): void {
+    const target = event.currentTarget;
+    if (target instanceof Element && target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId);
+  }
+
+  // A press may slide along the rail: the release picks the stop under the pointer. Only that pointer steers it.
+  function press(event: PointerEvent, index: number): void {
+    if (busy || !event.isPrimary || event.button !== 0) return;
+    endPress();
+    releaseCapture(event);
+    gesture.begin(event.pointerId, index);
+    peek = index;
+    window.addEventListener('pointermove', scrub);
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', cancel);
+  }
+
+  // The click that trails a slide must not pick the stop the press began on and undo the slide.
+  function click(event: MouseEvent, index: number): void {
+    if (gesture.swallowsClick(event.detail)) return;
+    pick(index);
+  }
+
+  // The popover can close in the middle of a press and take the control with it.
+  $effect(() => endPress);
 </script>
 
 {#if steps.length > 0 || fastAvailable}
@@ -87,41 +159,52 @@
           {shown >= 0 ? name(steps[shown]!.value) : $t('Native default')}
         </span>
       </div>
-      <div class="ramp" role="radiogroup" aria-label={$t('Reasoning')} bind:this={group}>
+      <div
+        class="gauge"
+        class:gauge--auto={levelDefault}
+        role="radiogroup"
+        aria-label={$t('Reasoning')}
+        style:--count={stops}
+        style:--at={Math.max(activeSlot, 0)}
+        style:--peek={Math.max(peekSlot, 0)}
+        style:--fill={railPosition(activeSlot, stops)}
+        bind:this={group}
+      >
+        <span class="track" aria-hidden="true"><span class="fill"></span></span>
         {#each steps as step, index (step.value)}
-          {@const tone = stepTone(steps, index, active, peek)}
           {@const label = name(step.value)}
           <!-- Busy keeps the radios focusable (aria-disabled), so the keyboard never loses its place mid-change. -->
           <button
             type="button"
             role="radio"
-            class="step"
-            class:step--auto={step.kind === 'auto'}
-            class:step--zero={step.kind === 'zero'}
-            class:step--ghost={tone === 'ghost'}
-            class:step--fade={tone === 'fade'}
-            class:step--lit={tone === 'lit'}
+            class="stop"
+            class:stop--auto={step.kind === 'auto'}
+            class:stop--zero={step.kind === 'zero'}
+            class:stop--lit={step.slot >= 0 && step.slot <= activeSlot}
+            class:stop--peek={index === peek && index !== active}
             aria-checked={index === active}
             aria-disabled={busy ? 'true' : undefined}
             tabindex={index === (active >= 0 ? active : 0) ? 0 : -1}
-            title={step.kind === 'auto' ? undefined : label}
-            style:--rise={step.kind === 'level' ? step.rise : undefined}
-            style:--lag={step.kind === 'level' ? sweepSlot(step.rank, sweepFrom) : undefined}
-            onclick={() => pick(index)}
+            title={label}
+            style:--pos={step.slot >= 0 ? railPosition(step.slot, stops) : undefined}
+            onclick={(event) => click(event, index)}
             onkeydown={(event) => key(event, index)}
+            onpointerdown={(event) => press(event, index)}
             onpointerenter={() => preview(index)}
             onpointerleave={() => settle(index)}
             onfocus={() => preview(index)}
             onblur={() => settle(index)}
           >
             {#if step.kind === 'auto'}
-              <span class="name">{label}</span>
+              <span class="dock" aria-hidden="true"><Sparkles size={13} /></span>
             {:else}
-              <span class="bar" aria-hidden="true"></span>
-              <span class="visually-hidden">{label}</span>
+              <span class="tick" aria-hidden="true"></span>
             {/if}
+            <span class="visually-hidden">{label}</span>
           </button>
         {/each}
+        <span class="thumb thumb--ghost" class:thumb--off={peekSlot < 0} aria-hidden="true"></span>
+        <span class="thumb" class:thumb--off={activeSlot < 0} aria-hidden="true"></span>
       </div>
     {/if}
     {#if fastAvailable}
@@ -153,6 +236,7 @@
   }
   .title {
     display: inline-flex;
+    flex: none;
     align-items: center;
     gap: 6px;
     color: var(--piui-text-muted);
@@ -172,10 +256,13 @@
     color: var(--piui-decoration-secondary);
   }
   .readout {
+    min-width: 0;
+    overflow: hidden;
     color: var(--piui-text);
     font-family: var(--piui-font-mono);
     font-size: var(--piui-text-xs);
     letter-spacing: 0.08em;
+    text-overflow: ellipsis;
     text-transform: uppercase;
     white-space: nowrap;
   }
@@ -183,162 +270,199 @@
     color: var(--piui-text-muted);
   }
 
-  /* Steps rise from one baseline; the top 4px is headroom for the accent cap. */
-  .ramp {
+  /* One row: Auto docked at the start, then a rail with a stop per level. */
+  .gauge {
     --tilt: var(--piui-decoration-gauge-tilt);
-    display: flex;
-    align-items: flex-end;
-    gap: 4px;
-    height: 32px;
-    padding-right: var(--piui-decoration-gauge-overhang);
-  }
-  /* The whole hit area is skewed, so the pointer, the focus ring and the bar share one slant. */
-  .step {
+    /* Width Auto takes before the rail starts: its 28px button and an 8px gap. */
+    --dock: 0px;
     position: relative;
+    display: flex;
+    align-items: center;
+    height: 28px;
+    touch-action: none;
+  }
+  .gauge--auto {
+    --dock: 36px;
+  }
+  /* The buttons are never transformed, so hit areas and pointer math stay rectangular. */
+  .stop {
+    position: relative;
+    display: grid;
+    place-items: center;
     flex: 1 1 0;
-    min-width: 18px;
-    max-width: 52px;
+    min-width: 0;
     height: 100%;
     padding: 0;
-    border-radius: var(--piui-decoration-radius);
+    border: 0;
     background: transparent;
     font-family: inherit;
     cursor: pointer;
-    transform: skewX(var(--tilt));
-    transform-origin: 0 100%;
   }
-  .step:focus-visible {
-    z-index: 1;
-    outline: 2px solid var(--piui-focus);
-    outline-offset: 1px;
-  }
-  .step[aria-disabled='true'] {
+  .stop[aria-disabled='true'] {
     cursor: default;
   }
-  .bar {
-    position: absolute;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    height: calc(8px + 20px * var(--rise, 0));
-    border-radius: var(--piui-decoration-radius);
-    background: color-mix(in srgb, var(--piui-text) 16%, transparent);
-    transform-origin: 50% 100%;
-    transition: transform var(--piui-duration-fast) var(--piui-ease-out);
+  .stop--auto {
+    flex: none;
+    width: 28px;
+    margin-right: 8px;
   }
-  .step--zero .bar {
-    height: 4px;
+  /* The focus ring hugs the thumb position instead of boxing the whole hit area. */
+  .stop:focus-visible {
+    outline: none;
   }
-  .step:active:not([aria-disabled='true']) .bar {
-    transform: scaleY(0.92);
-  }
-  /* The visual style supplies both ramp accents. Only its opacity animates. */
-  .bar::before {
+  .stop:not(.stop--auto):focus-visible::after {
     content: '';
     position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    background: color-mix(in srgb, var(--piui-decoration-secondary) calc(var(--rise, 0) * 100%), var(--piui-decoration-primary));
-    opacity: 0;
-    transition: opacity var(--piui-duration-fast) var(--piui-ease-out);
+    top: 1px;
+    bottom: 1px;
+    left: 50%;
+    width: 18px;
+    margin-left: -9px;
+    border-radius: calc(var(--piui-decoration-radius) * 1.5);
+    outline: 2px solid var(--piui-focus);
+    transform: skewX(var(--tilt));
   }
-  .step--ghost .bar::before {
-    opacity: 0.32;
-  }
-  .step--fade .bar::before {
-    opacity: 0.4;
-  }
-  /* Bars light up in a short sweep from the previous level. */
-  .step--lit .bar::before {
-    opacity: 1;
-    transition-delay: calc(var(--lag, 0) * var(--piui-duration-fast) / 6);
-  }
-  .step[aria-checked='true'] .bar::before {
-    box-shadow: 0 0 12px var(--piui-decoration-glow);
-  }
-  /* The chosen step holds an accent cap above it, also while another level is previewed. */
-  .bar::after {
-    content: '';
-    position: absolute;
-    right: 0;
-    bottom: calc(100% + 2px);
-    left: 0;
-    height: 2px;
-    border-radius: var(--piui-decoration-radius);
-    background: var(--piui-decoration-secondary);
-    opacity: 0;
-    transition: opacity var(--piui-duration-fast) var(--piui-ease-out);
-  }
-  .step[aria-checked='true'] .bar::after {
-    opacity: 1;
-    transition-delay: calc(var(--lag, 0) * var(--piui-duration-fast) / 6);
+  .stop--auto:focus-visible .dock {
+    outline: 2px solid var(--piui-focus);
+    outline-offset: 2px;
   }
 
-  /* Auto stands apart from the ramp and carries the visual style's spark accent. */
-  .step--auto {
-    display: inline-flex;
-    flex: none;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-    max-width: none;
-    height: 28px;
-    margin-right: 6px;
-    padding: 0 10px 0 8px;
+  /* Auto: the native default, marked with the same icon as "Harness default" in the list. */
+  .dock {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
     border: 1px solid var(--piui-border);
-    border-radius: var(--piui-decoration-radius);
+    border-radius: calc(var(--piui-decoration-radius) * 2);
     background: var(--piui-surface-2);
     color: var(--piui-text-muted);
-    font-size: var(--piui-text-xs);
-    font-weight: var(--piui-weight-semibold);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    transform: skewX(var(--tilt));
   }
-  .step--auto::before {
-    content: '';
-    flex: none;
-    width: 4px;
-    height: 10px;
-    border-radius: var(--piui-decoration-radius);
-    background: var(--piui-border-strong);
-  }
-  .step--auto::after {
+  /* The chosen Auto lights up in the style's spark accent. Only its opacity animates. */
+  .dock::after {
     content: '';
     position: absolute;
-    right: -1px;
-    bottom: -1px;
-    left: -1px;
-    height: 2px;
-    border-radius: 0 0 var(--piui-decoration-radius) var(--piui-decoration-radius);
-    background: var(--piui-decoration-spark);
+    inset: -1px;
+    border: 1px solid color-mix(in srgb, var(--piui-decoration-spark) 60%, var(--piui-border));
+    border-radius: inherit;
+    background: color-mix(in srgb, var(--piui-decoration-spark) 14%, transparent);
+    box-shadow: 0 0 12px var(--piui-decoration-glow);
     opacity: 0;
     transition: opacity var(--piui-duration-fast) var(--piui-ease-out);
   }
-  .step--auto:hover:not([aria-disabled='true']),
-  .step--auto[aria-checked='true'] {
+  /* The icon stays upright inside the slanted dock. */
+  .dock :global(svg) {
+    position: relative;
+    z-index: 1;
+    transform: skewX(calc(var(--tilt) * -1));
+  }
+  .stop--peek .dock {
+    border-color: var(--piui-border-strong);
     color: var(--piui-text);
   }
-  .step--auto[aria-checked='true'] {
-    border-color: color-mix(in srgb, var(--piui-decoration-spark) 45%, var(--piui-border));
-    background: color-mix(in srgb, var(--piui-decoration-spark) 9%, var(--piui-surface-2));
+  .stop--auto[aria-checked='true'] .dock {
+    color: var(--piui-decoration-spark);
   }
-  .step--auto[aria-checked='true']::before {
-    background: var(--piui-decoration-spark);
-  }
-  .step--auto[aria-checked='true']::after {
+  .stop--auto[aria-checked='true'] .dock::after {
     opacity: 1;
   }
-  /* The label stays upright inside the slanted chip. */
-  .name {
-    transform: skewX(calc(var(--tilt) * -1));
+
+  /* The rail runs between the centres of the first and last stop and thickens toward the top level. */
+  .track {
+    position: absolute;
+    top: 50%;
+    right: calc((100% - var(--dock)) / var(--count) / 2);
+    left: calc(var(--dock) + (100% - var(--dock)) / var(--count) / 2);
+    height: 10px;
+    margin-top: -5px;
+    border-radius: var(--piui-decoration-radius);
+    background: color-mix(in srgb, var(--piui-text) 14%, transparent);
+    clip-path: polygon(0 40%, 100% 0, 100% 100%, 0 60%);
+    transform: skewX(var(--tilt));
+    pointer-events: none;
+  }
+  /* The visual style supplies both accents of the charge. */
+  .fill {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--piui-decoration-primary) 60%, transparent),
+      var(--piui-decoration-primary) 45%,
+      var(--piui-decoration-secondary)
+    );
+    transform: scaleX(var(--fill));
+    transform-origin: 0 50%;
+    transition: transform var(--piui-duration) var(--piui-ease-out);
+  }
+  .tick {
+    width: 2px;
+    height: calc(6px + 8px * var(--pos, 0));
+    border-radius: var(--piui-decoration-radius);
+    background: color-mix(in srgb, var(--piui-text) 34%, transparent);
+    transform: skewX(var(--tilt));
+  }
+  .stop--lit .tick {
+    background: color-mix(in srgb, var(--piui-decoration-secondary) 50%, var(--piui-text));
+  }
+  /* A zero level is a hollow stop; its centre matches the picker's sunken footer. */
+  .stop--zero .tick {
+    width: 6px;
+    height: 6px;
+    background: color-mix(in srgb, var(--piui-bg-sunken) 55%, var(--piui-surface-1));
+    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--piui-text) 46%, transparent);
+  }
+  .stop--zero.stop--lit .tick {
+    box-shadow: inset 0 0 0 1.5px var(--piui-decoration-primary);
+  }
+
+  /* One stop wide and moved by whole stops, so only its transform animates. */
+  .thumb {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: var(--dock);
+    display: grid;
+    place-items: center;
+    width: calc((100% - var(--dock)) / var(--count));
+    transform: translateX(calc(var(--at) * 100%));
+    transition:
+      transform var(--piui-duration) var(--piui-ease-out),
+      opacity var(--piui-duration-fast) var(--piui-ease-out);
+    pointer-events: none;
+  }
+  .thumb::before {
+    content: '';
+    width: 10px;
+    height: 20px;
+    border-radius: var(--piui-decoration-radius);
+    background: var(--piui-decoration-secondary);
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--piui-decoration-secondary) 24%, transparent),
+      0 0 14px var(--piui-decoration-glow);
+    transform: skewX(var(--tilt));
+  }
+  /* The previewed stop: an outline that jumps, never sweeps. */
+  .thumb--ghost {
+    opacity: 0.75;
+    transform: translateX(calc(var(--peek) * 100%));
+    transition: none;
+  }
+  .thumb--ghost::before {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--piui-decoration-secondary);
+  }
+  .thumb--off {
+    opacity: 0;
   }
 
   @media (prefers-reduced-motion: reduce) {
     .reasoning,
-    .bar,
-    .bar::before,
-    .bar::after,
-    .step--auto::after {
+    .fill,
+    .thumb,
+    .dock::after {
       transition: none;
     }
   }
