@@ -6,6 +6,7 @@
   import { onMount, tick, untrack } from 'svelte';
   import { t } from '../../features/locale/language';
   import { cachedHarnessModels, catalogDegraded, isNanoConnectorModel, rememberedHarnessModels } from '../../host-api/harnessModels';
+  import { prewarmHarnessCatalogs } from '../../host-api/catalogPrewarm';
   import ModelPicker, { type ModelOption } from './ModelPicker.svelte';
   import type { HarnessCatalogModel, HarnessModelsResult, HarnessResource } from '../../../../../contracts/harness-models-v18';
   import type { HarnessKind, PermissionMode, WorkspaceSummary } from '../../../../../contracts/workspace-v15';
@@ -298,6 +299,24 @@
       cancelled = true;
       if (retry) clearTimeout(retry);
     };
+  });
+
+  // Harnesses picked before get this project's catalog in the background once the selected
+  // one has answered: switching to them then shows the project's own list at once.
+  $effect(() => {
+    if (!workspaceId || !trusted || store.safeMode || !modelsResolved || modelsLoading || modelsProvisional) return;
+    const id = workspaceId;
+    const current = harness;
+    const list = available;
+    untrack(() => {
+      const used = new Set<HarnessKind | undefined>([...Object.values(choices.projects), choices.last].map((choice) => choice?.harness));
+      prewarmHarnessCatalogs(
+        id,
+        list
+          .filter((item) => item.kind !== current && item.kind !== 'nano' && used.has(item.kind))
+          .map((item) => ({ kind: item.kind, ...(item.version ? { version: item.version } : {}) })),
+      );
+    });
   });
 
   // New chats talk directly unless the project names a default chat pipeline.

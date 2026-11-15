@@ -173,9 +173,11 @@ input.on("line", (line) => {
   }
   if (message.method === "initialize") {
     // Real shape: `<client name>/<codex version> (<os>; <arch>) <terminal> (<client name>; <client version>)`.
+    // `--spaced-originator`: an originator override in the environment, which contains a space.
+    const originator = process.argv.includes("--spaced-originator") ? "Codex Desktop" : message.params?.clientInfo?.name;
     const userAgent = process.argv.includes("--raw-user-agent")
       ? codexVersion
-      : `${message.params?.clientInfo?.name}/${codexVersion} (Fixture OS 1.0; x86_64) fixture-terminal (${message.params?.clientInfo?.name}; ${message.params?.clientInfo?.version})`;
+      : `${originator}/${codexVersion} (Fixture OS 1.0; x86_64) fixture-terminal (${message.params?.clientInfo?.name}; ${message.params?.clientInfo?.version})`;
     send({ id: message.id, result: { userAgent, codexHome: "/fixture", platformFamily: "fixture", platformOs: "fixture" } });
     // Observed from the real 0.157.1 app-server right after the initialize
     // response, before `initialized`: remote-control state and, for a user

@@ -584,6 +584,12 @@ test("refuses only app-server versions older than the minimum; newer than tested
   );
 });
 
+test("an originator with spaces still names the Codex version", async () => {
+  const adapter = await createCodexAdapter({ ...config, catalogOnly: true, runtimeArgs: [fixture, "--spaced-originator"] }, () => {});
+  try { assert.ok((await adapter.catalogModels()).length > 0); }
+  finally { await adapter.dispose(); }
+});
+
 test("a newer app-server still has to pass the startup checks: protocol drift fails closed with a typed error", async () => {
   const newer = "--codex-version=0.165.0";
   const startup = [

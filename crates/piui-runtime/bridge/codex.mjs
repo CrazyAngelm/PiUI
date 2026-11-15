@@ -133,11 +133,19 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     return core.every(Number.isSafeInteger) ? { core, prerelease: match[4] !== undefined } : undefined;
   };
   // The initialize user agent is `<originator>/<version> (<os>; <arch>) ...
-  // (<client name>; <client version>)`; only the first token names Codex.
+  // (<client name>; <client version>)`. The originator may contain spaces
+  // (`Codex Desktop/0.165.0 (...)` under an originator override in the
+  // environment), so the product ends where the OS group begins; a user agent
+  // without that group falls back to its first token.
   const userAgentVersion = (userAgent) => {
-    const product = userAgent.trim().split(/\s+/, 1)[0] ?? "";
-    const slash = product.lastIndexOf("/");
-    return slash > 0 ? parseVersion(product.slice(slash + 1)) : undefined;
+    const text = userAgent.trim();
+    const group = text.indexOf(" (");
+    for (const product of [group < 0 ? text : text.slice(0, group), text.split(/\s+/, 1)[0] ?? ""]) {
+      const slash = product.lastIndexOf("/");
+      const version = slash > 0 ? parseVersion(product.slice(slash + 1)) : undefined;
+      if (version) return version;
+    }
+    return undefined;
   };
   const compareCore = (left, right) => left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
   const checkCodexVersion = (version) => {

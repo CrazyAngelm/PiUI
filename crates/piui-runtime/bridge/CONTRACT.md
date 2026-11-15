@@ -258,9 +258,12 @@ succeed, and a failed start is never retried with a different set of switches.
   "Older than the oldest version supported by Nano Desktop." (`HarnessUnavailable`);
   unparseable "The installed version could not be recognized." (also refused: the
   version line is part of the identity proof).
-- The bridge checks the running app-server itself: the first token of the
+- The bridge checks the running app-server itself: the product of the
   `initialize` `userAgent` (`<originator>/<version> (<os>; <arch>) <terminal>
-  (<client name>; <client version>)`, originator = our `clientInfo.name`) must
+  (<client name>; <client version>)`, originator = our `clientInfo.name`) is the
+  text before the OS group ` (`, which may contain spaces when the environment
+  overrides the originator (observed: `Codex Desktop/0.165.0 (...)`); without an
+  OS group the first token stands in. Its version must
   parse and be at or above the minimum, else `unsupported-native-version` before
   `initialized`; a newer version passes. The trailing client version is never
   read. The `userAgent` carries our own originator, so it is not identity proof by
