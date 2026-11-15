@@ -2331,7 +2331,7 @@ async fn prepare_script(
 /// Runs a prepared script and maps what the host observed to what it
 /// records. Declared artifact fields are checked like native results.
 async fn execute_script(launch: &ScriptLaunch, cancel: watch::Receiver<bool>) -> ScriptResolution {
-    let environment = std::env::vars_os().collect::<Vec<_>>();
+    let environment = piui_runtime::search_path::host_environment();
     let result = run_script(
         ScriptRequest {
             interpreter: &launch.interpreter,

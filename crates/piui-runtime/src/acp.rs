@@ -577,9 +577,12 @@ pub enum AcpResolveError {
     NodeUnavailable,
 }
 
-/// Resolves `spec` against the current `PATH`.
+/// Resolves `spec` against the host search path (`PATH`, plus the login
+/// shell's on Unix, see [`crate::search_path`]).
 pub fn resolve_acp_command(spec: &AcpCommandSpec) -> Result<AcpResolvedCommand, AcpResolveError> {
-    resolve_acp_command_in(spec, std::env::var_os("PATH").as_deref())
+    // A start or a check must see the login shell's PATH, not a half-ready one.
+    crate::search_path::settle();
+    resolve_acp_command_in(spec, crate::search_path::current().as_deref())
 }
 
 /// Resolves `spec` against `path` (a `PATH` value). Only absolute `PATH`
@@ -895,7 +898,7 @@ pub fn probe_acp_version(
     let output = match cached {
         Some(output) => output,
         None => {
-            let environment = acp_environment(&std::env::vars_os().collect::<Vec<_>>(), &[]);
+            let environment = acp_environment(&crate::search_path::host_environment(), &[]);
             let output = run_probe_command(
                 &command.program,
                 &args,
@@ -1167,10 +1170,7 @@ pub fn probe_opencode_native_models(launch: &AcpLaunch, cwd: &Path) -> Option<Ve
     {
         return None;
     }
-    let environment = acp_environment(
-        &std::env::vars_os().collect::<Vec<_>>(),
-        &launch.environment,
-    );
+    let environment = acp_environment(&crate::search_path::host_environment(), &launch.environment);
     let output = run_probe_command(
         &launch.command.program,
         &launch

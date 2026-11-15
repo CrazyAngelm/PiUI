@@ -73,6 +73,13 @@ describe('native harness catalog v19 with v18 catalog data', () => {
     invoke.mockResolvedValueOnce(result).mockResolvedValueOnce(result);
     expect(await harnessModels(request), 'a failure is never cached').toEqual(result);
   });
+  it('names a missing harness or Node.js instead of "Could not load models."', async () => {
+    invoke.mockRejectedValueOnce({ code: 'UNAVAILABLE', message: 'host text is not trusted', recoverable: true });
+    await expect(harnessModels({ workspaceId: 'project', harness: 'codex' })).rejects.toMatchObject({
+      code: 'UNAVAILABLE',
+      message: 'The selected harness is unavailable. Check its installation and native sign-in.',
+    });
+  });
   it('shows a remembered catalog at once and reports the probe that replaces it', async () => {
     localStorage.clear();
     const request = { workspaceId: 'project', harness: 'claude-code' as const };

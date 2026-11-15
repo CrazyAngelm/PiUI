@@ -18,6 +18,7 @@ Nano Desktop is currently a developer preview. Versions before 1.0 may change wi
 
 ### Fixed
 
+- Linux: agents and Node.js installed through nvm, fnm, volta, bun, pnpm or a user npm prefix are found when Nano Desktop is started from the desktop menu. A harness that cannot start without Node.js says so instead of "Could not load models", and an agent that lists no models says what to do (ADR-063).
 - A message sent into a running turn appears in the chat at once, marked as not read yet. It used to appear only when the agent read it at its next step, which could take half a minute.
 - OpenCode models show their reasoning levels in the model picker, in a new chat and in an open one. Each model offers its own levels, and `default` is no longer listed as a level.
 - The new-chat harness, model, reasoning, speed and permission picks are remembered as soon as they are made, not when a message is sent. A project without its own choice starts from the latest one, and a harness that was still being checked at startup takes over once it is ready.

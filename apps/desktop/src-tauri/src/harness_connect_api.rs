@@ -215,7 +215,7 @@ pub async fn harness_connect_v1(
                     harness,
                     safe_mode,
                     home,
-                    std::env::vars_os().collect(),
+                    piui_runtime::search_path::host_environment(),
                     resolve_native_sign_in,
                     terminal::open,
                 )

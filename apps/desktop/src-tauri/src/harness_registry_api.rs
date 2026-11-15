@@ -373,9 +373,13 @@ async fn check_agents<R: Runtime>(
     force: bool,
 ) -> Result<(), HarnessRegistryError> {
     let acp = app.state::<HostState>().workspace.acp_agents().clone();
-    tauri::async_runtime::spawn_blocking(move || acp.check(only, force))
-        .await
-        .map_err(|_| HarnessRegistryError::from(RegistryError::Io))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        // The check must see the login shell's PATH (Unix), not a half-ready one.
+        piui_runtime::search_path::settle();
+        acp.check(only, force)
+    })
+    .await
+    .map_err(|_| HarnessRegistryError::from(RegistryError::Io))?;
     emit_changed(app);
     Ok(())
 }
@@ -411,7 +415,12 @@ pub async fn harness_registry_v1(
         HarnessRegistryCommand::List {} => false,
         HarnessRegistryCommand::Check { harness } => {
             let only = harness.and_then(HarnessKind::acp_agent);
-            // The user asked to look again: drop the cached built-in discovery.
+            // The user asked to look again: run the login shell again (Unix; a
+            // version manager may have been installed since start) and drop
+            // the cached built-in discovery.
+            tauri::async_runtime::spawn_blocking(piui_runtime::search_path::refresh)
+                .await
+                .map_err(|_| HarnessRegistryError::from(RegistryError::Io))?;
             invalidate_native_harness_probe();
             if harness.is_some_and(|kind| kind.acp_agent().is_none()) {
                 // Built-in discovery is recomputed by the list below.

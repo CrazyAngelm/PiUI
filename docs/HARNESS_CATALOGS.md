@@ -8,7 +8,10 @@ with its original request and response.
 The response preserves model ID and provider together, native reasoning levels,
 and resource IDs, names, default state and configurability. UI examples in an
 adapter manifest are never used as a model's reasoning options. Catalog failures
-remain visible and retryable. Imported settings missing from a catalog remain
+remain visible and retryable. A harness that is not installed, or that has no
+Node.js to start its bridge, is answered with `UNAVAILABLE` instead of a
+generic failure, and an answered catalog without models shows a hint in the
+new-chat composer. Imported settings missing from a catalog remain
 visible and are not silently removed.
 
 Codex reads `model/list`, `skills/list`, `config/read` (projected to the configured

@@ -462,6 +462,15 @@ fn runtime_failure(error: &NativeRuntimeError) -> WorkspaceError {
             message: piui_runtime::workspace_runtime::INCOMPATIBLE_HARNESS_MESSAGE,
             recoverable: true,
         },
+        // Not installed, or no Node.js for the bridge: a verdict, not a transient
+        // failure. The picker names it instead of "could not load models".
+        NativeRuntimeError::NodeUnavailable | NativeRuntimeError::HarnessUnavailable => {
+            WorkspaceError {
+                code: "UNAVAILABLE",
+                message: "The selected harness is unavailable. Check it in Settings → Harnesses.",
+                recoverable: true,
+            }
+        }
         _ => WorkspaceError::runtime(),
     }
 }
@@ -5930,10 +5939,18 @@ Board."
         assert!(signed_out.recoverable);
         for other in [
             NativeRuntimeError::Timeout,
-            NativeRuntimeError::HarnessUnavailable,
             NativeRuntimeError::Bridge(BridgeFailureCode::OperationFailed),
         ] {
             assert_eq!(super::runtime_failure(&other).code, "RUNTIME_FAILED");
+        }
+        // A missing harness or missing Node.js is a verdict the picker names.
+        for missing in [
+            NativeRuntimeError::HarnessUnavailable,
+            NativeRuntimeError::NodeUnavailable,
+        ] {
+            let mapped = super::runtime_failure(&missing);
+            assert_eq!(mapped.code, "UNAVAILABLE");
+            assert!(mapped.recoverable);
         }
         let fast = super::reject_unsupported_speed(HarnessKind::ClaudeCode, Some("fast"))
             .expect_err("fast mode can use paid extra usage");

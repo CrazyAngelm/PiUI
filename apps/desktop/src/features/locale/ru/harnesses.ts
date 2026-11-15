@@ -94,4 +94,10 @@ export const harnessesRu: Readonly<Record<string, string>> = {
   'A terminal app was not found. Run the command yourself.': 'Терминал не найден. Выполните команду вручную.',
   'Safe mode is on: Nano Desktop starts no agent program.': 'Включён безопасный режим: Nano Desktop не запускает программы агентов.',
   'Open Nano account': 'Открыть аккаунт Nano',
+
+  // Linux discovery (ADR-063): the login shell's PATH, Node.js for every bridge.
+  'Node.js was not found. Install Node.js or set PIUI_NODE to its full path, then choose Check again.':
+    'Node.js не найден. Установите Node.js или укажите полный путь к нему в PIUI_NODE, затем нажмите «Проверить снова».',
+  "This agent listed no models. Sign in or add a provider in the agent's own app, then try again.":
+    'Агент не показал ни одной модели. Войдите в аккаунт или добавьте провайдера в самой программе агента, затем повторите.',
 };

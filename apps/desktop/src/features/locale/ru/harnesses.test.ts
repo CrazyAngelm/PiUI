@@ -29,6 +29,15 @@ it('translates the composer sign-in status and keeps both command placeholders',
   expect(translate(SIGNED_OUT_COPY, 'ru')).toMatch(/\{0\}[\s\S]*\{1\}/);
 });
 
+it('translates the missing Node.js reason and the empty model list hint', () => {
+  for (const message of [
+    'Node.js was not found. Install Node.js or set PIUI_NODE to its full path, then choose Check again.',
+    "This agent listed no models. Sign in or add a provider in the agent's own app, then try again.",
+  ]) {
+    expect(translate(message, 'ru'), message).not.toBe(message);
+  }
+});
+
 it('explains a refused Claude Code sign-in in the run panel, in both languages', () => {
   const text = failureText('harness-sign-in-required');
   expect(text).toContain('/login');

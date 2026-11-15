@@ -267,7 +267,7 @@ pub(crate) async fn run_script_test(
         .map_err(|_| ScriptTestError::ScriptRuntimeUnavailable)?;
     let project_dir = directory.canonical_path().to_path_buf();
     let work_dir = work_root.join(format!("test-{}", uuid::Uuid::new_v4()));
-    let environment = std::env::vars_os().collect::<Vec<_>>();
+    let environment = piui_runtime::search_path::host_environment();
     let script = run_script(
         ScriptRequest {
             interpreter: &interpreter,

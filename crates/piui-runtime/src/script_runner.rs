@@ -201,7 +201,7 @@ pub fn resolve_interpreter(kind: ScriptInterpreter) -> Result<ResolvedInterprete
 }
 
 fn find_on_path(name: &str) -> Result<PathBuf, ScriptRunError> {
-    find_in(name, std::env::var_os("PATH").as_deref())
+    find_in(name, crate::search_path::current().as_deref())
 }
 
 /// Only absolute `PATH` entries are searched: a relative entry would resolve

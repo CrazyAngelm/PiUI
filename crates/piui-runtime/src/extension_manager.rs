@@ -144,6 +144,12 @@ async fn run_helper(
     let dist_path = runtime_dist_path(&cli_path).ok_or(ExtensionManagerError::Unavailable)?;
 
     let mut standard = std::process::Command::new(&launch.program);
+    #[cfg(unix)]
+    {
+        if let Some(path) = crate::search_path::current() {
+            standard.env("PATH", path);
+        }
+    }
     // Keep the external operator capability out of native child environments.
     standard.env_remove("PIUI_AGENT_API_TOKEN");
     standard.env_remove("PIUI_AGENT_API_PORT");

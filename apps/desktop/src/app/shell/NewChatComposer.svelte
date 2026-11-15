@@ -1047,6 +1047,11 @@
     {$t(modelsError)}
     <button type="button" class="link" onclick={() => (catalogAttempt += 1)}>{$t('Retry')}</button>
   </p>
+{:else if !usesPipeline && !fusionMode && modelsResolved && !modelsLoading && !modelsProvisional && models.length === 0}
+  <p class="notice" role="status">
+    {$t("This agent listed no models. Sign in or add a provider in the agent's own app, then try again.")}
+    <button type="button" class="link" onclick={() => (catalogAttempt += 1)}>{$t('Retry')}</button>
+  </p>
 {:else if !usesPipeline && !fusionMode && modelKey && modelsResolved && !model}
   <p class="notice notice--error">{$t('Choose a model')}</p>
 {:else if resourcesWarning && !modelsLoading}

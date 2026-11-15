@@ -586,6 +586,13 @@ impl RealPiRuntime {
             RealRuntimeError::Spawn("Windows process containment is unavailable.".into())
         })?;
         let mut std_command = std::process::Command::new(&launch.program);
+        #[cfg(unix)]
+        {
+            // A desktop launch lacks the login shell's PATH; the child needs it.
+            if let Some(path) = crate::search_path::current() {
+                std_command.env("PATH", path);
+            }
+        }
         // Keep the external operator capability out of native child environments.
         std_command.env_remove("PIUI_AGENT_API_TOKEN");
         std_command.env_remove("PIUI_AGENT_API_PORT");
@@ -2800,7 +2807,7 @@ pub fn resolve_pi_launch() -> Result<PiLaunch, String> {
             let node = resolve_node_program(
                 &cli_path,
                 std::env::var_os("PIUI_PI_NODE"),
-                std::env::var_os("PATH"),
+                crate::search_path::current(),
             );
             return Ok(PiLaunch {
                 program: node,
@@ -2814,7 +2821,7 @@ pub fn resolve_pi_launch() -> Result<PiLaunch, String> {
         let node = resolve_node_program(
             &cli_path,
             std::env::var_os("PIUI_PI_NODE"),
-            std::env::var_os("PATH"),
+            crate::search_path::current(),
         );
         return Ok(PiLaunch {
             program: node,
@@ -2843,7 +2850,7 @@ pub fn resolve_prime_launch() -> Result<PiLaunch, String> {
         return resolve_configured_prime_launch(
             &cli_path,
             std::env::var_os("PIUI_PRIME_AGENT_NODE"),
-            std::env::var_os("PATH"),
+            crate::search_path::current(),
         );
     }
 
@@ -2852,7 +2859,7 @@ pub fn resolve_prime_launch() -> Result<PiLaunch, String> {
         let node = resolve_node_program(
             &cli_path,
             std::env::var_os("PIUI_PRIME_AGENT_NODE"),
-            std::env::var_os("PATH"),
+            crate::search_path::current(),
         );
         return Ok(PiLaunch {
             program: node,
@@ -2930,7 +2937,7 @@ fn resolve_global_prime_cli_js() -> Option<PathBuf> {
     {
         return Some(candidate);
     }
-    for root in common_global_roots() {
+    for root in global_package_roots() {
         let candidate = root.join(PACKAGE).join(REL);
         if candidate.is_file() {
             return Some(candidate);
@@ -2945,7 +2952,7 @@ fn find_prime_launcher() -> Option<PathBuf> {
     } else {
         &["prime-agent"]
     };
-    find_launcher_in_path(names, std::env::var_os("PATH"))
+    find_launcher_in_path(names, crate::search_path::current())
 }
 
 const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent";
@@ -2957,7 +2964,7 @@ fn resolve_global_cli_js() -> Option<PathBuf> {
     if let Some(candidate) = find_pi_launcher().as_deref().and_then(pi_cli_from_launcher) {
         return Some(candidate);
     }
-    common_global_roots()
+    global_package_roots()
         .into_iter()
         .map(|root| root.join(PI_PACKAGE).join(PI_CLI))
         .find(|candidate| candidate.is_file())
@@ -2994,7 +3001,7 @@ fn find_pi_launcher() -> Option<PathBuf> {
     } else {
         &["pi"]
     };
-    find_launcher_in_path(names, std::env::var_os("PATH"))
+    find_launcher_in_path(names, crate::search_path::current())
 }
 
 /// Prefer the Node executable installed beside npm's global launcher. Desktop
@@ -3008,6 +3015,14 @@ fn resolve_node_program(
 ) -> PathBuf {
     if let Some(program) = override_program.filter(|value| !value.is_empty()) {
         return PathBuf::from(program);
+    }
+
+    #[cfg(unix)]
+    {
+        // `<prefix>/bin/node` of the prefix that holds this very package.
+        if let Some(node) = node_beside_package(cli_path) {
+            return node;
+        }
     }
 
     let names: &[&str] = if cfg!(windows) {
@@ -3043,8 +3058,10 @@ fn find_launcher_in_path(names: &[&str], path_env: Option<OsString>) -> Option<P
     None
 }
 
-fn common_global_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
+/// Folders that can hold globally installed npm packages, most specific first.
+/// Shared by every harness that is an npm package (Pi, Prime Agent, Codex).
+pub(crate) fn global_package_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
     if let Some(appdata) = std::env::var_os("APPDATA") {
         roots.push(PathBuf::from(appdata).join("npm").join("node_modules"));
     }
@@ -3069,36 +3086,128 @@ fn common_global_roots() -> Vec<PathBuf> {
         );
         roots.push(home.join(".pnpm-global").join("lib").join("node_modules"));
     }
+    #[cfg(unix)]
+    {
+        // A user prefix (`npm config set prefix ~/.local`), pnpm and bun keep
+        // their packages away from the fixed roots above.
+        roots.extend(prefix_roots_from_path(crate::search_path::current()));
+        if let Some(pnpm) = std::env::var_os("PNPM_HOME").map(PathBuf::from)
+            && pnpm.is_absolute()
+        {
+            roots.push(pnpm.join("global").join("5").join("node_modules"));
+        }
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
+            && home.is_absolute()
+        {
+            roots.push(
+                home.join(".local")
+                    .join("share")
+                    .join("pnpm")
+                    .join("global")
+                    .join("5")
+                    .join("node_modules"),
+            );
+            roots.push(
+                home.join(".bun")
+                    .join("install")
+                    .join("global")
+                    .join("node_modules"),
+            );
+        }
+    }
     #[cfg(not(windows))]
-    roots.extend(node_prefix_global_roots(std::env::var_os("PATH")));
+    roots.extend(node_prefix_global_roots(crate::search_path::current()));
     roots.push(PathBuf::from("/usr/local/lib/node_modules"));
     roots.push(PathBuf::from("/usr/lib/node_modules"));
-    roots
+    let mut distinct: Vec<PathBuf> = Vec::with_capacity(roots.len());
+    for root in roots {
+        if !distinct.contains(&root) {
+            distinct.push(root);
+        }
+    }
+    distinct
+}
+
+/// `<parent>/lib/node_modules` for every absolute `PATH` entry named `bin`
+/// (`<prefix>/bin` is where npm puts its launchers). Nothing is checked on
+/// disk: callers test the package entry they build from a root.
+#[cfg(unix)]
+pub(crate) fn prefix_roots_from_path(path_env: Option<OsString>) -> Vec<PathBuf> {
+    let Some(path_env) = path_env else {
+        return Vec::new();
+    };
+    std::env::split_paths(&path_env)
+        .filter(|directory| directory.is_absolute())
+        .filter(|directory| directory.file_name() == Some(std::ffi::OsStr::new("bin")))
+        .filter_map(|directory| {
+            directory
+                .parent()
+                .map(|prefix| prefix.join("lib").join("node_modules"))
+        })
+        .collect()
+}
+
+/// The package entry (`<package>/<entry>`) a launcher on `PATH` points at,
+/// following symlinks (`<prefix>/bin/codex` -> `<prefix>/lib/node_modules/
+/// @openai/codex/bin/codex.js`). A launcher of another package is ignored.
+#[cfg(unix)]
+pub(crate) fn package_entry_from_launchers(
+    launcher: &str,
+    package: &str,
+    entry: &str,
+    path_env: Option<OsString>,
+) -> Option<PathBuf> {
+    let path_env = path_env?;
+    let tail = Path::new(package).join(entry);
+    std::env::split_paths(&path_env)
+        .filter(|directory| directory.is_absolute())
+        .filter_map(|directory| std::fs::canonicalize(directory.join(launcher)).ok())
+        .find(|target| target.is_file() && target.ends_with(tail.as_path()))
+}
+
+/// The Node installed beside a global package: `<prefix>/bin/node` for a
+/// package under `<prefix>/lib/node_modules`. With two Node installations the
+/// package must run on its own, not on the first one on `PATH`. Any other
+/// layout (pnpm, bun, a project folder) has no node of its own.
+#[cfg(unix)]
+pub(crate) fn node_beside_package(entry: &Path) -> Option<PathBuf> {
+    let modules = entry
+        .ancestors()
+        .skip(1)
+        .find(|ancestor| ancestor.file_name() == Some(std::ffi::OsStr::new("node_modules")))?;
+    let lib = modules.parent()?;
+    if lib.file_name() != Some(std::ffi::OsStr::new("lib")) {
+        return None;
+    }
+    let candidate = lib.parent()?.join("bin").join("node");
+    candidate.is_file().then_some(candidate)
 }
 
 /// npm's default global package root on Unix is beside the Node installation
 /// itself: `<prefix>/bin/node` and `<prefix>/lib/node_modules` (nvm, fnm, the
 /// official archives, distribution packages). The first `node` in an
-/// absolute PATH directory decides, both as found and through its symlinks.
+/// absolute PATH directory decides first, both as found and through its
+/// symlinks; every later `node` on the PATH follows it.
 #[cfg(not(windows))]
 pub(crate) fn node_prefix_global_roots(path_env: Option<OsString>) -> Vec<PathBuf> {
-    let Some(node) = path_env.as_deref().and_then(|path| {
-        std::env::split_paths(path)
-            .filter(|directory| directory.is_absolute())
-            .map(|directory| directory.join("node"))
-            .find(|candidate| candidate.is_file())
-    }) else {
+    let Some(path_env) = path_env else {
         return Vec::new();
     };
     let mut roots: Vec<PathBuf> = Vec::new();
-    for program in [Some(node.clone()), std::fs::canonicalize(&node).ok()]
-        .into_iter()
-        .flatten()
+    for node in std::env::split_paths(&path_env)
+        .filter(|directory| directory.is_absolute())
+        .map(|directory| directory.join("node"))
+        .filter(|candidate| candidate.is_file())
     {
-        if let Some(prefix) = program.parent().and_then(Path::parent) {
-            let root = prefix.join("lib").join("node_modules");
-            if !roots.contains(&root) {
-                roots.push(root);
+        for program in [Some(node.clone()), std::fs::canonicalize(&node).ok()]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(prefix) = program.parent().and_then(Path::parent) {
+                let root = prefix.join("lib").join("node_modules");
+                if !roots.contains(&root) {
+                    roots.push(root);
+                }
             }
         }
     }
@@ -3122,7 +3231,10 @@ mod tests {
         validate_supported_prime_cli_identity,
     };
     #[cfg(unix)]
-    use super::{node_prefix_global_roots, pi_cli_from_launcher, prime_cli_from_launcher};
+    use super::{
+        node_beside_package, node_prefix_global_roots, package_entry_from_launchers,
+        pi_cli_from_launcher, prefix_roots_from_path, prime_cli_from_launcher,
+    };
     use crate::extension_ui::{
         ExtensionDialogRequest, ExtensionUiAction, ExtensionUiMailbox, ExtensionUiResponse,
     };
@@ -3384,6 +3496,149 @@ mod tests {
             fs::canonicalize(&cli).ok()
         );
         fs::remove_dir_all(root).expect("removes npm symlink fixture");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prefix_roots_come_from_bin_directories_on_the_path() {
+        let path = std::env::join_paths(["/x/bin", "/y/tools", "rel/bin"]).expect("PATH");
+        assert_eq!(
+            prefix_roots_from_path(Some(path)),
+            vec![std::path::PathBuf::from("/x/lib/node_modules")]
+        );
+        assert!(prefix_roots_from_path(None).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn node_prefix_roots_cover_every_node_on_the_path() {
+        let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "piui-node-roots-test-{}-{serial}",
+            std::process::id()
+        ));
+        let first = root.join("first").join("bin");
+        let second = root.join("second").join("bin");
+        for bin in [&first, &second] {
+            fs::create_dir_all(bin).expect("creates node bin fixture");
+            fs::write(bin.join("node"), "").expect("writes node fixture");
+        }
+        let root = fs::canonicalize(&root).expect("canonical root");
+        let path = std::env::join_paths([
+            root.join("first").join("bin"),
+            root.join("second").join("bin"),
+        ])
+        .expect("PATH");
+        assert_eq!(
+            node_prefix_global_roots(Some(path)),
+            vec![
+                root.join("first").join("lib").join("node_modules"),
+                root.join("second").join("lib").join("node_modules"),
+            ]
+        );
+        fs::remove_dir_all(root).expect("removes node roots fixture");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_package_is_resolved_from_its_launcher_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "piui-launcher-entry-test-{}-{serial}",
+            std::process::id()
+        ));
+        let modules = root.join("lib").join("node_modules");
+        let entry = modules
+            .join("@openai")
+            .join("codex")
+            .join("bin")
+            .join("codex.js");
+        let other = modules.join("other").join("bin").join("other.js");
+        let bin = root.join("bin");
+        for file in [&entry, &other] {
+            fs::create_dir_all(file.parent().expect("entry parent")).expect("creates package");
+            fs::write(file, "// fixture").expect("writes package entry");
+        }
+        fs::create_dir_all(&bin).expect("creates npm bin fixture");
+        symlink(&entry, bin.join("codex")).expect("links npm Codex launcher");
+        symlink(&other, bin.join("other")).expect("links another package launcher");
+
+        let path = std::env::join_paths(["relative/bin".into(), bin.clone()]).expect("PATH");
+        assert_eq!(
+            package_entry_from_launchers(
+                "codex",
+                "@openai/codex",
+                "bin/codex.js",
+                Some(path.clone())
+            ),
+            Some(fs::canonicalize(&entry).expect("canonical entry"))
+        );
+        // A launcher of another package, a missing launcher and no PATH find nothing.
+        for launcher in ["other", "missing"] {
+            assert_eq!(
+                package_entry_from_launchers(
+                    launcher,
+                    "@openai/codex",
+                    "bin/codex.js",
+                    Some(path.clone())
+                ),
+                None,
+                "{launcher}"
+            );
+        }
+        assert_eq!(
+            package_entry_from_launchers("codex", "@openai/codex", "bin/codex.js", None),
+            None
+        );
+        fs::remove_dir_all(root).expect("removes launcher entry fixture");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_node_beside_a_package_prefix_is_preferred() {
+        let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "piui-prefix-node-test-{}-{serial}",
+            std::process::id()
+        ));
+        let cli = root
+            .join("lib")
+            .join("node_modules")
+            .join("@earendil-works")
+            .join("pi-coding-agent")
+            .join("dist")
+            .join("cli.js");
+        let node = root.join("bin").join("node");
+        fs::create_dir_all(cli.parent().expect("cli parent")).expect("creates package");
+        fs::create_dir_all(node.parent().expect("node parent")).expect("creates bin");
+        fs::write(&cli, "// fixture").expect("writes cli fixture");
+        fs::write(&node, "").expect("writes node fixture");
+
+        // The prefix's own Node beats whatever PATH lists first.
+        assert_eq!(
+            resolve_node_program(&cli, None, Some("/elsewhere".into())),
+            node
+        );
+        assert_eq!(node_beside_package(&cli), Some(node.clone()));
+        // An explicit override stays authoritative.
+        assert_eq!(
+            resolve_node_program(&cli, Some("/custom/node".into()), None),
+            std::path::PathBuf::from("/custom/node")
+        );
+        // A package outside `<prefix>/lib/node_modules` has no Node of its own.
+        assert_eq!(
+            node_beside_package(
+                &root
+                    .join("project")
+                    .join("node_modules")
+                    .join("pkg")
+                    .join("x.js")
+            ),
+            None
+        );
+        fs::remove_dir_all(root).expect("removes prefix node fixture");
     }
 
     #[tokio::test]

@@ -302,7 +302,7 @@ async fn a_failed_start_removes_the_fresh_worktree_and_keeps_the_branch() {
         .state
         .workspace
         .replace_native_spawner(|_config: NativeRuntimeConfig| async {
-            Err(NativeRuntimeError::HarnessUnavailable)
+            Err(NativeRuntimeError::Spawn)
         });
     let planned = preview(&fixture, &project, Some("piui/failed")).await;
     let error = run(&fixture, create_command(&project, new_worktree(&planned)))

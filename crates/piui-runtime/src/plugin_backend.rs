@@ -195,7 +195,7 @@ pub fn probe_node_permissions(node: &Path) -> Result<NodePermissionSupport, Plug
         return Ok(support);
     }
     let stamp = node_stamp(node).ok_or(PluginBackendError::NodeUnavailable)?;
-    let host = std::env::vars_os().collect::<Vec<_>>();
+    let host = crate::search_path::host_environment();
     let mut command = std::process::Command::new(node);
     command
         .arg("-e")
@@ -327,7 +327,7 @@ pub fn permission_arguments(
 }
 
 /// Node.js as the harness bridges and script steps find it (`PIUI_NODE`
-/// first, then absolute `PATH` entries). Never user-supplied.
+/// first, then absolute entries of the host search path). Never user-supplied.
 pub fn resolve_plugin_node() -> Result<PathBuf, PluginBackendError> {
     crate::workspace_runtime::resolve_node().map_err(|_| PluginBackendError::NodeUnavailable)
 }

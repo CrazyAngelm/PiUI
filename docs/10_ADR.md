@@ -1916,3 +1916,57 @@ A macro is a saved prompt, a list of skills, or both. It is typed as `//name`
 in a message and replaced by its text when the message is sent. Macros are a
 local preference and nothing is executed. See
 [the decision](adr/060-composer-macros.md).
+
+## ADR-063 — Login-shell search path on Unix
+
+**Status:** Accepted 2026-11-15.
+
+**Context:** an application started from a desktop entry or an AppImage gets
+the session `PATH`, not what `~/.bashrc` or `~/.zshrc` add. nvm, fnm, volta,
+bun, pnpm and the OpenCode installer set their folders there, so on Linux Node.js
+and the agents installed through them were not found ("Node is unavailable",
+"not found on PATH"). Every session and catalog probe starts a Node.js bridge, yet
+discovery looked for Node.js only for the harnesses packaged with it, so Claude
+Code, Hermes and native ACP agents showed as ready and then failed to load
+their models, and every failure read "Could not load models".
+
+**Decision:**
+
+- One source of the executable search path, `piui_runtime::search_path`. On
+  Windows it is the process `PATH`, unchanged. On Unix it is the process `PATH`,
+  the `PATH` printed by the user's login shell and the usual install folders
+  that exist. When the process `PATH` lacks an entry of the shell's, the shell's
+  order wins; an application started from a terminal keeps its own order.
+- The shell is `$SHELL` (else bash, else sh) run as `-ilc` (bash, zsh, fish) or
+  `-lc` (sh, dash, ksh, ash), once after start in the background, in the home
+  folder and its own process group, with stdin closed, stderr dropped, a 5 s
+  bound and a 64 KiB output bound. The group is killed afterwards, whether the
+  shell answered or not. A startup file can recognise this run by
+  `PIUI_RESOLVING_ENVIRONMENT=1`. Only a value between two fixed markers that
+  starts with `/` is accepted. Other shells (nu, xonsh, tcsh) are not run; the
+  install folders still apply.
+- Safe mode never runs the shell (it would run the user's startup files). A
+  signed-out or offline application is unaffected; nothing here touches the
+  network.
+- Discovery never waits for the shell. A session start, a sign-in terminal and
+  an agent check wait for it (bounded, once). **Check again** runs it again.
+- Every resolver reads this path instead of the process `PATH`, and every child
+  process gets it as `PATH`. The process environment itself is never changed.
+  The value is never logged: only the outcome, the number of entries and the
+  time.
+- npm packages are also found through the launcher on the path (`codex`,
+  `prime-agent`; a symlink names the real prefix), through every `<prefix>/bin`
+  on the path, `PNPM_HOME` and bun's global folder. A package runs on the Node.js
+  of its own prefix when it has one.
+- On Unix, discovery reports an installed harness without Node.js as
+  unavailable, with a reason that names the fix. A missing harness or Node.js
+  answers a catalog request with `UNAVAILABLE`, not `RUNTIME_FAILED`, and a
+  catalog without models shows a hint in the composer.
+
+**Consequences:** the user's own startup files run once per start outside safe
+mode, as they do in any terminal the user opens. Only `PATH` is taken from the
+shell: variables exported only in a profile (provider API keys) are still not
+passed to agents started from a desktop launcher. Passing them is a separate
+decision, since it widens what a desktop launch gives agents. asdf and mise
+shims are directories on the path, not symlinks, so `PIUI_PI_CLI` and
+`PIUI_NODE` stay the override there.
