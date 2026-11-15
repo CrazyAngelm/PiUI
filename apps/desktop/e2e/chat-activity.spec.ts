@@ -92,6 +92,11 @@ test.describe('chat activity', () => {
 
     const group = transcript.getByRole('button', { name: /^Ran 2 commands.*1 failed/ });
     await expect(group).toBeVisible();
+    // The transcript follows new content until the reader scrolls away: a
+    // script's own scroll is read as a layout shift and pinned back to the
+    // bottom. Scroll up the way a reader does, then open the group.
+    await transcript.focus();
+    await page.keyboard.press('Home');
     await group.click();
     await expect(group).toHaveAttribute('aria-expanded', 'true');
     await expect(transcript.getByText('Failed', { exact: true })).toBeVisible();

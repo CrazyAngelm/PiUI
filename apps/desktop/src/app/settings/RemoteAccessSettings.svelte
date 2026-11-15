@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte';
+  import { onMount } from 'svelte';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
   import { language, t } from '../../features/locale/language';
@@ -32,11 +32,12 @@
   const connecting = $derived(status !== undefined && reason === undefined && status.enabled && (link === 'connecting' || link === 'retrying'));
   const refused = $derived(status !== undefined && reason === undefined && status.enabled && link === 'refused');
 
-  /** The switch's own state; it follows the host and snaps back when the host refuses. */
-  let on = $state(untrack(() => !safeMode && (remote.status?.enabled ?? false)));
-  $effect(() => {
-    on = !safeMode && (status?.enabled ?? false);
-  });
+  /**
+   * The switch's own state: it follows the host, is set at once by a click, and
+   * snaps back when the host refuses. Derived (not an effect) so the first
+   * render already shows the host's answer.
+   */
+  let on = $derived(!safeMode && (status?.enabled ?? false));
 
   onMount(() => {
     void remote.start();

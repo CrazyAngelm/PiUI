@@ -1254,7 +1254,7 @@
     flex: 1;
   }
   .chip__sub {
-    color: var(--piui-text-disabled);
+    color: var(--piui-text-muted);
   }
   .chip--warn {
     color: var(--piui-warning);
