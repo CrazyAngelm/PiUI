@@ -4,11 +4,13 @@ test('cloud entry names the work location and preserves the local chat', async (
   await lab.open('demo', '&nano=signed-in');
   await lab.chat('Plan a weekend in Lisbon').click();
   const location = page.getByRole('group', { name: 'Work location', exact: true });
-  await expect(location.locator('[aria-current="location"]')).toHaveText('This computer');
+  await expect(location).toHaveText('');
+  await expect(location.getByRole('img', { name: 'This computer' })).toHaveAttribute('aria-current', 'location');
+  await test.info().attach('work-location-icons', { body: await location.screenshot(), contentType: 'image/png' });
   await location.getByRole('button', { name: 'Open Nano Cloud' }).press('Enter');
   await expect(page.getByText('Opening Nano Cloud…', { exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Conversation messages' })).toBeVisible();
-  await expect(location.locator('[aria-current="location"]')).toHaveText('This computer');
+  await expect(location.getByRole('img', { name: 'This computer' })).toHaveAttribute('aria-current', 'location');
 
   for (const [scenario, account] of [['demo', 'signed-out'], ['demo', 'free'], ['safe', 'signed-in']] as const) {
     await lab.open(scenario, `&nano=${account}`);

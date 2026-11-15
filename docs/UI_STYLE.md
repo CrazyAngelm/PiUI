@@ -31,6 +31,9 @@ gauges, current selection and popovers, never a whole screen of glow.
 - Keep controls compact and labels close to fields. Grow writing areas, not
   every control. Task editing has a large area and a focused modal. Panels
   resize with pointer or keyboard and remember widths.
+- Work location uses compact monitor and cloud icons with localized accessible
+  names and tooltips. The local indicator stays visibly selected; only the
+  cloud icon is an action.
 - Show one contextual inspector. Chat details belong to chats; agent settings
   belong to the selected graph node. Do not stack unrelated inspectors.
 - Projects have folder icons, consistent rows, hover and selection. Chats use
