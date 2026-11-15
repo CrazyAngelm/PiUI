@@ -271,7 +271,7 @@ The desktop semantic timeline has `projectionVersion: 2`. The discovery/index pa
 
 The first latest-page request creates one host-private immutable projection cache for the session/revision pair. Before reusing an older cursor, the host performs identity-bound streamed full-revision verification and canonical header attribution; cached blocks are not presented as current after a same-size/mtime rewrite or path replacement. A new latest request observes Pi JSONL again and atomically replaces the bounded cache.
 
-The frontend converts adjacent `tool`/`thinking` blocks into one activity group. The group collapses after successful completion, expands for a running/failed/interrupted state, and retains its manual state during streaming updates. This does not change block order or introduce a second chat format.
+The frontend combines adjacent `tool` blocks into one activity group; assistant text and reasoning with text stay visible between groups, and a finished reasoning block without text stays inside the neighbouring group. A group is collapsed by default, shows a live state while a call runs, and keeps its manual state during streaming updates. This does not change block order or introduce a second chat format.
 
 Cursor:
 

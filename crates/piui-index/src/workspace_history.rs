@@ -923,7 +923,11 @@ fn project_codex_event(
                 .or_else(|| payload.get("formatted_output"))
                 .and_then(Value::as_str)
                 .map(str::to_owned);
-            let failed = payload.get("exit_code").and_then(Value::as_i64) != Some(0);
+            // A record without an exit code proves no failure.
+            let failed = payload
+                .get("exit_code")
+                .and_then(Value::as_i64)
+                .is_some_and(|code| code != 0);
             builder.finish_tool(
                 payload.get("call_id").and_then(Value::as_str),
                 output,
@@ -1567,6 +1571,45 @@ mod tests {
         assert!(projection.timeline_blocks()[0].fallback);
         assert_eq!(projection.timeline_blocks()[0].preview, None);
         assert_eq!(projection.report.parse_state, ParseState::Unsupported);
+    }
+
+    #[test]
+    fn a_codex_command_without_an_exit_code_is_not_a_failure() {
+        let directory = TemporaryDirectory::new();
+        let cwd = serde_json::to_string(directory.path.to_string_lossy().as_ref()).unwrap();
+        let path = directory.path.join("exit-codes.jsonl");
+        let event = |kind: &str, call: &str, extra: &str| {
+            format!(
+                "{{\"timestamp\":\"now\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"{kind}\",\"call_id\":\"{call}\"{extra}}}}}\n"
+            )
+        };
+        let mut rollout = format!(
+            "{{\"timestamp\":\"now\",\"type\":\"session_meta\",\"payload\":{{\"id\":\"id\",\"cwd\":{cwd}}}}}\n"
+        );
+        rollout.push_str(&event("exec_command_begin", "missing", ""));
+        rollout.push_str(&event("exec_command_end", "missing", ""));
+        rollout.push_str(&event("exec_command_begin", "zero", ""));
+        rollout.push_str(&event("exec_command_end", "zero", ",\"exit_code\":0"));
+        rollout.push_str(&event("exec_command_begin", "two", ""));
+        rollout.push_str(&event("exec_command_end", "two", ",\"exit_code\":2"));
+        fs::write(&path, rollout).unwrap();
+        let source = HostNativeHistorySource::new(path, "id".into(), WorkspaceHistoryFormat::Codex);
+        let projection = project_native_workspace_history(&source, &project(&directory))
+            .expect("Codex command history projects");
+        let statuses = projection
+            .timeline_blocks()
+            .iter()
+            .filter(|block| block.kind == GenericBlockKind::Tool)
+            .map(|block| block.status)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            statuses,
+            [
+                GenericBlockStatus::Complete,
+                GenericBlockStatus::Complete,
+                GenericBlockStatus::Failed
+            ]
+        );
     }
 
     #[test]

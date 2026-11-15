@@ -24,6 +24,8 @@
   import type { TimelineBlock } from '../../host-api/types';
   import { Button, IconButton, Input, Skeleton, Spinner } from '../../lib/ui';
   import ActivityGroupView from '../../app/chat/transcript/ActivityGroupView.svelte';
+  import ReasoningView from '../../app/chat/transcript/ReasoningView.svelte';
+  import { createReasoningClock } from '../../app/chat/transcript/reasoningClock';
   import { interleave, timeOf, type TimedInsert } from '../../app/chatPipelines/interleave';
   import { splitPipelineContext } from '../../app/chatPipelines/chatPipeline';
 
@@ -117,6 +119,7 @@
 
   // Unchanged rows keep their identity while a reply streams.
   const groupBlocks = createTimelineGrouper();
+  const reasoningClock = createReasoningClock();
   const items = $derived<TimelineViewItem[]>(printMode ? blocks.map(block => ({ type: 'block', block })) : groupBlocks(blocks));
   const controlsByBlock = $derived(new Map(messageControls?.map(item => [item.blockId, item])));
   const appearanceByBlock = $derived(new Map(messagePresentation.map(item => [item.blockId, item])));
@@ -535,6 +538,8 @@
                 </div>
                 {/if}
               </article>
+            {:else if block.kind === 'thinking' && !printMode}
+              <ReasoningView {block} open={openState[block.id] ?? (block.status === 'streaming' || searching)} onToggle={(open) => setOpen(block.id, open)} clock={reasoningClock} />
             {:else if block.kind === 'error'}
               <div class="notice notice--error" role="note">
                 <TriangleAlert size={15} />

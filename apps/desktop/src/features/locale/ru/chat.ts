@@ -8,6 +8,11 @@ export const chatRu: Readonly<Record<string, string>> = {
   'Send to the agent now…': 'Отправить агенту сразу…',
   // Transcript activity summaries and diff statistics.
   '{0} lines added, {1} removed': 'Добавлено строк: {0}, удалено: {1}',
+  'Thought': 'Размышлял',
+  'Thought for {0}s': 'Размышлял {0} с',
+  'Thought for {0}m {1}s': 'Размышлял {0} мин {1} с',
+  '{0} failed': 'С ошибкой: {0}',
+  'Work plan': 'План работы',
   // Attachments: paperclip, paste and drag and drop.
   'Attach images or files': 'Прикрепить изображения или файлы',
   'Attached images': 'Прикреплённые изображения',
