@@ -68,13 +68,28 @@
     const member = fusionMembership.peek(sessionId);
     return member?.role === 'sidekick' ? member.leadSessionId : undefined;
   };
-  /** Leads whose sidekick chats are shown; a lead opens itself when one of them is current. */
+  /**
+   * Leads whose sidekick chats are shown. A lead opens itself when one of them
+   * is current, and once when its pair starts working, so the sidekick's chat
+   * is in view without being opened first. After that the person's choice stands.
+   */
   let expandedLeads = $state<string[]>([]);
+  /** Leads that opened for their pair's work once, or that the person opened or closed by hand. */
+  const settledLeads = new Set<string>();
   $effect(() => {
     const lead = store.selectedSessionId ? parentOf(store.selectedSessionId) : undefined;
     if (lead && !untrack(() => expandedLeads).includes(lead)) expandedLeads = [...untrack(() => expandedLeads), lead];
   });
+  $effect(() => {
+    fusionMembership.watch();
+    const fresh = [...fusionMembership.workingLeads].filter((lead) => !settledLeads.has(lead));
+    if (fresh.length === 0) return;
+    for (const lead of fresh) settledLeads.add(lead);
+    const shown = untrack(() => expandedLeads);
+    expandedLeads = [...shown, ...fresh.filter((lead) => !shown.includes(lead))];
+  });
   function toggleLead(leadId: string): void {
+    settledLeads.add(leadId);
     expandedLeads = expandedLeads.includes(leadId) ? expandedLeads.filter((id) => id !== leadId) : [...expandedLeads, leadId];
   }
 

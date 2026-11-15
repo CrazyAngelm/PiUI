@@ -1,15 +1,17 @@
 /**
  * Composer mention parsing and ranking (pure, no DOM): `/` commands at the
- * start of a message, `@` project files and `$` skills at the caret. The
- * inserted text is exactly what the harness reads; nothing is executed here.
+ * start of a message, `@` project files, `$` skills and `//` macros at the
+ * caret. The inserted text is exactly what the harness reads, except a
+ * `//name` macro, which the composer replaces with its text when it sends
+ * (ADR-060); nothing is executed here.
  */
-export type MentionTrigger = '/' | '@' | '$';
+export type MentionTrigger = '/' | '@' | '$' | '//';
 
 export interface ActiveMention {
   readonly trigger: MentionTrigger;
   /** Text typed after the trigger, without it. */
   readonly query: string;
-  /** Index of the trigger character. */
+  /** Index of the trigger's first character. */
   readonly start: number;
   /** End of the token (exclusive). */
   readonly end: number;
@@ -19,24 +21,32 @@ export interface MentionTriggers {
   readonly slash: boolean;
   readonly at: boolean;
   readonly dollar: boolean;
+  /** `//name` macros; off unless the composer has macros to offer. */
+  readonly macros?: boolean;
 }
 
 const TOKEN_BREAK = /\s/u;
+/** What may follow `//` in a macro token: the characters of a macro name. */
+const MACRO_NAME_PART = /^[\p{L}\p{N}_-]*$/u;
 
 /**
  * The mention being typed at `caret`, if any. `/` only counts as the first
  * character of a single-line message (native commands must start a
- * message); `@` and `$` start a token after whitespace or at the start.
+ * message); `@`, `$` and `//` start a token after whitespace or at the start.
+ * `//name` wins over `/`: a message that starts with `//` is no native command.
  */
 export function activeMention(text: string, caret: number, triggers: MentionTriggers): ActiveMention | undefined {
   const position = Math.max(0, Math.min(caret, text.length));
-  if (triggers.slash && /^\/[^\s]*$/u.test(text) && position > 0) {
-    return { trigger: '/', query: text.slice(1), start: 0, end: text.length };
-  }
   let start = position;
   while (start > 0 && !TOKEN_BREAK.test(text[start - 1] ?? '')) start -= 1;
   let end = position;
   while (end < text.length && !TOKEN_BREAK.test(text[end] ?? '')) end += 1;
+  if (triggers.macros && position >= start + 2 && text.startsWith('//', start) && MACRO_NAME_PART.test(text.slice(start + 2, end))) {
+    return { trigger: '//', query: text.slice(start + 2, position), start, end };
+  }
+  if (triggers.slash && /^\/[^\s]*$/u.test(text) && position > 0) {
+    return { trigger: '/', query: text.slice(1), start: 0, end: text.length };
+  }
   const trigger = text[start];
   if (trigger === '@' && triggers.at) return { trigger, query: text.slice(start + 1, position), start, end };
   if (trigger === '$' && triggers.dollar) return { trigger, query: text.slice(start + 1, position), start, end };
@@ -93,7 +103,7 @@ export function rankFiles(files: readonly string[], query: string, limit = 50): 
     .map((entry) => entry.path);
 }
 
-/** Entries whose name starts with, then contains, the query (case-insensitive). */
+/** Entries whose name is, starts with, then contains the query (case-insensitive), then those whose description has it. */
 export function rankNamed<T extends { readonly name: string; readonly description?: string }>(
   entries: readonly T[],
   query: string,
@@ -104,7 +114,7 @@ export function rankNamed<T extends { readonly name: string; readonly descriptio
   const scored = entries
     .map((entry, index) => {
       const name = entry.name.toLowerCase();
-      const score = name.startsWith(needle) ? 0 : name.includes(needle) ? 1 : entry.description?.toLowerCase().includes(needle) ? 2 : -1;
+      const score = name === needle ? 0 : name.startsWith(needle) ? 1 : name.includes(needle) ? 2 : entry.description?.toLowerCase().includes(needle) ? 3 : -1;
       return { entry, index, score };
     })
     .filter((candidate) => candidate.score >= 0);

@@ -36,6 +36,8 @@ test.describe('new chat', () => {
 
     const prompt = 'Summarize how the transport boundary keeps Tauri out of components';
     const transcript = await startChat(lab, prompt);
+    // The chat is named after its first message.
+    await expect(lab.chat(prompt)).toBeVisible();
     const answer = transcript.getByRole('blockquote').filter({ hasText: prompt });
     // The answer arrives in chunks while the turn is still running.
     await expect(answer).toBeVisible({ timeout: 20_000 });
@@ -255,14 +257,21 @@ test.describe('queue and steer', () => {
     await expect(queue.getByRole('article').filter({ hasText: 'Also cover backpressure' })).toContainText('Queued');
 
     await page.getByRole('group', { name: 'Send mode' }).getByRole('radio', { name: 'Steer' }).click();
+    await expect(message).toHaveAttribute('placeholder', 'Send to the agent now…');
     await message.fill('Keep the answer short');
     await page.getByRole('button', { name: 'Steer', exact: true }).click();
+    // The agent waits on the approval and has not read the message yet: the chat shows it at once, marked.
+    const unread = transcript.getByText('The agent reads this at its next step');
     await expect(transcript.getByText('Keep the answer short', { exact: true })).toBeVisible();
+    await expect(unread).toBeVisible();
     await expect(queue.getByText('Keep the answer short')).toHaveCount(0);
     await expect(queue.getByRole('article').filter({ hasText: 'Also cover backpressure' })).toContainText('Queued');
 
-    // Once the turn continues and ends, the queued follow-up is sent as its own turn.
+    // Once the turn continues, the agent reads the message: it stays in the chat once, unmarked.
     await card.getByRole('button', { name: 'Allow once' }).click();
+    await expect(unread).toHaveCount(0);
+    await expect(transcript.getByText('Keep the answer short', { exact: true })).toHaveCount(1);
+    // When the turn ends, the queued follow-up is sent as its own turn.
     // (The lab's answer quotes the prompt, so the text appears twice.)
     await expect(transcript.getByText('Also cover backpressure', { exact: true }).first()).toBeVisible({ timeout: 45_000 });
     await expect(queue).toBeHidden({ timeout: 45_000 });

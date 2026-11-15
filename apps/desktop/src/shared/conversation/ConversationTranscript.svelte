@@ -490,7 +490,7 @@
                   <MarkdownContent source={context.body} compact={true} {printMode} />
                 </details>
               {/each}
-              <div class="user">
+              <div class="user" class:user--pending={block.status === 'streaming'}>
                 {#if user.text || !user.images}
                   <div class="message-markdown" use:decorate={block}>
                     {#if appearance?.literal}<p class="literal">{user.text}</p>{:else}<MarkdownContent source={user.text} rich={!!decorator} {printMode} />{/if}
@@ -504,6 +504,8 @@
                   </ul>
                 {/if}
               </div>
+              <!-- Sent into a running turn; the agent's runtime has not reported it yet. -->
+              {#if block.status === 'streaming'}<p class="user-pending">{$t('The agent reads this at its next step')}</p>{/if}
             {:else if block.kind === 'assistant'}
               <article class="assistant" class:assistant--end={turnEnds.has(block.id)} class:assistant--failed={block.status === 'failed'} class:assistant--stopped={block.status === 'interrupted'}>
                 {#if block.text}
@@ -665,6 +667,16 @@
     padding: 10px 14px;
     border-radius: 14px;
     background: var(--piui-user-surface);
+  }
+  .user--pending {
+    margin-bottom: var(--piui-space-1);
+    opacity: 0.6;
+  }
+  .user-pending {
+    margin: 0 0 var(--piui-space-6);
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-xs);
+    text-align: right;
   }
   .user :global(.markdown-content) {
     font-size: var(--piui-chat-user-font-size);

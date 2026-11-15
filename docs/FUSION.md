@@ -252,6 +252,10 @@ the project folder.
   the sidekick's chat.
 - Sidekick tool blocks render as a compact brief card with a generic
   fallback; a sidekick chat shows whose sidekick it is and has no composer.
+- The chat list nests a sidekick's chat under its lead. A lead opens itself
+  when one of its sidekick chats is current, and once when its pair starts
+  working, so the sidekick's chat is in view without being opened first.
+  After that the person's choice to open or close the lead stands.
 
 ## Tests
 

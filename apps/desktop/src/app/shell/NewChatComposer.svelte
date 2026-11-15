@@ -24,6 +24,10 @@
   import { composerDropTargets } from '../chat/composer/dropTargets.svelte';
   import { activeMention, fileMention, rankFiles, rankNamed, replaceMention } from '../chat/composer/mentions';
   import type { ComposerMenuItem } from '../chat/composer/menuItems';
+  import { chatTitle } from '../chat/chatTitle';
+  import { macros } from '../macros/macros.svelte';
+  import type { SkillSyntax } from '../macros/expand';
+  import { findMacroTokens, macroSummary, macroTokenAt, type Macro } from '../macros/macro';
   import ContextChip from './ContextChip.svelte';
   import ExecutorPicker, { type Executor } from '../chatPipelines/ExecutorPicker.svelte';
   import type PipelineInputsBarComponent from '../chatPipelines/PipelineInputsBar.svelte';
@@ -151,11 +155,24 @@
   const mention = $derived(
     menuDismissed || store.safeMode
       ? undefined
-      : activeMention(text, caret, { slash: false, at: Boolean(workspaceId), dollar: skillMentions.length > 0 }),
+      : activeMention(text, caret, { slash: false, at: Boolean(workspaceId), dollar: skillMentions.length > 0, macros: macros.list.length > 0 }),
   );
-  type Menu = { kind: 'file'; items: ComposerMenuItem[]; paths: string[] } | { kind: 'skill'; items: ComposerMenuItem[]; mentions: string[] };
+  type Menu = { kind: 'macro'; items: ComposerMenuItem[]; names: string[] } | { kind: 'file'; items: ComposerMenuItem[]; paths: string[] } | { kind: 'skill'; items: ComposerMenuItem[]; mentions: string[] };
   const menu = $derived.by((): Menu | undefined => {
     if (!mention) return undefined;
+    if (mention.trigger === '//') {
+      const found = rankNamed(macros.list, mention.query);
+      // A whole name with nothing longer to offer needs no menu: Enter sends the message.
+      if (found.length === 1 && found[0]?.name === mention.query.toLowerCase()) return undefined;
+      return {
+        kind: 'macro',
+        names: found.map((macro) => macro.name),
+        items: found.map((macro): ComposerMenuItem => {
+          const detail = macroSummary(macro);
+          return { key: `macro:${macro.id}`, title: `//${macro.name}`, ...(detail ? { detail } : {}) };
+        }),
+      };
+    }
     if (mention.trigger === '@') {
       const paths = trusted ? rankFiles(fileMentions.files, mention.query) : [];
       return { kind: 'file', paths, items: paths.map((path) => ({ key: `file:${path}`, title: path })) };
@@ -169,7 +186,7 @@
   });
   const activeIndex = $derived(menu && menu.items.length ? menuIndex % menu.items.length : 0);
   const menuEmpty = $derived(
-    menu?.kind === 'file'
+    menu?.kind === 'macro' ? $t('No matching macros') : menu?.kind === 'file'
       ? !trusted
         ? $t('Trust this project to mention its files.')
         : fileMentions.loading
@@ -452,6 +469,15 @@
   );
   /** The harness that holds the chat: the pipeline's answering agent, else the direct pick. */
   const chatHarness = $derived<HarnessKind | ''>(usesPipeline ? (barDetail?.reply?.harness ?? harness) : harness);
+  // Macros (ADR-060). A skill is written for the agent that reads the message: the Fusion lead, else the chat's agent.
+  const macroHarness = $derived<HarnessKind | ''>(fusionMode && fusionPair ? fusionPair.lead.harness : chatHarness);
+  const macroTokens = $derived(findMacroTokens(text, macros.list));
+  const skillSyntax = $derived<SkillSyntax>({ skills: macroHarness === harness ? skillMentions : [], dollar: macroHarness ? composerSupport(macroHarness).skillMentions : false, ...(macroHarness === 'pi' ? { prefix: 'skill:' } : {}) });
+  /** The message as it is sent. The expansion rules load only for a message that has a macro. */
+  async function expanded(typed: string, known: readonly Macro[], syntax: SkillSyntax): Promise<string> {
+    if (findMacroTokens(typed, known).length === 0) return typed;
+    return (await import('../macros/expand')).expandMacros(typed, known, syntax);
+  }
 
   function chooseExecutor(next: Executor): void {
     if (next.kind === 'template') {
@@ -565,7 +591,7 @@
   function choose(index: number): void {
     const current = menu;
     if (!current || !mention) return;
-    const replacement = current.kind === 'file' ? (current.paths[index] ? fileMention(current.paths[index]) : undefined) : current.mentions[index];
+    const replacement = current.kind === 'macro' ? (current.names[index] === undefined ? undefined : `//${current.names[index]}`) : current.kind === 'file' ? (current.paths[index] ? fileMention(current.paths[index]) : undefined) : current.mentions[index];
     if (!replacement) return;
     const next = replaceMention(text, mention, replacement);
     void place(next.text, next.caret);
@@ -578,7 +604,10 @@
   type PipelineRequest = {
     workspaceId: string;
     commandId: string;
+    /** As typed: its macros are replaced when the chat starts. */
     text: string;
+    macros: readonly Macro[];
+    syntax: SkillSyntax;
     values: Record<string, RunInputValue>;
     permissionMode: PermissionMode;
     fallbackHarness: HarnessKind;
@@ -588,16 +617,18 @@
   };
 
   function capturePipelineRequest(commandId: string, values: Record<string, RunInputValue>, fallbackHarness: HarnessKind): PipelineRequest {
-    const message = text;
+    const typed = text;
     return {
       workspaceId,
       commandId,
-      text: message,
+      text: typed,
+      macros: macros.list,
+      syntax: skillSyntax,
       values,
       permissionMode,
       fallbackHarness,
       available: available.map((item) => item.kind),
-      title: (message.trim().split(/\r?\n/u)[0] ?? '').slice(0, 80),
+      title: chatTitle(typed),
       acknowledgeDraft: captureDraftAcknowledgement(),
     };
   }
@@ -608,7 +639,7 @@
       await chatPipelines.startChat(store, {
         workspaceId: request.workspaceId,
         commandId: request.commandId,
-        text: request.text,
+        text: await expanded(request.text, request.macros, request.syntax),
         values: request.values,
         permissionMode: request.permissionMode,
         fallbackHarness: request.fallbackHarness,
@@ -688,13 +719,17 @@
     // Capture the whole request before the lazy import yields: the person may
     // pick another project or edit the text while the module loads.
     const targetId = workspaceId;
-    const message = text;
+    const typed = text;
+    const known = macros.list;
+    const syntax = skillSyntax;
+    const title = chatTitle(typed);
     const images = attachments.images;
     const acknowledgeDraft = captureDraftAcknowledgement();
     busy = true;
     try {
       const { startFusionChat } = await import('../fusion/startFusionChat');
-      const outcome = await startFusionChat(store, { workspaceId: targetId, pair, text: message, images });
+      const message = await expanded(typed, known, syntax);
+      const outcome = await startFusionChat(store, { workspaceId: targetId, pair, text: message, images, ...(title ? { title } : {}) });
       if (outcome.kind === 'refused') {
         toasts.error($t('The pair cannot start'), `${$t(roleLabel(outcome.role))}: ${$t(refusalCopy(outcome.refusal).title)}`);
         return;
@@ -732,7 +767,9 @@
     if (!harness) return;
     busy = true;
     remember();
-    const message = text;
+    // Started now, with the text as it is: the macro rules may still be loading when the chat is created.
+    const message = expanded(text, macros.list, skillSyntax);
+    const title = chatTitle(text);
     // The images move to the new chat: to its queued message, or to its draft if sending fails.
     const images = attachments.images;
     const acknowledgeDraft = captureDraftAcknowledgement();
@@ -744,7 +781,9 @@
         permissionMode,
         thinkingLevel: thinkingLevel || undefined,
         serviceTier: model?.supportsFast ? (fast ? 'fast' : undefined) : undefined,
-        text: message,
+        // The picks above are read before this wait.
+        text: await message,
+        ...(title ? { title } : {}),
         ...(images.length ? { attachments: images } : {}),
       });
       acknowledgeDraft();
@@ -757,6 +796,15 @@
 
   function keydown(event: KeyboardEvent): void {
     if (event.isComposing) return;
+    if (event.key === 'F2' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+      const token = macroTokenAt(macroTokens, textarea?.selectionStart ?? caret);
+      if (token) {
+        event.preventDefault();
+        macros.requestEdit(token.macro.id);
+        store.navigate({ name: 'settings', section: 'macros' });
+        return;
+      }
+    }
     const items = menu?.items ?? [];
     if (items.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
       event.preventDefault();
@@ -838,7 +886,7 @@
     {#await import('../chat/composer/MentionMenu.svelte') then view}
       <view.default
         id="new-chat-menu"
-        label={menu.kind === 'file' ? $t('Project files') : $t('Skills')}
+        label={menu.kind === 'macro' ? $t('Macros') : menu.kind === 'file' ? $t('Project files') : $t('Skills')}
         items={menu.items}
         active={activeIndex}
         loading={menu.kind === 'file' && fileMentions.loading}
@@ -869,32 +917,39 @@
       {/await}
     {/if}
   {/if}
-  <ComposerTextarea
-    bind:ref={textarea}
-    value={text}
-    oninput={(event) => {
-      setText(event.currentTarget.value);
-      syncCaret();
-      menuDismissed = false;
-      menuIndex = 0;
-    }}
-    beforeKeyDown={keydown}
-    onSubmit={() => void send()}
-    onkeyup={(event) => {
-      if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) syncCaret();
-    }}
-    onclick={syncCaret}
-    onpaste={pasted}
-    minRows={3}
-    maxRows={14}
-    placeholder={usesPipeline ? $t('Describe the task for the pipeline…') : $t('Describe a task, ask a question or @mention a file…')}
-    aria-label={$t('Message')}
-    aria-autocomplete="list"
-    aria-controls={menu ? 'new-chat-menu' : undefined}
-    aria-activedescendant={menu && menu.items.length ? `new-chat-menu-${activeIndex}` : undefined}
-    class="composer__input"
-    disabled={store.safeMode}
-  />
+  <div class="composer__field">
+    <ComposerTextarea
+      bind:ref={textarea}
+      value={text}
+      oninput={(event) => {
+        setText(event.currentTarget.value);
+        syncCaret();
+        menuDismissed = false;
+        menuIndex = 0;
+      }}
+      beforeKeyDown={keydown}
+      onSubmit={() => void send()}
+      onkeyup={(event) => {
+        if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) syncCaret();
+      }}
+      onclick={syncCaret}
+      onpaste={pasted}
+      minRows={3}
+      maxRows={14}
+      placeholder={usesPipeline ? $t('Describe the task for the pipeline…') : $t('Describe a task, ask a question or @mention a file…')}
+      aria-label={$t('Message')}
+      aria-autocomplete="list"
+      aria-controls={menu ? 'new-chat-menu' : undefined}
+      aria-activedescendant={menu && menu.items.length ? `new-chat-menu-${activeIndex}` : undefined}
+      class="composer__input"
+      disabled={store.safeMode}
+    />
+    {#if macroTokens.length}
+      {#await import('../chat/composer/MacroLayer.svelte') then view}
+        <view.default input={textarea} {text} tokens={macroTokens} syntax={skillSyntax} quiet={Boolean(menu)} onEdit={(macro: Macro) => { macros.requestEdit(macro.id); store.navigate({ name: 'settings', section: 'macros' }); }} />
+      {/await}
+    {/if}
+  </div>
   <div data-nano-composer="bar">
     <div class="chips">
       <AttachButton images={imageState} busy={attachments.busy} disabled={busy || store.safeMode || !workspaceId || (usesPipeline && !fusionMode)} onPick={pick} />
@@ -1008,6 +1063,7 @@
 </div>
 
 <style>
+  .composer__field { position: relative; }
   .new-composer {
     --nano-composer-editor-padding: 14px 16px 6px;
     --nano-composer-bar-padding: 6px 8px 8px 10px;

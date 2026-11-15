@@ -17,6 +17,7 @@
   import { errorMessage } from '../workspaceStore.svelte';
   import { runLauncher } from '../triggers/runLauncher.svelte';
   import RuntimeChip from './RuntimeChip.svelte';
+  import { steerEchoes, userBlockIds } from './steerEcho.svelte';
   import ExecutorPicker, { type Executor } from '../chatPipelines/ExecutorPicker.svelte';
   import PipelineInputsBar from '../chatPipelines/PipelineInputsBar.svelte';
   import { chatPipelines, type ChatPipelineDetail } from '../chatPipelines/chatPipelines.svelte';
@@ -26,6 +27,10 @@
   import AttachmentChips from './composer/AttachmentChips.svelte';
   import AttachmentNotices from './composer/AttachmentNotices.svelte';
   import MentionMenu from './composer/MentionMenu.svelte';
+  import MacroLayer from './composer/MacroLayer.svelte';
+  import { macros } from '../macros/macros.svelte';
+  import { expandMacros, type SkillSyntax } from '../macros/expand';
+  import { findMacroTokens, macroSummary, macroTokenAt } from '../macros/macro';
   import ReferenceDialog from './composer/ReferenceDialog.svelte';
   import { ComposerAttachments } from './composer/composerAttachments.svelte';
   import { FileMentions, loadComposerCatalog, type NativeEntries } from './composer/composerLookups.svelte';
@@ -48,8 +53,9 @@
     interrupt: () => Promise<boolean>;
     interruptBusy?: boolean;
     safeMode?: boolean;
+    onEditMacro?: (macroId: string) => void;
   }
-  let { snapshot, draft, updateDraft, images = [], updateImages = () => undefined, refresh, interrupt, interruptBusy = false, safeMode = false }: Props = $props();
+  let { snapshot, draft, updateDraft, images = [], updateImages = () => undefined, refresh, interrupt, interruptBusy = false, safeMode = false, onEditMacro }: Props = $props();
 
   interface Pending {
     id: string;
@@ -80,6 +86,9 @@
   const harness = $derived(snapshot.session.harness);
   const harnessLabel = $derived(harnessMeta(harness).short);
   const support = $derived(composerSupport(harness));
+  // Macros (ADR-060): `//name` is marked while typed and replaced by its text on send.
+  const macroTokens = $derived(findMacroTokens(text, macros.list));
+  const skillSyntax = $derived<SkillSyntax>({ skills: catalog.skills, commands: catalog.commands, dollar: support.skillMentions, ...(snapshot.session.harness === 'pi' ? { prefix: 'skill:' } : {}) });
   // The open session's report is authoritative; before it arrives, the manifest.
   const imageState = $derived(imageSupport(harness, composer ? Boolean(composer.capabilities.images) : undefined));
   const identityKey = $derived(`piui.composer.request.${sessionId}`);
@@ -100,7 +109,7 @@
   const mention = $derived(
     menuDismissed
       ? undefined
-      : activeMention(text, caret, { slash: true, at: Boolean(workspaceId), dollar: support.skillMentions && catalog.skills.length > 0 }),
+      : activeMention(text, caret, { slash: true, at: Boolean(workspaceId), dollar: support.skillMentions && catalog.skills.length > 0, macros: macros.list.length > 0 }),
   );
   $effect(() => {
     const id = workspaceId;
@@ -114,10 +123,24 @@
 
   type Menu =
     | { kind: 'slash'; items: ComposerMenuItem[] }
+    | { kind: 'macro'; items: ComposerMenuItem[]; names: string[] }
     | { kind: 'file'; items: ComposerMenuItem[]; paths: string[]; handles: string[] }
     | { kind: 'skill'; items: ComposerMenuItem[]; mentions: string[] };
   const menu = $derived.by((): Menu | undefined => {
     if (!mention) return undefined;
+    if (mention.trigger === '//') {
+      const found = rankNamed(macros.list, mention.query);
+      // A whole name with nothing longer to offer needs no menu: Enter sends the message.
+      if (found.length === 1 && found[0]?.name === mention.query.toLowerCase()) return undefined;
+      return {
+        kind: 'macro',
+        names: found.map((macro) => macro.name),
+        items: found.map((macro): ComposerMenuItem => {
+          const detail = macroSummary(macro);
+          return { key: `macro:${macro.id}`, title: `//${macro.name}`, ...(detail ? { detail } : {}) };
+        }),
+      };
+    }
     if (mention.trigger === '/') {
       const own = commands
         .filter((command) => command.name.startsWith(mention.query))
@@ -166,10 +189,10 @@
   });
   const menuId = $derived(`composer-menu-${sessionId}`);
   const menuLabel = $derived(
-    menu?.kind === 'file' ? (menu.handles.length ? $t('Teammates and project files') : $t('Project files')) : menu?.kind === 'skill' ? $t('Skills') : $t('Available commands'),
+    menu?.kind === 'macro' ? $t('Macros') : menu?.kind === 'file' ? (menu.handles.length ? $t('Teammates and project files') : $t('Project files')) : menu?.kind === 'skill' ? $t('Skills') : $t('Available commands'),
   );
   const menuEmpty = $derived(
-    menu?.kind === 'file'
+    menu?.kind === 'macro' ? $t('No matching macros') : menu?.kind === 'file'
       ? fileMentions.loading
         ? $t('Loading project files…')
         : fileMentions.error
@@ -230,12 +253,13 @@
     }
     const values = inputsBar?.collect();
     if (!values || busy) return;
-    const message = text;
+    const typed = text;
+    const message = expandMacros(typed, macros.list, skillSyntax);
     busy = true;
     error = '';
     try {
       await chatPipelines.send({ workspaceId, sessionId, commandId: pipelineId, text: message, values, safeMode });
-      if (text === message) setText('');
+      if (text === typed) setText('');
       await chatPipelines.setChatPipeline(sessionId, workspaceId, undefined).catch(() => undefined);
     } catch (cause) {
       error = errorMessage(cause);
@@ -392,7 +416,7 @@
       return;
     }
     const replacement =
-      current.kind === 'file'
+      current.kind === 'macro' ? (current.names[index] === undefined ? undefined : `//${current.names[index]}`) : current.kind === 'file'
         ? index < current.handles.length
           ? `@${current.handles[index] ?? ''}`
           : fileMention(current.paths[index - current.handles.length] ?? '')
@@ -401,6 +425,9 @@
     const next = replaceMention(text, mention, replacement);
     void place(next.text, next.caret);
   }
+
+  /** The chat's user messages when the pending request was first sent. */
+  let firstAttempt: { id: string; known: Set<string> } | undefined;
 
   function loadIdentity(): Pending | undefined {
     try {
@@ -422,7 +449,7 @@
     }
     const typed = text;
     // Finished runs of this chat reach its agent inside this message, labelled.
-    const handed = await chatPipelines.withResults(sessionId, typed);
+    const handed = await chatPipelines.withResults(sessionId, expandMacros(typed, macros.list, skillSyntax));
     const message = handed.text;
     const imageIds = attachments.ids;
     const effectiveMode = running ? mode : 'prompt';
@@ -437,15 +464,23 @@
         return;
       }
     }
+    const request = identity;
+    // A retry keeps the first attempt's view: a message the runtime reported meanwhile is still new.
+    const attempt = firstAttempt?.id === request.id ? firstAttempt : (firstAttempt = { id: request.id, known: userBlockIds(snapshot.blocks) });
+    const known = attempt.known;
     const sent = await action({
       type: 'send',
       sessionId,
-      requestId: identity.id,
+      requestId: request.id,
       text: message,
-      mode: identity.mode,
-      ...(identity.attachments?.length ? { attachments: identity.attachments } : {}),
+      mode: request.mode,
+      ...(request.attachments?.length ? { attachments: request.attachments } : {}),
     });
     if (sent) {
+      // The agent has taken a steered message: the chat shows it until the agent's runtime reports it.
+      if (request.mode === 'steer' && !composer?.queue.items.some((item) => item.id === request.id)) {
+        steerEchoes.add(sessionId, { id: request.id, text: message, images: request.attachments?.length ?? 0, known });
+      }
       if (text === typed) setText('');
       void chatPipelines.consume(sessionId, handed.runIds);
       // The host now owns the images of the queued message.
@@ -458,8 +493,25 @@
     }
   }
 
+  /** Sends a queued message into the running turn. The chat shows it until the agent's runtime reports it. */
+  async function promote(item: ComposerSnapshot['queue']['items'][number]): Promise<void> {
+    const known = userBlockIds(snapshot.blocks);
+    const sent = await action({ type: 'promote', sessionId, requestId: item.id });
+    if (sent && !composer?.queue.items.some((queued) => queued.id === item.id)) {
+      steerEchoes.add(sessionId, { id: item.id, text: item.text, images: item.attachments?.length ?? 0, known });
+    }
+  }
+
   function keydown(event: KeyboardEvent): void {
     if (event.isComposing) return;
+    if (event.key === 'F2' && onEditMacro && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+      const token = macroTokenAt(macroTokens, input?.selectionStart ?? caret);
+      if (token) {
+        event.preventDefault();
+        onEditMacro(token.macro.id);
+        return;
+      }
+    }
     const items = menu?.items ?? [];
     if (items.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
       event.preventDefault();
@@ -560,7 +612,7 @@
                   }}><Pencil /></IconButton
                 >
                 {#if running && canSteer}
-                  <IconButton size="sm" label={$t('Send now as Steer')} onclick={() => void action({ type: 'promote', sessionId, requestId: item.id })}><CornerDownRight /></IconButton>
+                  <IconButton size="sm" label={$t('Send now as Steer')} onclick={() => void promote(item)}><CornerDownRight /></IconButton>
                 {/if}
               {/if}
               {#if item.status !== 'sending'}
@@ -615,31 +667,36 @@
     {#if !pipelineId}
       <HandoffChips {workspaceId} {sessionId} {text} disabled={busy || safeMode} onHandedOff={() => void place('', 0)} />
     {/if}
-    <ComposerTextarea
-      bind:ref={input}
-      value={text}
-      oninput={(event) => {
-        setText(event.currentTarget.value);
-        syncCaret();
-        menuDismissed = false;
-        menuIndex = 0;
-      }}
-      beforeKeyDown={keydown}
-      onSubmit={() => void send()}
-      onkeyup={(event) => {
-        if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) syncCaret();
-      }}
-      onclick={syncCaret}
-      onpaste={pasted}
-      minRows={1}
-      maxRows={14}
-      class="composer__input"
-      aria-label={$t('Message')}
-      aria-autocomplete="list"
-      aria-controls={menu ? menuId : undefined}
-      aria-activedescendant={menu && menu.items.length ? `${menuId}-${activeIndex}` : undefined}
-      placeholder={pipelineId ? $t('Describe the task for the pipeline…') : running ? $t('Queue a follow-up…') : $t('Reply, type / for commands or @ to mention a file…')}
-    />
+    <div class="composer__field">
+      <ComposerTextarea
+        bind:ref={input}
+        value={text}
+        oninput={(event) => {
+          setText(event.currentTarget.value);
+          syncCaret();
+          menuDismissed = false;
+          menuIndex = 0;
+        }}
+        beforeKeyDown={keydown}
+        onSubmit={() => void send()}
+        onkeyup={(event) => {
+          if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) syncCaret();
+        }}
+        onclick={syncCaret}
+        onpaste={pasted}
+        minRows={1}
+        maxRows={14}
+        class="composer__input"
+        aria-label={$t('Message')}
+        aria-autocomplete="list"
+        aria-controls={menu ? menuId : undefined}
+        aria-activedescendant={menu && menu.items.length ? `${menuId}-${activeIndex}` : undefined}
+        placeholder={pipelineId ? $t('Describe the task for the pipeline…') : running ? (mode === 'steer' && canSteer ? $t('Send to the agent now…') : $t('Queue a follow-up…')) : $t('Reply, type / for commands or @ to mention a file…')}
+      />
+      {#if macroTokens.length}
+        <MacroLayer {input} {text} tokens={macroTokens} syntax={skillSyntax} quiet={Boolean(menu)} onEdit={onEditMacro ? (macro) => onEditMacro(macro.id) : undefined} />
+      {/if}
+    </div>
     <div data-nano-composer="bar">
       <div class="composer__left">
         <AttachButton images={imageState} busy={attachments.busy} disabled={busy || Boolean(pipelineId)} onPick={() => void attachments.pick(workspaceId, imageState)} />
@@ -698,6 +755,7 @@
 {/if}
 
 <style>
+  .composer__field { position: relative; }
   .composer-wrap {
     display: grid;
     gap: var(--piui-space-2);

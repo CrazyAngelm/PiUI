@@ -4,6 +4,14 @@ import { activeMention, fileMention, rankFiles, rankNamed, replaceMention, split
 const ALL = { slash: true, at: true, dollar: true } as const;
 
 describe('composer mentions', () => {
+  it('prefers // macros when enabled, including mid-message tokens', () => {
+    expect(activeMention('//re', 4, { ...ALL, macros: true })).toEqual({ trigger: '//', query: 're', start: 0, end: 4 });
+    expect(activeMention('//re', 4, { ...ALL, macros: false })).toEqual({ trigger: '/', query: '/re', start: 0, end: 4 });
+    expect(activeMention('fix //re', 8, { ...ALL, macros: true })).toEqual({ trigger: '//', query: 're', start: 4, end: 8 });
+    expect(activeMention('//a/b', 5, { slash: false, at: true, dollar: true, macros: true })).toBeUndefined();
+    expect(activeMention('//review', 1, { ...ALL, macros: true })?.trigger).not.toBe('//');
+    expect(activeMention('//', 2, { ...ALL, macros: true })).toEqual({ trigger: '//', query: '', start: 0, end: 2 });
+  });
   it('finds `/` only as the whole first token of the message', () => {
     expect(activeMention('/rev', 4, ALL)).toEqual({ trigger: '/', query: 'rev', start: 0, end: 4 });
     expect(activeMention('/review now', 11, ALL)).toBeUndefined();
@@ -50,6 +58,12 @@ describe('composer mentions', () => {
     ];
     expect(rankNamed(entries, 'rev').map((entry) => entry.name)).toEqual(['review', 'skill:review']);
     expect(rankNamed(entries, 'failing').map((entry) => entry.name)).toEqual(['fix-tests']);
+  });
+
+  it('ranks an exact name before longer names that start with it', () => {
+    const entries = [{ name: 'test-all' }, { name: 'test' }, { name: 'latest' }];
+    expect(rankNamed(entries, 'test').map((entry) => entry.name)).toEqual(['test', 'test-all', 'latest']);
+    expect(rankNamed(entries, 'TEST').map((entry) => entry.name)).toEqual(['test', 'test-all', 'latest']);
   });
 
   it('splits the image markers the bridges append to a user block', () => {

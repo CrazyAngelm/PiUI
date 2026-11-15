@@ -82,7 +82,11 @@ describe('UI Lab composer outbox', () => {
     await untilStreaming(host, id);
     const steered = await composer(host, { type: 'send', sessionId: id, requestId: labUuid('test:steer'), text: 'Focus on tests', mode: 'steer' });
     expect(steered.queue.items).toEqual([]);
-    expect((await snapshotOf(host, id)).blocks.some((block) => block.kind === 'user' && block.text === 'Focus on tests')).toBe(true);
+    // The agent reports a steered message when it reads it, at its next step.
+    const reported = async (): Promise<boolean> => (await snapshotOf(host, id)).blocks.some((block) => block.kind === 'user' && block.text === 'Focus on tests');
+    expect(await reported()).toBe(false);
+    await settle(host, id);
+    expect(await reported()).toBe(true);
   });
 
   it('pauses on interrupt, blocks resume while delivery is uncertain and supports removal', async () => {

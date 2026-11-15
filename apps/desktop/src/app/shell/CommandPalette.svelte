@@ -2,6 +2,7 @@
   import { parseTimestamp } from '../../host-api/projectsClient';
   import { Command, Dialog } from 'bits-ui';
   import SquarePen from '@lucide/svelte/icons/square-pen';
+  import SquareSlash from '@lucide/svelte/icons/square-slash';
   import InboxIcon from '@lucide/svelte/icons/inbox';
   import Workflow from '@lucide/svelte/icons/workflow';
   import History from '@lucide/svelte/icons/history';
@@ -180,6 +181,9 @@
                 </Command.Item>
                 <Command.Item class="palette__item" value="action:worktrees" keywords={[$t('Manage worktrees'), 'worktree', 'branch', 'orphan']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'worktrees' }))}>
                   <GitBranch size={15} /><span>{$t('Manage worktrees')}</span>
+                </Command.Item>
+                <Command.Item class="palette__item" value="action:macros" keywords={[$t('Manage macros'), 'macro', 'macros', 'prompt', 'макрос']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'macros' }))}>
+                  <SquareSlash size={15} /><span>{$t('Manage macros')}</span>
                 </Command.Item>
                 <Command.Item class="palette__item" value="action:refresh-projects" keywords={[$t('Refresh projects'), 'refresh', 'reload', 'projects', 'folders']} onSelect={() => run(refreshProjects)}>
                   <RefreshCw size={15} /><span>{$t('Refresh projects')}</span>

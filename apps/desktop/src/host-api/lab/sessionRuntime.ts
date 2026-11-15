@@ -23,6 +23,8 @@ interface ActiveTurn {
   cancel?: () => void;
   approval?: { readonly id: string; readonly step: ApprovalStep };
   onEnd?: TurnEndListener;
+  /** Steered messages the agent has not read yet. It reports each at its next step, as native runtimes do. */
+  steers?: DesktopTimelineBlock[];
 }
 
 export interface StartTurnOptions {
@@ -195,9 +197,11 @@ export class LabSessions {
 
   private steer(record: LabSessionRecord, text: string): void {
     if (record.harness === 'hermes' || isAcpHarness(record.harness)) throw new NativeRejection('unsupported');
-    if (!this.turns.has(record.id) || record.live?.status !== 'running') throw new NativeRejection('no-active-turn');
-    const serial = record.blocks.filter((block) => block.id.includes('-steer-')).length + 1;
-    this.putBlock(record, {
+    const turn = this.turns.get(record.id);
+    if (!turn || record.live?.status !== 'running') throw new NativeRejection('no-active-turn');
+    const steers = (turn.steers ??= []);
+    const serial = record.blocks.filter((block) => block.id.includes('-steer-')).length + steers.length + 1;
+    steers.push({
       id: `live-${record.id.slice(0, 8)}-steer-${serial}`,
       kind: 'user',
       label: liveLabel(record.harness, 'user'),
@@ -206,8 +210,14 @@ export class LabSessions {
     });
   }
 
+  /** The agent reads the messages steered into its turn. */
+  private reportSteers(record: LabSessionRecord, turn: ActiveTurn): void {
+    for (const block of turn.steers?.splice(0) ?? []) this.putBlock(record, block);
+  }
+
   private advance(record: LabSessionRecord, turn: ActiveTurn): void {
     while (this.turns.get(record.id) === turn) {
+      this.reportSteers(record, turn);
       const step = turn.queue.shift();
       if (step === undefined) {
         this.finish(record, turn, 'succeeded');
@@ -254,6 +264,8 @@ export class LabSessions {
   }
 
   private finish(record: LabSessionRecord, turn: ActiveTurn, outcome: TurnOutcome): void {
+    // A turn that ends early still reports the messages it accepted.
+    this.reportSteers(record, turn);
     this.turns.delete(record.id);
     this.touch(record);
     // A turn that did not succeed pauses the outbox before the final idle, as the host does.

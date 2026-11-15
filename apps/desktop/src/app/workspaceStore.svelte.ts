@@ -48,7 +48,7 @@ import { newChatPlacement, type PlacementRequest } from './worktrees/newChatPlac
 import { placementRequest, placements } from './worktrees/placements.svelte';
 
 export type PipelineSection = 'systems' | 'runs' | 'schedules' | 'agents' | 'teams' | 'pipelines';
-export type SettingsSection = 'general' | 'nano' | 'harnesses' | 'extensions' | 'projects' | 'worktrees' | 'background' | 'shortcuts' | 'about' | 'plugins';
+export type SettingsSection = 'general' | 'nano' | 'harnesses' | 'extensions' | 'projects' | 'worktrees' | 'background' | 'macros' | 'shortcuts' | 'about' | 'plugins';
 
 export type Route =
   | { name: 'home' }
@@ -77,6 +77,8 @@ export interface NewChatRequest {
   thinkingLevel?: string;
   serviceTier?: 'standard' | 'fast';
   text: string;
+  /** The chat's name. Without one the host names the chat after its agent. */
+  title?: string;
   /** Pending images sent with the first message (composer inputs v1). */
   attachments?: readonly ComposerImage[];
   /** A worktree and/or handoff link (workspace placement v1). */
@@ -118,7 +120,7 @@ function writeJson(key: string, value: unknown): void {
 }
 
 const PIPELINE_SECTIONS: readonly PipelineSection[] = ['systems', 'runs', 'schedules', 'agents', 'teams', 'pipelines'];
-const SETTINGS_SECTIONS: readonly SettingsSection[] = ['general', 'nano', 'harnesses', 'extensions', 'projects', 'worktrees', 'background', 'shortcuts', 'about', 'plugins'];
+const SETTINGS_SECTIONS: readonly SettingsSection[] = ['general', 'nano', 'harnesses', 'extensions', 'projects', 'worktrees', 'background', 'macros', 'shortcuts', 'about', 'plugins'];
 
 function isRoute(value: unknown): value is Route {
   if (typeof value !== 'object' || value === null || !('name' in value)) return false;
@@ -690,7 +692,7 @@ export class WorkspaceStore {
   async startChat(request: NewChatRequest): Promise<string> {
     // The new chat composer's worktree and handoff choices apply here only.
     const placement = request.placement ?? newChatPlacement.requestFor(request.workspaceId);
-    const outcome = await this.createChat(placement ? { ...request, placement } : request, { open: true });
+    const outcome = await this.createChat(placement ? { ...request, placement } : request, { open: true, ...(request.title ? { title: request.title } : {}) });
     if (placement) newChatPlacement.started(request.workspaceId);
     if (outcome.error) this.sessionError = outcome.error;
     return outcome.sessionId;

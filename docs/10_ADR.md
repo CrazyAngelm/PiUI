@@ -1909,3 +1909,10 @@ restricts no file, network or tool access.
 Accepted for isolated implementation on 2026-11-13. See
 [the decision](adr/056-shared-nano-interface.md) and
 [the stage contract and evidence](NANO_UNIFICATION.md).
+
+## ADR-060 — Composer macros
+
+A macro is a saved prompt, a list of skills, or both. It is typed as `//name`
+in a message and replaced by its text when the message is sent. Macros are a
+local preference and nothing is executed. See
+[the decision](adr/060-composer-macros.md).

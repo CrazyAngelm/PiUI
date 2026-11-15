@@ -10,6 +10,8 @@ export type FusionChatHost = Pick<WorkspaceStore, 'loadCatalog' | 'openSession' 
 export interface FusionStartRequest {
   workspaceId: string;
   pair: FusionPairV1;
+  /** The chat's name. Without one the host names the chat after its agent. */
+  title?: string;
   /** The first message for the lead; empty starts the chat without one. */
   text: string;
   images?: readonly ComposerImage[];
@@ -28,7 +30,12 @@ export type FusionStartResult =
  * chat opens. Host errors throw a `FusionError`.
  */
 export async function startFusionChat(store: FusionChatHost, request: FusionStartRequest): Promise<FusionStartResult> {
-  const created = await fusionHost.request({ type: 'createChat', workspaceId: request.workspaceId, pair: request.pair });
+  const created = await fusionHost.request({
+    type: 'createChat',
+    workspaceId: request.workspaceId,
+    pair: request.pair,
+    ...(request.title ? { title: request.title } : {}),
+  });
   if (created.type === 'pairCheck') {
     if (created.ok) throw new FusionError('unknown');
     return { kind: 'refused', refusal: created.refusal, role: created.role };

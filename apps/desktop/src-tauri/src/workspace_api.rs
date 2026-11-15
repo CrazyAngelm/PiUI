@@ -1568,12 +1568,8 @@ impl WorkspaceHost {
             id: session_id,
             workspace_id: request.workspace_id,
             harness: request.harness,
-            title: normalized_title(request.title.as_deref()).unwrap_or_else(|| {
-                match request.harness {
-                    HarnessKind::Acp(agent) => self.inner.acp.default_title(agent),
-                    builtin => default_title(builtin),
-                }
-            }),
+            title: normalized_title(request.title.as_deref())
+                .unwrap_or_else(|| self.generated_title(request.harness)),
             updated_at: now_string(),
             nano_connector: supports_nano_connector(request.harness)
                 && is_nano_model(request.harness, request.model.as_ref()),
@@ -2837,6 +2833,14 @@ impl WorkspaceHost {
             .map_err(|_| WorkspaceError::io())
     }
 
+    /// The name a chat gets when it is created without one.
+    fn generated_title(&self, harness: HarnessKind) -> String {
+        match harness {
+            HarnessKind::Acp(agent) => self.inner.acp.default_title(agent),
+            builtin => default_title(builtin),
+        }
+    }
+
     fn update_binding_and_metadata(
         &self,
         session_id: &str,
@@ -2846,6 +2850,13 @@ impl WorkspaceHost {
         // An adopted session keeps its PiUI title; renaming it in PiUI
         // updates both the chat and the native session name.
         let keep_title = self.adopted(session_id);
+        let harness = lock(&self.inner.registry)?
+            .sessions()
+            .iter()
+            .find(|record| record.id == session_id)
+            .map(|record| record.harness)
+            .ok_or_else(WorkspaceError::not_found)?;
+        let generated = self.generated_title(harness);
         self.update_record(session_id, |record| {
             if persist_binding {
                 record.native_id = Some(snapshot.native_id.clone());
@@ -2855,7 +2866,12 @@ impl WorkspaceHost {
             }
             record.materialized = merge_materialization(record.materialized, snapshot.materialized);
             if !keep_title {
-                record.title = snapshot.title.clone();
+                record.title = title_after_snapshot(
+                    &record.title,
+                    &generated,
+                    &snapshot.title,
+                    &snapshot.blocks,
+                );
             }
             if !record.nano_connector || is_nano_model(record.harness, snapshot.model.as_ref()) {
                 record.model = snapshot.model.clone();
@@ -5026,6 +5042,53 @@ fn normalized_title(value: Option<&str>) -> Option<String> {
     (!value.is_empty() && !value.chars().any(char::is_control)).then(|| value.to_owned())
 }
 
+/// The longest name a chat takes from a message.
+const MESSAGE_TITLE_CHARS: usize = 80;
+/// The line an adapter adds to a user message for each image it carried.
+const IMAGE_MARKER: &str = "[image]";
+
+/// The name a chat takes from a message: its first line that has words, as
+/// one line of at most 80 characters.
+fn message_title(text: &str) -> Option<String> {
+    let line = text
+        .lines()
+        .map(|line| {
+            line.split(|character: char| character.is_whitespace() || character.is_control())
+                .filter(|word| !word.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .find(|line| !line.is_empty() && line != IMAGE_MARKER)?;
+    if line.chars().count() <= MESSAGE_TITLE_CHARS {
+        return Some(line);
+    }
+    let kept: String = line.chars().take(MESSAGE_TITLE_CHARS - 1).collect();
+    Some(format!("{}…", kept.trim_end()))
+}
+
+/// The title of a chat once its adapter reported `native_title` and `blocks`.
+/// The adapter's title is the chat's title, with one exception: the generated
+/// name of a new chat. A chat that has a message is named after its first one
+/// and keeps that name while the adapter still reports the generated one.
+fn title_after_snapshot(
+    current: &str,
+    generated: &str,
+    native_title: &str,
+    blocks: &[NativeBlock],
+) -> String {
+    if native_title != generated {
+        return native_title.to_owned();
+    }
+    if current != generated {
+        return current.to_owned();
+    }
+    blocks
+        .iter()
+        .filter(|block| block.kind == BlockKind::User)
+        .find_map(|block| block.text.as_deref().and_then(message_title))
+        .unwrap_or_else(|| native_title.to_owned())
+}
+
 fn default_title(harness: HarnessKind) -> String {
     match harness {
         HarnessKind::Pi => "New Pi session",
@@ -6603,6 +6666,100 @@ Board."
     }
 }
 
+#[cfg(test)]
+mod chat_title_tests {
+    use super::{
+        HarnessKind, NativeBlock, default_title, message_title, normalized_title,
+        title_after_snapshot,
+    };
+
+    fn block(kind: &str, text: &str) -> NativeBlock {
+        serde_json::from_value(serde_json::json!({
+            "id": format!("{kind}-{text}"),
+            "kind": kind,
+            "label": "Block",
+            "status": "complete",
+            "text": text,
+        }))
+        .expect("a native block")
+    }
+
+    #[test]
+    fn a_message_names_a_chat_by_its_first_line_of_words() {
+        assert_eq!(
+            message_title("Fix the parser").as_deref(),
+            Some("Fix the parser")
+        );
+        assert_eq!(
+            message_title("\n  \n  Fix   the\tparser  \nand the tests").as_deref(),
+            Some("Fix the parser")
+        );
+        assert_eq!(
+            message_title("Почини парсер\r\nи тесты").as_deref(),
+            Some("Почини парсер")
+        );
+        assert_eq!(
+            message_title("[image]\n\nLook at this\n\n[image]").as_deref(),
+            Some("Look at this")
+        );
+        assert_eq!(
+            message_title("Fix\u{7}the\u{0} parser").as_deref(),
+            Some("Fix the parser")
+        );
+        assert_eq!(message_title(""), None);
+        assert_eq!(message_title(" \n\t\r\n[image]"), None);
+    }
+
+    #[test]
+    fn a_long_first_line_is_cut_to_eighty_characters() {
+        let exact = "a".repeat(80);
+        assert_eq!(message_title(&exact), Some(exact.clone()));
+        assert_eq!(
+            message_title(&format!("{exact}a")),
+            Some(format!("{}…", "a".repeat(79)))
+        );
+        // No space is left before the mark.
+        assert_eq!(
+            message_title(&format!("{} tail and more", "a".repeat(78))),
+            Some(format!("{}…", "a".repeat(78)))
+        );
+        let faces = message_title(&"😀".repeat(81)).expect("a title");
+        assert_eq!(faces.chars().count(), 80);
+        // Every name is one the host accepts as a title.
+        assert_eq!(normalized_title(Some(faces.as_str())), Some(faces));
+    }
+
+    #[test]
+    fn a_chat_with_a_generated_name_takes_the_name_of_its_first_message() {
+        let generated = default_title(HarnessKind::ClaudeCode);
+        let history = [
+            block("assistant", "Hello"),
+            block("user", "[image]"),
+            block("user", "Fix the parser\nand the tests"),
+            block("user", "Later"),
+        ];
+        let title = |current: &str, native: &str, blocks: &[NativeBlock]| {
+            title_after_snapshot(current, &generated, native, blocks)
+        };
+        // Without a message that has words the generated name stays.
+        assert_eq!(title(&generated, &generated, &[]), generated);
+        assert_eq!(title(&generated, &generated, &history[..2]), generated);
+        // The first message that has words names the chat.
+        assert_eq!(title(&generated, &generated, &history), "Fix the parser");
+        // The name is kept while the adapter still reports the generated one.
+        assert_eq!(
+            title("Fix the parser", &generated, &history[3..]),
+            "Fix the parser"
+        );
+        // A native or chosen name always wins.
+        assert_eq!(
+            title("Fix the parser", "Parser work", &history),
+            "Parser work"
+        );
+        assert_eq!(title(&generated, "Parser work", &history), "Parser work");
+    }
+}
+
 /// Host tests that drive the production bridge runner, transport and event
 /// forwarder through a deterministic test adapter instead of a harness.
 #[cfg(test)]
@@ -7109,6 +7266,64 @@ mod native_host_tests {
             session_titled(&host, "New Claude Code session").is_none(),
             "a refused start leaves no draft session"
         );
+        cleanup(host, root);
+    }
+
+    /// A chat whose native history already has messages when it starts.
+    const HISTORY_ADAPTER: &str = r#"
+        const native = {supported:true,enforcement:'native'};
+        const unsupported = {supported:false,enforcement:'unsupported'};
+        return {
+          snapshot() {
+            return {nativeId:'native-test',materialized:true,title:config.title ?? 'Test session',status:'idle',approvals:[],models:[],
+              blocks:[{id:'a1',kind:'assistant',label:'Assistant',status:'complete',text:'Hello'},
+                {id:'u1',kind:'user',label:'You',status:'complete',text:'Fix the parser\nand the tests'}],
+              capabilities:{prompt:native,resume:native,models:native,approvals:native,instructions:unsupported,toolPolicy:native,nativeSubagents:unsupported}};
+          },
+          prompt() { return {accepted:true}; },
+          interrupt() { return null; },
+          dispose() { return null; },
+        };
+    "#;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_chat_with_a_generated_name_is_named_after_its_first_message() {
+        let root = test_root("first-message-title");
+        let host = Arc::new(HostState::open(&root, false).expect("host state"));
+        install_test_spawner(&host.workspace, |config| {
+            NativeRuntime::spawn_test_adapter(config, HISTORY_ADAPTER)
+        });
+        let workspace_id = host.personal_workspace.project_id.clone();
+        let unnamed = session_of(
+            dispatch(
+                &host,
+                WorkspaceCommand::CreateSession {
+                    workspace_id: workspace_id.clone(),
+                    harness: HarnessKind::Pi,
+                    title: None,
+                    model: None,
+                    permission_mode: PermissionMode::Native,
+                },
+            )
+            .await,
+        );
+        assert_eq!(unnamed.session.title, "Fix the parser");
+        assert!(session_titled(&host, "Fix the parser").is_some());
+        // The name is kept on later snapshots.
+        let again = session_of(
+            dispatch(
+                &host,
+                WorkspaceCommand::Snapshot {
+                    session_id: unnamed.session.id.clone(),
+                },
+            )
+            .await,
+        );
+        assert_eq!(again.session.title, "Fix the parser");
+        // A chosen name is never replaced.
+        let named = session_of(dispatch(&host, create_command(&workspace_id, "Chosen name")).await);
+        assert_eq!(named.session.title, "Chosen name");
+        host.workspace.shutdown_all().await;
         cleanup(host, root);
     }
 

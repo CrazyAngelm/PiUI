@@ -70,7 +70,7 @@ export const harnessesRu: Readonly<Record<string, string>> = {
   'Only skills can be switched per agent, not MCP servers.': 'Для агента переключаются только навыки, не MCP-серверы.',
   'Cannot run a single model call read-only.': 'Не может выполнить разовый вызов модели только для чтения.',
   'Tools and delegation cannot be limited per agent.': 'Инструменты и делегирование нельзя ограничить для агента.',
-  'A running turn cannot be steered; follow-ups wait for it to end.': 'Идущий ход нельзя направлять; следующие сообщения ждут его конца.',
+  'A running turn cannot be steered; follow-ups wait for it to end.': 'В идущий ход нельзя отправить сообщение сразу; новые сообщения ждут его конца.',
   'Skills, MCP servers and plugins come from your Claude Code settings; they cannot be switched per agent.':
     'Навыки, MCP-серверы и плагины берутся из настроек Claude Code; для агента их не переключить.',
   'Without a sign-in a step fails before it starts: run `claude` and use /login.':

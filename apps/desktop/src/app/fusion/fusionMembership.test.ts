@@ -232,4 +232,29 @@ describe('Fusion membership cache', () => {
       expect(membership.isCurrentSidekick('side-14')).toBe(false);
     });
   });
+
+  describe('working leads', () => {
+    const emit = (leadSessionId: string, revision: number) => {
+      for (const listener of listeners) listener({ protocol: 1, leadSessionId, revision });
+    };
+
+    it('marks a lead whose pair changed, once the chat list watches', () => {
+      emit('lead-20', 1);
+      expect([...membership.workingLeads]).toEqual([]);
+      membership.watch();
+      membership.watch();
+      expect(listeners).toHaveLength(1);
+      emit('lead-20', 2);
+      emit('lead-21', 1);
+      emit('lead-20', 3);
+      expect([...membership.workingLeads]).toEqual(['lead-20', 'lead-21']);
+    });
+
+    it('forgets a deleted lead', () => {
+      membership.watch();
+      emit('lead-22', 1);
+      membership.forgetLead('lead-22');
+      expect([...membership.workingLeads]).toEqual([]);
+    });
+  });
 });

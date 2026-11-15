@@ -328,7 +328,7 @@ export function createLabFusion(runtime: LabSessions, bus: LabEventBus, options:
           workspaceId: doc.workspaceId,
           harness: sidekick.harness,
           permissionMode: sidekick.permissionMode,
-          title: `Sidekick: ${[...leadTitle].slice(0, 60).join('')}`,
+          title: `Sidekick · ${[...leadTitle].slice(0, 80).join('')}`,
           ...(model === undefined ? {} : { model }),
         },
       }) as WorkspaceResult);

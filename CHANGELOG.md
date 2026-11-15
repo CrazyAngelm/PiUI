@@ -6,8 +6,19 @@ Nano Desktop is currently a developer preview. Versions before 1.0 may change wi
 
 ## [Unreleased]
 
+### Added
+
+- **Macros.** Settings → Macros keeps your ready prompts and sets of skills. Type `//name` in a message to add one, or several. The macro is highlighted as you type; hover it, or move the caret onto it, to see what it adds and to open it for editing, or press `F2`. Sending replaces it with its text, with skills written the way the chat's agent expects (ADR-060).
+
+### Changed
+
+- While a Fusion pair works, the sidekick's chat is shown under its lead in the chat list without being opened first.
+- Russian: the send choice while an agent works reads **В очередь / Сразу** instead of **В очередь / Уточнить ход**.
+- A new chat is named after its first message instead of `New Claude Code session`. A Fusion sidekick's chat is named `Sidekick · ` and the name of its lead. An older chat that still has the generated name takes its first message as the name the next time it is opened.
+
 ### Fixed
 
+- A message sent into a running turn appears in the chat at once, marked as not read yet. It used to appear only when the agent read it at its next step, which could take half a minute.
 - OpenCode models show their reasoning levels in the model picker, in a new chat and in an open one. Each model offers its own levels, and `default` is no longer listed as a level.
 - The new-chat harness, model, reasoning, speed and permission picks are remembered as soon as they are made, not when a message is sent. A project without its own choice starts from the latest one, and a harness that was still being checked at startup takes over once it is ready.
 - A project that is not trusted yet shows the harness's known models instead of an empty list; the project's own list replaces it after you trust the folder.

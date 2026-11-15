@@ -6,6 +6,7 @@
   import Trash from '@lucide/svelte/icons/trash-2';
   import Power from '@lucide/svelte/icons/power';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+  import { untrack } from 'svelte';
   import { t } from '../../features/locale/language';
   import { statusLabel } from '../../features/workspace/workspaceState';
   import { Badge, Button, EmptyState, IconButton, Menu, Skeleton, Spinner, matchesShortcut } from '../../lib/ui';
@@ -14,6 +15,8 @@
   import HarnessMark from './HarnessMark.svelte';
   import ChatDetails from './ChatDetails.svelte';
   import ChatComposer from '../chat/ChatComposer.svelte';
+  import { macros } from '../macros/macros.svelte';
+  import { echoBlocks, steerEchoes, waitingEchoes } from '../chat/steerEcho.svelte';
   import ExtensionSurface from '../chat/extensions/ExtensionSurface.svelte';
   import PluginComposerActions from '../plugins/PluginComposerActions.svelte';
   import { extensionSurfaces } from '../chat/extensions/extensionSurfaces.svelte';
@@ -48,6 +51,16 @@
 
   const session = $derived(store.catalog.sessions.find((item) => item.id === sessionId));
   const snapshot = $derived(store.snapshots[sessionId]);
+  // A message steered into a running turn stays in the chat until the agent's runtime reports it.
+  const turnActive = $derived(snapshot?.session.status === 'running' || snapshot?.session.status === 'stopping');
+  const echoes = $derived(snapshot && turnActive ? waitingEchoes(steerEchoes.list(sessionId), snapshot.blocks) : []);
+  const shownBlocks = $derived(snapshot ? (echoes.length ? [...snapshot.blocks, ...echoBlocks(echoes)] : snapshot.blocks) : []);
+  $effect(() => {
+    const current = snapshot;
+    if (!current) return;
+    const active = turnActive;
+    untrack(() => steerEchoes.settle(sessionId, current.blocks, active));
+  });
   const workspace = $derived(store.catalog.workspaces.find((item) => item.id === session?.workspaceId));
   const running = $derived(session ? ['starting', 'running', 'stopping'].includes(session.status) : false);
   // Project chats (not pipeline members) can have an active board card (ADR-041).
@@ -229,7 +242,7 @@
 
       {#if snapshot}
           <Transcript
-            blocks={snapshot.blocks}
+            blocks={shownBlocks}
             loading={store.sessionLoading}
             sessionKey={snapshot.session.id}
             historySessionId={snapshot.session.id}
@@ -294,6 +307,7 @@
                   interrupt={() => store.interrupt(snapshot.session.id)}
                   interruptBusy={store.interruptBusy}
                   safeMode={store.safeMode}
+                  onEditMacro={(id) => { macros.requestEdit(id); store.navigate({ name: 'settings', section: 'macros' }); }}
                 />
               {/key}
             {/if}

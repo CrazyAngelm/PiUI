@@ -1,4 +1,4 @@
-import { SvelteMap } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { FusionError, fusionHost, type FusionRoleNameV1, type FusionStateV1 } from '../../host-api/fusionClient';
 import { coalesceReads } from '../../lib/coalescedReads';
 
@@ -26,11 +26,23 @@ class FusionMembership {
   private entries = new SvelteMap<string, FusionMember>();
   /** Retired flag of every sidekick session the lead's last answered `state` listed. */
   private retired = new SvelteMap<string, boolean>();
+  /** Leads whose pair changed while the app ran (a brief, a round, a reset): Fusion is at work there. */
+  private working = new SvelteSet<string>();
   private pending = new Map<string, { generation: number; request: Promise<void> }>();
   /** One `state` read in flight per lead; a forgotten lead gets a new key (the generation) so an old read is never joined. */
   private leadReads = coalesceReads((leadSessionId: string) => this.refreshLead(leadSessionId), (leadSessionId) => `${this.generation}:${leadSessionId}`);
   private generation = 0;
   private listening = false;
+
+  /** The leads whose pair reported a change since the app started. */
+  get workingLeads(): ReadonlySet<string> {
+    return this.working;
+  }
+
+  /** Follows pair changes from now on. The chat list calls it, so the first brief of a pair is not missed. */
+  watch(): void {
+    this.listen();
+  }
 
   /** The known membership; `undefined` until the host answered. */
   peek(sessionId: string): FusionMember | undefined {
@@ -70,6 +82,7 @@ class FusionMembership {
   forgetLead(leadSessionId: string): void {
     this.generation += 1;
     this.pending.clear();
+    this.working.delete(leadSessionId);
     for (const [sessionId, member] of [...this.entries]) {
       if (sessionId === leadSessionId || member.leadSessionId === leadSessionId) {
         this.entries.delete(sessionId);
@@ -150,6 +163,7 @@ class FusionMembership {
     this.listening = true;
     fusionHost
       .onChanged((event) => {
+        this.working.add(event.leadSessionId);
         for (const member of this.entries.values()) {
           if (member.role === 'sidekick' && member.leadSessionId === event.leadSessionId) {
             void this.loadLead(event.leadSessionId, true);

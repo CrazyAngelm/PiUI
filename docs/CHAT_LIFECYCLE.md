@@ -13,6 +13,15 @@ exercises open, close, registry reload, reopen and reclose without a model reque
 Run it explicitly with `PIUI_DRAFT_REOPEN_TEST_ROOT` set to a disposable directory
 and `CODEX_HOME` set to its `codex-home` child.
 
+A chat is named after its first message. The composer passes the first line of
+the typed text, as one line of at most 80 characters, when it creates a chat, a
+Fusion lead included; a sidekick's chat is named `Sidekick · ` and the name of
+its lead. A chat created without a title has the generated name of its agent
+(`New Claude Code session`). Once the native history has a message, the host
+replaces that generated name with the first message, on start, on a snapshot
+and on close, and keeps it while the adapter still reports the generated one.
+A name that the person or the harness gave is never replaced.
+
 The composer model picker shows the current native model even when discovery
 omits it. Codex app-server 0.147.0 and later start (ADR-045): the tested range
 (0.147.0 up to, not including, 0.166.0; see `crates/piui-runtime/bridge/CONTRACT.md`)
@@ -91,6 +100,13 @@ replay after a lost response. Definitive refusal preserves queued text with a
 reason. Ambiguous delivery pauses the queue and requires checking native history.
 Stop, failure, close and host restart pause pending work. Restart converts an
 in-flight request to uncertain; it never retries an unknown outcome automatically.
+
+A steered message is written to the harness at once, but the harness reports
+it only when the agent reads it, at its next step, and by then the outbox has
+settled it as sent. Until that report the chat shows the message as its last
+one, marked as not read yet. This echo exists only in the WebView: it is not
+stored, not sent again and not part of any history. It goes when the harness
+reports the message or when the turn ends.
 
 Queue generations live in `workspace-registry-v11/composer-v19/<session-id>/`,
 separate from the unchanged session registry format and all native transcripts.

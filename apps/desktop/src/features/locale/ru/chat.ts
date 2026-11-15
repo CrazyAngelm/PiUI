@@ -3,6 +3,9 @@ export const chatRu: Readonly<Record<string, string>> = {
   'Could not load history. Try again.': 'Не удалось загрузить историю. Попробуйте ещё раз.',
   'Could not load the full answer. Try again.': 'Не удалось загрузить полный ответ. Попробуйте ещё раз.',
   'Could not open attachment.': 'Не удалось открыть вложение.',
+  // A message sent into a running turn, before the agent reads it.
+  'The agent reads this at its next step': 'Агент прочитает это на ближайшем шаге',
+  'Send to the agent now…': 'Отправить агенту сразу…',
   // Transcript activity summaries and diff statistics.
   '{0} lines added, {1} removed': 'Добавлено строк: {0}, удалено: {1}',
   // Attachments: paperclip, paste and drag and drop.

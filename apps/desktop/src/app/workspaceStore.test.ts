@@ -63,6 +63,21 @@ describe('WorkspaceStore start', () => {
     store.dispose();
   });
 
+  it('names a new chat as asked and leaves the name to the host otherwise', async () => {
+    const store = new WorkspaceStore();
+    await store.loadCatalog();
+    const workspaceId = store.catalog.workspaces.find(workspace => workspace.trust === 'trusted' && !workspace.personal)!.id;
+    const request = vi.spyOn(workspaceHost, 'request');
+    const created = () => request.mock.calls.map(([command]) => command).filter(command => command.type === 'createSession').at(-1);
+    const named = await store.startChat({ workspaceId, harness: 'codex', permissionMode: 'native', text: 'Fix the parser\nand the tests', title: 'Fix the parser' });
+    expect(created()).toMatchObject({ title: 'Fix the parser' });
+    expect(store.snapshots[named]?.session.title).toBe('Fix the parser');
+    const unnamed = await store.startChat({ workspaceId, harness: 'codex', permissionMode: 'native', text: 'Hello' });
+    expect(created()).not.toHaveProperty('title');
+    expect(store.snapshots[unnamed]?.session.title).toBe('New Codex session');
+    store.dispose();
+  });
+
   it('acknowledges the untouched Home draft after navigation while the first send is pending', async () => {
     const store = new WorkspaceStore();
     await store.loadCatalog();
