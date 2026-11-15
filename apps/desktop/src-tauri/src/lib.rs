@@ -841,6 +841,9 @@ pub fn run() -> Result<(), tauri::Error> {
             let app_data_dir = app.path().app_data_dir()?;
             let state = HostState::open(&app_data_dir, safe_mode)
                 .map_err(Box::<dyn std::error::Error>::from)?;
+            // Unix: one background run of the login shell finds the agents and
+            // Node.js a desktop launch does not see. Safe mode runs no shell.
+            piui_runtime::search_path::start(safe_mode);
             let extension_ui = app.handle().clone();
             state
                 .workspace

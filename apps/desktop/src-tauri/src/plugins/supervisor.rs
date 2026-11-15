@@ -503,7 +503,7 @@ impl Supervisor {
             self.start_failed(slot, &spec.plugin_id);
             return Err(CallError::NotStarted(StartFailure::Failed));
         };
-        let environment = std::env::vars_os().collect::<Vec<_>>();
+        let environment = piui_runtime::search_path::host_environment();
         let spawned = PluginBackend::spawn(PluginBackendLaunch {
             node,
             entry: &spec.entry,

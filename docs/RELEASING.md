@@ -251,9 +251,17 @@ in [AGENTS.md](../AGENTS.md).
   password; AppImage updates replace the AppImage file in place.
 - macOS builds are not notarized, and macOS agent lifecycle containment is not
   yet verified. Linux containment is a process group (see above).
-- On Linux, harnesses and Node.js are found from the `PATH` the application
-  starts with. A version manager that sets `PATH` only in an interactive shell
-  (nvm in `.bashrc`) is not seen from a desktop launcher: start Nano Desktop
-  from that shell, or set `PIUI_NODE` and `PIUI_PI_CLI`.
+- On Linux and macOS, harnesses and Node.js are searched in the process `PATH`,
+  then in the `PATH` of the user's login shell (`$SHELL -ilc`; bash, zsh and
+  fish; one run of up to 5 s after start, repeated by **Check again**, never in
+  safe mode), then in the usual install folders (`~/.local/bin`, nvm, fnm,
+  volta, bun, pnpm, `~/.opencode/bin`, `~/.cargo/bin`, Homebrew). A desktop
+  launcher does not give an application what `.bashrc` or `.zshrc` set, which
+  is why the shell is asked. `PIUI_NODE`, `PIUI_PI_CLI`, `PIUI_CLAUDE_BIN` and
+  `PIUI_HERMES_ROOT` stay overrides. A startup file can tell this run by
+  `PIUI_RESOLVING_ENVIRONMENT=1`. Only `PATH` is taken: variables exported just
+  in a shell profile (provider API keys) are still not passed to agents started
+  from a desktop launcher, so sign in inside the agent or start Nano Desktop
+  from a terminal (ADR-063).
 - On Linux the Nano sign-in is kept in memory for the running app only (no OS
   credential store is used yet), and Nano uses the separately installed Pi.

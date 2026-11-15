@@ -577,9 +577,28 @@ pub enum AcpResolveError {
     NodeUnavailable,
 }
 
-/// Resolves `spec` against the current `PATH`.
+/// Resolves `spec` against the host search path (`PATH`, plus the login
+/// shell's on Unix, see [`crate::search_path`]).
 pub fn resolve_acp_command(spec: &AcpCommandSpec) -> Result<AcpResolvedCommand, AcpResolveError> {
-    resolve_acp_command_in(spec, std::env::var_os("PATH").as_deref())
+    // A start or a check must see the login shell's PATH, not a half-ready one.
+    crate::search_path::settle();
+    let command = resolve_acp_command_in(spec, crate::search_path::current().as_deref())?;
+    let node_available = !cfg!(unix) || crate::workspace_runtime::resolve_node().is_ok();
+    with_bridge_node(command, node_available)
+}
+
+/// Every ACP agent starts behind a Node.js bridge, whatever its own program
+/// is: a native executable (Goose, OpenCode) found without Node.js is not
+/// ready, and says so instead of failing at the start (Unix; Windows keeps
+/// its own checks).
+fn with_bridge_node(
+    command: AcpResolvedCommand,
+    node_available: bool,
+) -> Result<AcpResolvedCommand, AcpResolveError> {
+    if cfg!(unix) && !node_available {
+        return Err(AcpResolveError::NodeUnavailable);
+    }
+    Ok(command)
 }
 
 /// Resolves `spec` against `path` (a `PATH` value). Only absolute `PATH`
@@ -895,7 +914,7 @@ pub fn probe_acp_version(
     let output = match cached {
         Some(output) => output,
         None => {
-            let environment = acp_environment(&std::env::vars_os().collect::<Vec<_>>(), &[]);
+            let environment = acp_environment(&crate::search_path::host_environment(), &[]);
             let output = run_probe_command(
                 &command.program,
                 &args,
@@ -1167,10 +1186,7 @@ pub fn probe_opencode_native_models(launch: &AcpLaunch, cwd: &Path) -> Option<Ve
     {
         return None;
     }
-    let environment = acp_environment(
-        &std::env::vars_os().collect::<Vec<_>>(),
-        &launch.environment,
-    );
+    let environment = acp_environment(&crate::search_path::host_environment(), &launch.environment);
     let output = run_probe_command(
         &launch.command.program,
         &launch
@@ -2313,5 +2329,20 @@ console.log('nano/local');"#,
         let resolved = resolve_acp_command_in(&spec, Some(&path)).expect("later entry");
         assert_eq!(resolved.program, canonical(&exe));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_native_agent_needs_the_node_bridge_it_starts_behind() {
+        let native = executable_command(PathBuf::from("/opt/goose/bin/goose"), &[]);
+        // Node.js found: ready everywhere.
+        assert_eq!(with_bridge_node(native.clone(), true), Ok(native.clone()));
+        // Not found: unix names the fix instead of failing at the start;
+        // Windows keeps its own checks.
+        let without_node = with_bridge_node(native.clone(), false);
+        if cfg!(unix) {
+            assert_eq!(without_node, Err(AcpResolveError::NodeUnavailable));
+        } else {
+            assert_eq!(without_node, Ok(native));
+        }
     }
 }

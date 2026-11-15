@@ -324,7 +324,7 @@ mod platform {
     use std::process::{Command, Stdio};
 
     pub(super) fn is_available() -> bool {
-        std::env::var_os("PATH").is_some_and(|path| find_emulator(&path).is_some())
+        piui_runtime::search_path::current().is_some_and(|path| find_emulator(&path).is_some())
     }
 
     pub(super) fn open(
@@ -335,7 +335,7 @@ mod platform {
     ) -> Result<(), TerminalError> {
         // The emulator is found through the host PATH, but starts with only the
         // sanitized environment.
-        let path = std::env::var_os("PATH").ok_or(TerminalError::NoTerminal)?;
+        let path = piui_runtime::search_path::current().ok_or(TerminalError::NoTerminal)?;
         let (name, emulator) = find_emulator(&path).ok_or(TerminalError::NoTerminal)?;
         let argv = linux_terminal_argv(name, program, args).ok_or(TerminalError::Launch)?;
         let mut child = Command::new(emulator)

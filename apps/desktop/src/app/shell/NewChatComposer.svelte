@@ -5,7 +5,7 @@
   import Brain from '@lucide/svelte/icons/brain';
   import { onMount, tick, untrack } from 'svelte';
   import { t } from '../../features/locale/language';
-  import { cachedHarnessModels, catalogDegraded, isNanoConnectorModel, rememberedHarnessModels } from '../../host-api/harnessModels';
+  import { cachedHarnessModels, catalogDegraded, harnessModels, isNanoConnectorModel, rememberedHarnessModels } from '../../host-api/harnessModels';
   import { prewarmHarnessCatalogs } from '../../host-api/catalogPrewarm';
   import ModelPicker, { type ModelOption } from './ModelPicker.svelte';
   import type { HarnessCatalogModel, HarnessModelsResult, HarnessResource } from '../../../../../contracts/harness-models-v18';
@@ -112,6 +112,12 @@
   /** Set when resource discovery failed: the models stay, skills can be retried. */
   let resourcesWarning = $state('');
   let catalogAttempt = $state(0);
+  /** Set by a manual Retry for the load it starts: the harness is asked again, a remembered answer (even an empty one) is not reused. */
+  let refreshCatalog = false;
+  function retryCatalog(): void {
+    refreshCatalog = true;
+    catalogAttempt += 1;
+  }
   let catalogFor = $state('');
   let busy = $state(false);
   let textarea = $state<HTMLTextAreaElement | null>(null);
@@ -234,6 +240,8 @@
     const version = harnessVersion;
     // A retry asks again for the same project and harness: what is shown stays.
     void catalogAttempt;
+    const refresh = refreshCatalog;
+    refreshCatalog = false;
     // The Nano catalog is account state: a sign-in, a plan or a credit change loads it again.
     // An agent with a Nano model source lists the same modes as a separate group.
     const followsNano = kind === 'nano' || NANO_SOURCE_HARNESSES.includes(kind);
@@ -304,6 +312,15 @@
         models = result.models;
         modelsProvisional = true;
       };
+      if (refresh && attempt === 0) {
+        harnessModels({ workspaceId: id, harness: kind }, true, version)
+          .then((result) => {
+            show(result);
+            if (!cancelled) modelsLoading = false;
+          })
+          .catch(failed);
+        return;
+      }
       cachedHarnessModels(
         { workspaceId: id, harness: kind },
         { onFresh: show, onError: failed, onProvisional: provisional, ...(version ? { version } : {}) },
@@ -1056,14 +1073,19 @@
 {:else if modelsError && modelsError !== workspaceError({ code: 'SIGN_IN_REQUIRED' }).message}
   <p class="notice notice--error" role="status">
     {$t(modelsError)}
-    <button type="button" class="link" onclick={() => (catalogAttempt += 1)}>{$t('Retry')}</button>
+    <button type="button" class="link" onclick={retryCatalog}>{$t('Retry')}</button>
+  </p>
+{:else if !usesPipeline && !fusionMode && modelsResolved && !modelsLoading && !modelsProvisional && models.length === 0}
+  <p class="notice" role="status">
+    {$t("This agent listed no models. Sign in or add a provider in the agent's own app, then try again.")}
+    <button type="button" class="link" onclick={retryCatalog}>{$t('Retry')}</button>
   </p>
 {:else if !usesPipeline && !fusionMode && modelKey && modelsResolved && !model}
   <p class="notice notice--error">{$t('Choose a model')}</p>
 {:else if resourcesWarning && !modelsLoading}
   <p class="notice" role="status">
     {$t(resourcesWarning)}
-    <button type="button" class="link" onclick={() => (catalogAttempt += 1)}>{$t('Retry')}</button>
+    <button type="button" class="link" onclick={retryCatalog}>{$t('Retry')}</button>
   </p>
 {/if}
 {#if attachments.references.length}

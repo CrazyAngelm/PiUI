@@ -1,6 +1,7 @@
 //! Contained, bounded `git` invocations with fixed argument vectors.
 //!
-//! Git is resolved from absolute `PATH` entries only and started without a
+//! Git is resolved from absolute entries of the host search path (`PATH`, and on
+//! Unix the login shell's, see `search_path`) only and started without a
 //! shell, in the repository folder the host verified. Every invocation turns
 //! repository hooks off (an empty PiUI-owned `core.hooksPath`), turns off
 //! `core.fsmonitor`, the pager and quoting of paths, treats pathspecs
@@ -101,7 +102,7 @@ impl GitRunner {
     /// [`GitRunError::Unavailable`] when no git executable is found.
     pub fn resolve(hooks_dir: PathBuf) -> Result<Self, GitRunError> {
         let name = if cfg!(windows) { "git.exe" } else { "git" };
-        let program = find_in(name, std::env::var_os("PATH").as_deref())?;
+        let program = find_in(name, crate::search_path::current().as_deref())?;
         Ok(Self { program, hooks_dir })
     }
 
@@ -137,7 +138,7 @@ impl GitRunner {
     pub async fn run(&self, request: GitRequest<'_>) -> Result<GitOutput, GitRunError> {
         let mut args = self.global_args();
         args.extend(request.args.iter().cloned());
-        let environment = git_environment(&std::env::vars_os().collect::<Vec<_>>(), request.access);
+        let environment = git_environment(&crate::search_path::host_environment(), request.access);
         let (mut child, mut containment) =
             spawn_contained(&self.program, &args, request.cwd, &environment).await?;
         let stdin = child.stdin.take();

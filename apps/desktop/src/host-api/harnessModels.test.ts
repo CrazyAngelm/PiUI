@@ -15,7 +15,8 @@ vi.stubGlobal('localStorage', {
 });
 let harnessModels: typeof import('./harnessModels').harnessModels;
 let workspaceModel: typeof import('./harnessModels').workspaceModel;
-beforeEach(async () => { vi.resetModules(); invoke.mockReset(); ({ harnessModels, workspaceModel } = await import('./harnessModels')); });
+let cachedHarnessModels: typeof import('./harnessModels').cachedHarnessModels;
+beforeEach(async () => { vi.resetModules(); invoke.mockReset(); ({ harnessModels, workspaceModel, cachedHarnessModels } = await import('./harnessModels')); });
 
 describe('native harness catalog v19 with v18 catalog data', () => {
   it('preserves provider identity and native capability values', async () => {
@@ -72,6 +73,31 @@ describe('native harness catalog v19 with v18 catalog data', () => {
     const result = { protocol: 18, harness: 'claude-code', models: [{ id: 'sonnet', provider: 'anthropic', name: 'Sonnet', thinkingLevels: ['low', 'high'], supportsFast: false }], resources: { items: [], warnings: [] } };
     invoke.mockResolvedValueOnce(result).mockResolvedValueOnce(result);
     expect(await harnessModels(request), 'a failure is never cached').toEqual(result);
+  });
+  it('asks the harness again on a manual retry although an empty catalog is remembered', async () => {
+    localStorage.clear();
+    const request = { workspaceId: 'retry-project', harness: 'codex' as const };
+    const empty = { protocol: 18, harness: 'codex', models: [], resources: { items: [], warnings: [] } };
+    invoke.mockResolvedValue(empty);
+    await harnessModels(request);
+    const asked = invoke.mock.calls.length;
+    // The picker's own load reuses the remembered empty answer: no new request.
+    expect((await cachedHarnessModels(request)).models).toEqual([]);
+    expect(invoke).toHaveBeenCalledTimes(asked);
+    // Retry: the harness is asked again and its new models replace the empty list.
+    const later = { ...empty, models: [{ id: 'gpt-late', provider: 'openai', name: 'GPT', thinkingLevels: ['low'] }] };
+    invoke.mockReset();
+    invoke.mockResolvedValue(later);
+    const retried = await harnessModels(request, true);
+    expect(invoke).toHaveBeenCalled();
+    expect(retried.models.map(model => model.id)).toEqual(['gpt-late']);
+  });
+  it('names a missing harness or Node.js instead of "Could not load models."', async () => {
+    invoke.mockRejectedValueOnce({ code: 'UNAVAILABLE', message: 'host text is not trusted', recoverable: true });
+    await expect(harnessModels({ workspaceId: 'project', harness: 'codex' })).rejects.toMatchObject({
+      code: 'UNAVAILABLE',
+      message: 'The selected harness is unavailable. Check its installation and native sign-in.',
+    });
   });
   it('shows a remembered catalog at once and reports the probe that replaces it', async () => {
     localStorage.clear();
