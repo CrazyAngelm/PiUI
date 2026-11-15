@@ -998,7 +998,14 @@ project, without crowding the composer further.
   step already receives run inputs as labelled, untrusted task data. The
   editor's Start block offers "Accept chat messages" (adds `message`) and
   "Start new chats of this project with this pipeline". New chats talk
-  directly unless the project sets that default.
+  directly unless the project sets that default. Amended: a new chat starts
+  like the project's last one (the saved pipeline, or the harness), as
+  remembered with the composer's other picks in `piui.shell.newchat.v1`. A
+  pipeline the picker would refuse (deleted, no message input, teammate turned
+  off, answering harness unavailable), a project default set after that chat,
+  safe mode or a restricted project fall back to the default, else direct.
+  Sending waits until the remembered executor is restored; a choice in the
+  picker ends the wait.
 - The chat is an ordinary workspace session on the harness and model of the
   pipeline's answering step (the last final agent step), so follow-ups talk
   to that agent directly (owner's choice "b"). Run sessions stay closed to
