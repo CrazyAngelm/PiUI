@@ -1,6 +1,7 @@
 <script lang="ts" generics="T extends string">
   import { ToggleGroup } from 'bits-ui';
   import type { Component } from 'svelte';
+  import { nextSegmentedValue } from './segmentedSelection';
 
   interface Option {
     value: T;
@@ -19,15 +20,19 @@
   }
   let { value = $bindable(), options, label, size = 'md', iconOnly = false, onValueChange }: Props = $props();
 
-  function change(next: string): void {
-    // A single-select segmented control never becomes empty.
-    if (next === '' || next === value) return;
-    value = next as T;
-    onValueChange?.(value);
+  // A single-select segmented control always keeps exactly one option selected.
+  // The toggle group clears its own value when the active item is pressed again,
+  // so it is bound through a getter/setter: a press that selects nothing new never
+  // writes, and the group keeps showing the current value instead of going blank.
+  function select(requested: string | undefined): void {
+    const next = nextSegmentedValue(value, requested ?? '', options);
+    if (next === null) return;
+    value = next;
+    onValueChange?.(next);
   }
 </script>
 
-<ToggleGroup.Root type="single" {value} onValueChange={change} class="piui-seg piui-seg--{size}" aria-label={label}>
+<ToggleGroup.Root type="single" bind:value={() => value, select} class="piui-seg piui-seg--{size}" aria-label={label}>
   {#each options as option (option.value)}
     <ToggleGroup.Item
       value={option.value}
