@@ -149,6 +149,7 @@
   --piui-duration-slow: 260ms;
 
   /* Layout. */
+  --piui-rail-width: 48px;
   --piui-sidebar-width: 248px;
   --piui-header-height: 48px;
   --piui-panel-width: 360px;

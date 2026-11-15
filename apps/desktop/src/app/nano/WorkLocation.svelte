@@ -19,7 +19,7 @@
 {/if}
 
 <style>
-  .locations { display: flex; align-items: stretch; gap: var(--piui-space-1); padding: var(--piui-space-1) 0 var(--piui-space-2); }
+  .locations { display: flex; flex-direction: column; align-items: center; gap: var(--piui-space-1); }
   .location { display: inline-flex; align-items: center; justify-content: center; flex: none; width: var(--piui-control-md); height: var(--piui-control-md); padding: 0; border: 0; border-radius: var(--piui-radius-sm); background: transparent; color: var(--piui-text-muted); }
   .current { background: var(--piui-surface-1); color: var(--piui-text); }
   button:hover { background: var(--piui-hover); color: var(--piui-text); }

@@ -3,7 +3,7 @@ import { expect, test } from './fixtures';
 test('cloud entry names the work location and preserves the local chat', async ({ lab, page }) => {
   await lab.open('demo', '&nano=signed-in');
   await lab.chat('Plan a weekend in Lisbon').click();
-  const location = page.getByRole('group', { name: 'Work location', exact: true });
+  const location = lab.rail.getByRole('group', { name: 'Work location', exact: true });
   await expect(location).toHaveText('');
   await expect(location.getByRole('img', { name: 'This computer' })).toHaveAttribute('aria-current', 'location');
   await test.info().attach('work-location-icons', { body: await location.screenshot(), contentType: 'image/png' });

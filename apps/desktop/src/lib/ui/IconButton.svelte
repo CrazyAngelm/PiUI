@@ -8,6 +8,7 @@
     label: string;
     shortcut?: string;
     tooltip?: boolean;
+    tooltipSide?: 'top' | 'bottom' | 'left' | 'right';
     size?: 'sm' | 'md' | 'lg';
     variant?: 'ghost' | 'subtle' | 'primary';
     active?: boolean;
@@ -19,6 +20,7 @@
     label,
     shortcut,
     tooltip = true,
+    tooltipSide = 'top',
     size = 'md',
     variant = 'ghost',
     active = false,
@@ -46,7 +48,7 @@
 {/snippet}
 
 {#if tooltip}
-  <Tooltip content={label} {shortcut}>
+  <Tooltip content={label} {shortcut} side={tooltipSide}>
     {#snippet trigger(props)}
       {@render button(props)}
     {/snippet}

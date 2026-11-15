@@ -46,14 +46,19 @@ export class Lab {
     return this.page.getByRole('navigation', { name: 'Workspace navigation' });
   }
 
+  get rail(): Locator {
+    return this.page.getByRole('navigation', { name: 'Main navigation' });
+  }
+
   get main(): Locator {
     return this.page.getByRole('main');
   }
 
-  /** A primary sidebar entry by its visible label (the shortcut hint is part of the name). */
+  /** A rail entry by its accessible name; Settings stays in the sidebar footer. */
   nav(label: 'New chat' | 'Search' | 'Inbox' | 'Pipelines' | 'Runs' | 'Automations' | 'Settings'): Locator {
-    // The name carries the shortcut hint ("New chat Ctrl+N") or a count ("Inbox 1 waiting").
-    return this.sidebar.getByRole('button', { name: new RegExp(`^${label}(?: Ctrl\\+\\S+| \\d+ waiting)?$`) });
+    if (label === 'Settings') return this.sidebar.getByRole('button', { name: /^Settings Ctrl\+\S+$/ });
+    // The inbox name carries its count ("Inbox 1 waiting").
+    return this.rail.getByRole('button', { name: new RegExp(`^${label}(?: \\d+ waiting)?$`) });
   }
 
   /** A chat row in the sidebar project tree. */

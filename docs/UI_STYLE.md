@@ -32,8 +32,14 @@ gauges, current selection and popovers, never a whole screen of glow.
   every control. Task editing has a large area and a focused modal. Panels
   resize with pointer or keyboard and remember widths.
 - Work location uses compact monitor and cloud icons with localized accessible
-  names and tooltips. The local indicator stays visibly selected; only the
-  cloud icon is an action.
+  names and tooltips, stacked at the bottom of the navigation rail. The local
+  indicator stays visibly selected; only the cloud icon is an action.
+- Primary navigation is a 48px icon rail at the far left (`--piui-rail-width`):
+  New chat, Search, Inbox, Pipelines, Runs, Automations and a More menu for
+  other views. Rail buttons have an accessible name and a tooltip, never a
+  caption; exactly one carries `aria-current="page"`. The list beside it keeps
+  a New chat row, projects with their chats, the account chip and Settings. In
+  a narrow window the rail stays and only the list becomes a drawer.
 - Show one contextual inspector. Chat details belong to chats; agent settings
   belong to the selected graph node. Do not stack unrelated inspectors.
 - Projects have folder icons, consistent rows, hover and selection. Chats use
