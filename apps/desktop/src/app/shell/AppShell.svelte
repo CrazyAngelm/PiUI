@@ -7,6 +7,7 @@
   import { Button, IconButton, Toaster, matchesShortcut, toasts } from '../../lib/ui';
   import { WorkspaceStore, errorMessage } from '../workspaceStore.svelte';
   import HomeView from './HomeView.svelte';
+  import NavRail from './NavRail.svelte';
   import Sidebar from './Sidebar.svelte';
   import { lazyViews, type LazyView } from './lazyViews.svelte';
   import { EmptyState, Skeleton } from '../../lib/ui';
@@ -219,9 +220,10 @@
       </div>
     {/if}
     <div class="frame">
+      <NavRail onSearch={() => (paletteOpen = true)} onNavigate={() => (drawerOpen = false)} />
       {#if !narrow || drawerOpen}
         <div class="sidebar-slot" class:sidebar-slot--drawer={narrow}>
-          <Sidebar onSearch={() => (paletteOpen = true)} onTrust={openTrust} onNavigate={() => (drawerOpen = false)} />
+          <Sidebar onTrust={openTrust} onNavigate={() => (drawerOpen = false)} />
         </div>
         {#if narrow}
           <button type="button" class="scrim" aria-label={$t('Close navigation')} onclick={() => (drawerOpen = false)}></button>
@@ -350,21 +352,21 @@
   .frame {
     position: relative;
     display: grid;
-    grid-template-columns: var(--piui-sidebar-width) minmax(0, 1fr);
+    grid-template-columns: var(--piui-rail-width) var(--piui-sidebar-width) minmax(0, 1fr);
     flex: 1;
     min-height: 0;
   }
   .app--narrow .frame {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: var(--piui-rail-width) minmax(0, 1fr);
   }
   .sidebar-slot {
     min-height: 0;
   }
   .sidebar-slot--drawer {
     position: absolute;
-    inset: 0 auto 0 0;
+    inset: 0 auto 0 var(--piui-rail-width);
     z-index: var(--piui-z-overlay);
-    width: min(300px, 86vw);
+    width: min(300px, calc(86vw - var(--piui-rail-width)));
     box-shadow: var(--piui-shadow-3);
     animation: slide-in var(--piui-duration) var(--piui-ease-out);
   }
@@ -376,7 +378,7 @@
   }
   .scrim {
     position: absolute;
-    inset: 0;
+    inset: 0 0 0 var(--piui-rail-width);
     z-index: calc(var(--piui-z-overlay) - 1);
     border: 0;
     background: var(--piui-overlay);

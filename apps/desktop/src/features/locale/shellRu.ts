@@ -145,6 +145,8 @@ export const shellRu: Readonly<Record<string, string>> = {
   "Open inbox": "Открыть входящие",
   "Open navigation": "Открыть навигацию",
   "Close navigation": "Закрыть навигацию",
+  "Main navigation": "Основная навигация",
+  "More": "Ещё",
   "Open pipelines": "Открыть конвейеры",
   "Open runs": "Открыть запуски",
   "Options for {0}": "Параметры: {0}",

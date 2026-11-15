@@ -777,6 +777,16 @@ four read-only GPT 6.1 Sol passes.
   fixed. The native sign-in terminal (`CreateProcessW`) was not launched for
   real.
 
+## Navigation rail — 2026-11-15
+
+- The sidebar's top block (work location row and six rows) is now a 48px icon
+  rail (`NavRail.svelte`, `--piui-rail-width`) with tooltips and a More menu
+  (Agents, Teams, Step lists, Session history). The list keeps a New chat row.
+- The work-location group moved to the bottom of the rail and loads as its own
+  chunk, only for an account that can use Nano Cloud.
+- In a narrow window the rail stays; only the list is the drawer.
+- Verification: pending (unit and UI Lab specs written, not yet run).
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

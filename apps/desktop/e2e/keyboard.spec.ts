@@ -1,7 +1,7 @@
 import { expect, test } from './fixtures';
 
 test.describe('keyboard-only operation', () => {
-  test('Tab walks the skip link and the sidebar in order; Enter activates', async ({ lab, page }) => {
+  test('Tab walks the skip link, the rail and the list in order; Enter activates', async ({ lab, page }) => {
     await lab.open();
     await page.keyboard.press('Tab');
     const skip = page.getByRole('link', { name: 'Skip to main content' });
@@ -13,6 +13,10 @@ test.describe('keyboard-only operation', () => {
     await page.keyboard.press('Enter');
     await expect(page.getByRole('region', { name: 'Automations' })).toBeVisible();
 
+    await page.keyboard.press('Tab');
+    await expect(lab.rail.getByRole('button', { name: 'More', exact: true })).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(lab.sidebar.getByRole('button', { name: 'New chat Ctrl+N' })).toBeFocused();
     await page.keyboard.press('Tab');
     await expect(lab.sidebar.getByRole('button', { name: 'Add project' })).toBeFocused();
     await page.keyboard.press('Tab');

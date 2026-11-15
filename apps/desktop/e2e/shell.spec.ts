@@ -1,7 +1,7 @@
 import { expect, test } from './fixtures';
 
 test.describe('shell navigation', () => {
-  test('sidebar sections open their views and mark the current page', async ({ lab, page }) => {
+  test('rail entries open their views and mark the current page', async ({ lab, page }) => {
     await lab.open();
     await expect(page.getByRole('heading', { level: 1, name: 'What should we work on?' })).toBeVisible();
     await expect(lab.nav('New chat')).toHaveAttribute('aria-current', 'page');
@@ -116,6 +116,54 @@ test.describe('shell navigation', () => {
     await lab.nav('Pipelines').click();
     await expect(editor.getByRole('heading', { name: 'Build a pipeline' })).toBeVisible();
     await expect(name).toHaveValue('');
+  });
+
+  test('the list keeps a New chat row and the rail shows icons without captions', async ({ lab, page }) => {
+    await lab.open();
+    await lab.nav('Inbox').click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Inbox' })).toBeVisible();
+    for (const label of ['New chat', 'Search', 'Pipelines', 'Runs', 'Automations'] as const) await expect(lab.nav(label)).toHaveText('');
+    await expect(lab.rail.getByRole('button', { name: 'More', exact: true })).toHaveText('');
+    await lab.sidebar.getByRole('button', { name: 'New chat Ctrl+N' }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'What should we work on?' })).toBeVisible();
+    await expect(lab.nav('New chat')).toHaveAttribute('aria-current', 'page');
+    // The rail owns these entries; the list no longer repeats them.
+    await expect(lab.sidebar.getByRole('button', { name: 'Pipelines', exact: true })).toHaveCount(0);
+  });
+
+  test('More opens the extra views from the keyboard and Escape returns focus', async ({ lab, page }) => {
+    await lab.open();
+    const more = lab.rail.getByRole('button', { name: 'More', exact: true });
+    await more.focus();
+    await page.keyboard.press('Enter');
+    const menu = page.getByRole('menu');
+    await expect(menu.getByRole('menuitem')).toHaveText(['Agents', 'Teams', 'Step lists', 'Session history']);
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await expect(more).toBeFocused();
+    await page.keyboard.press('Enter');
+    await menu.getByRole('menuitem', { name: 'Session history' }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Session history' })).toBeVisible();
+    await expect(lab.rail.locator('[aria-current="page"]')).toHaveCount(0);
+    await more.click();
+    await menu.getByRole('menuitem', { name: 'Agents' }).click();
+    await expect(lab.nav('Pipelines')).toHaveAttribute('aria-current', 'page');
+  });
+
+  test('a narrow window keeps the rail and turns only the list into a drawer', async ({ lab, page }) => {
+    await lab.open();
+    await page.setViewportSize({ width: 740, height: 860 });
+    await expect(lab.rail).toBeVisible();
+    await expect(lab.sidebar).toHaveCount(0);
+    await lab.nav('Inbox').click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Inbox' })).toBeVisible();
+    await page.getByRole('button', { name: 'Open navigation' }).click();
+    await expect(lab.sidebar).toBeVisible();
+    await expect(page.getByRole('main', { includeHidden: true })).toHaveAttribute('inert', '');
+    await lab.nav('Runs').click();
+    await expect(lab.sidebar).toHaveCount(0);
+    await expect(page.getByRole('navigation', { name: 'Runs' })).toBeVisible();
+    await expect(lab.nav('Runs')).toHaveAttribute('aria-current', 'page');
   });
 });
 
@@ -239,7 +287,7 @@ test.describe('appearance and language', () => {
 
     const sidebar = page.getByRole('navigation', { name: 'Навигация рабочей области' });
     await expect(sidebar.getByRole('button', { name: 'Новый чат Ctrl+N' })).toBeVisible();
-    await expect(sidebar.getByRole('button', { name: 'Конвейеры', exact: true })).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Основная навигация' }).getByRole('button', { name: 'Конвейеры', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { level: 1, name: 'Настройки' })).toBeVisible();
     await expect(page.getByRole('group', { name: 'Тема' }).getByRole('radio', { name: 'Тёмная' })).toBeVisible();
     // Chat titles are user content and stay as written.

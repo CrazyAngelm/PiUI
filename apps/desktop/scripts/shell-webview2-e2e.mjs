@@ -188,6 +188,7 @@ export async function runShellWebview2Proof({
   }
 
   const sidebar = `document.querySelector('nav[aria-label="Workspace navigation"]')`;
+  const rail = `document.querySelector('nav[aria-label="Main navigation"]')`;
   const settingsNav = `document.querySelector('nav[aria-label="Settings sections"]')`;
   const dialog = `document.querySelector('[role="dialog"]')`;
 
@@ -252,14 +253,11 @@ export async function runShellWebview2Proof({
     home: document.querySelector('#home-title')?.textContent?.trim(),
     legacy: document.querySelector('.view-switch, #workspace-main, aside .utilities') !== null,
     classic: document.querySelector('.project-group, dialog.add-project-modal, .settings-nav') !== null,
-    nav: ['New chat', 'Search', 'Pipelines', 'Runs', 'Automations', 'Settings'].every((name) => {
-      const scope = ${sidebar};
-      return scope !== null && [...scope.querySelectorAll('button')].some((button) => {
-        const clone = button.cloneNode(true);
-        clone.querySelectorAll('kbd, .kbd, [aria-hidden="true"]').forEach((child) => child.remove());
-        return clone.textContent?.trim() === name;
-      });
-    }),
+    nav: ['New chat', 'Search', 'Inbox', 'Pipelines', 'Runs', 'Automations', 'More'].every((name) => {
+      const scope = ${rail};
+      return scope !== null && [...scope.querySelectorAll('button')].some((button) =>
+        button.getAttribute('aria-label')?.startsWith(name) && (name === 'Inbox' || button.textContent?.trim() === ''));
+    }) && (${buttonExpression('New chat', sidebar)}) !== null && (${buttonExpression('Settings', sidebar)}) !== null,
   }))()`);
   assertion(shell.main && shell.skip && shell.nav, `The default view lost a landmark or navigation label: ${JSON.stringify(shell)}`);
   assertion(shell.home === 'What should we work on?', `The default view did not open Home: ${JSON.stringify(shell)}`);
@@ -322,13 +320,13 @@ export async function runShellWebview2Proof({
   timings.projectTrust = normalizedMilliseconds(performance.now() - phase);
   checks.push('explicit-ui-project-trust', 'trust-dialog-focus-trap', 'trust-dialog-escape-focus-restore');
 
-  // 4. The command palette opens from the sidebar and Escape restores focus.
-  await focusButton('Search', sidebar);
+  // 4. The command palette opens from the rail and Escape restores focus.
+  await focusButton('Search', rail);
   await evaluate(`document.activeElement.click()`);
   await waitFor(`document.querySelector('[role="dialog"] input[role="combobox"]') === document.activeElement`, 'palette search focused');
   await automation.dispatchKey({ key: 'Escape', code: 'Escape' });
   await waitFor(`!${dialog}`, 'palette closes with Escape');
-  await waitFor(`document.activeElement === (${buttonExpression('Search', sidebar)})`, 'focus returns to Search');
+  await waitFor(`document.activeElement === (${buttonExpression('Search', rail)})`, 'focus returns to Search');
   checks.push('palette-escape-focus-restore');
 
   // 5. The theme is a host preference that survives a reload.
@@ -418,7 +416,7 @@ export async function runShellWebview2Proof({
   checks.push('russian-copy-persisted-user-content-untranslated');
 
   // 7. Pipelines open their editor in the new shell.
-  await click('Pipelines', sidebar);
+  await click('Pipelines', rail);
   await waitFor(`document.querySelector('section[aria-label="Pipeline editor"]')`, 'pipeline editor', startupBoundMs);
   checks.push('pipelines-view-default-shell');
 

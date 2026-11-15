@@ -386,7 +386,7 @@ Native plugins, history, composer and dispatch retain their owners. Blazor offer
 an explicit preview and return to its ordinary transcript; Home retains transport,
 uploads, streaming, paging, approval, notifications and PDF export. This is the
 verified boundary for incremental migration, not full legacy-screen parity.
-The eligible Desktop sidebar exposes This computer and Open Nano Cloud without
+The eligible Desktop navigation rail exposes This computer and Open Nano Cloud without
 moving local sessions; the existing cloud window remains isolated from IPC.
 
 Four read-only `gpt-6.1-sol` / `max` reviews inspected the same immutable PIUI

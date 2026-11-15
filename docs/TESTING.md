@@ -64,7 +64,8 @@ Output (all git-ignored under `apps/desktop/`):
 
 Covered flows, each with at least one failure path:
 
-- Shell: sidebar sections and `aria-current`, project collapse, trust from the
+- Shell: rail entries and `aria-current`, the More menu, the narrow drawer that
+  keeps the rail, project collapse, trust from the
   project menu and Settings (cancel keeps it restricted), the unsaved-pipeline
   guard (Escape does not discard), Ctrl+K palette (commands by visible label,
   chats by title, "Nothing found"), theme (dark, light, system, palette toggle),
@@ -110,7 +111,7 @@ Covered flows, each with at least one failure path:
   axe-core (serious and critical fail) on the review panel with its comment
   form, the revert, worktree and continue dialogs, worktree details and the
   handoff composer, in light and dark.
-- Keyboard: skip link, sidebar tab order and activation, global shortcuts,
+- Keyboard: skip link, rail and sidebar tab order and activation, global shortcuts,
   dialog focus trap with Escape and focus return (also from a menu), pickers.
 - Accessibility: axe-core (WCAG 2.1 A/AA) on 23 screens (including the MCP
   form, script test, node type dialog, run inputs, Pi history, extension

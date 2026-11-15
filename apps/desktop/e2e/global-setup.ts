@@ -28,16 +28,17 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
     await page.goto(`${baseURL}/?lab=demo`, { waitUntil: 'commit' });
     const sidebar = page.getByRole('navigation', { name: 'Workspace navigation' });
     await sidebar.waitFor({ timeout: 120_000 });
-    const visit = async (name: RegExp, ready: () => Promise<unknown>) => {
-      await sidebar.getByRole('button', { name }).first().click();
+    const rail = page.getByRole('navigation', { name: 'Main navigation' });
+    const visit = async (scope: typeof sidebar, name: RegExp, ready: () => Promise<unknown>) => {
+      await scope.getByRole('button', { name }).first().click();
       await ready();
     };
-    await visit(/^Pipelines$/, () => page.getByRole('region', { name: 'Pipeline editor' }).waitFor({ timeout: 120_000 }));
-    await visit(/^Runs$/, () => page.getByRole('navigation', { name: 'Runs' }).waitFor({ timeout: 120_000 }));
-    await visit(/^Automations$/, () => page.getByRole('region', { name: 'Automations' }).waitFor({ timeout: 120_000 }));
-    await visit(/^Settings/, () => page.getByRole('navigation', { name: 'Settings sections' }).waitFor({ timeout: 120_000 }));
-    await visit(/^Inbox/, () => page.getByRole('heading', { level: 1, name: 'Inbox' }).waitFor({ timeout: 120_000 }));
-    await visit(/Fix flaky scheduler test/, () => page.getByRole('region', { name: 'Conversation messages' }).waitFor({ timeout: 120_000 }));
+    await visit(rail, /^Pipelines$/, () => page.getByRole('region', { name: 'Pipeline editor' }).waitFor({ timeout: 120_000 }));
+    await visit(rail, /^Runs$/, () => page.getByRole('navigation', { name: 'Runs' }).waitFor({ timeout: 120_000 }));
+    await visit(rail, /^Automations$/, () => page.getByRole('region', { name: 'Automations' }).waitFor({ timeout: 120_000 }));
+    await visit(sidebar, /^Settings/, () => page.getByRole('navigation', { name: 'Settings sections' }).waitFor({ timeout: 120_000 }));
+    await visit(rail, /^Inbox/, () => page.getByRole('heading', { level: 1, name: 'Inbox' }).waitFor({ timeout: 120_000 }));
+    await visit(sidebar, /Fix flaky scheduler test/, () => page.getByRole('region', { name: 'Conversation messages' }).waitFor({ timeout: 120_000 }));
     await page.keyboard.press('Control+k');
     await page.getByRole('dialog', { name: 'Search and commands' }).waitFor({ timeout: 120_000 });
   } finally {

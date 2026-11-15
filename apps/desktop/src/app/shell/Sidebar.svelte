@@ -1,11 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import SquarePen from '@lucide/svelte/icons/square-pen';
-  import Search from '@lucide/svelte/icons/search';
-  import InboxIcon from '@lucide/svelte/icons/inbox';
   import Workflow from '@lucide/svelte/icons/workflow';
-  import History from '@lucide/svelte/icons/history';
-  import Clock from '@lucide/svelte/icons/clock-3';
   import Folder from '@lucide/svelte/icons/folder';
   import MessagesSquare from '@lucide/svelte/icons/messages-square';
   import Settings from '@lucide/svelte/icons/settings';
@@ -34,15 +30,13 @@
   import { fusionMembership } from '../fusion/fusionMembership.svelte';
   import { chatTree } from './chatTree';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
-  import WorkLocation from '../nano/WorkLocation.svelte';
   import { chipFor, creditsText } from '../nano/nanoView';
 
   interface Props {
-    onSearch: () => void;
     onTrust: (workspace: WorkspaceSummary) => void;
     onNavigate?: () => void;
   }
-  let { onSearch, onTrust, onNavigate = () => {} }: Props = $props();
+  let { onTrust, onNavigate = () => {} }: Props = $props();
   const store = useWorkspace();
 
   const projects = $derived(store.catalog.workspaces.filter((workspace) => !workspace.personal));
@@ -52,7 +46,6 @@
     for (const item of store.inboxApprovals) counts.set(item.session.id, (counts.get(item.session.id) ?? 0) + 1);
     return counts;
   });
-  const inboxCount = $derived(store.inboxApprovals.length);
   let now = $state(Date.now());
   $effect(() => {
     const timer = setInterval(() => (now = Date.now()), 30_000);
@@ -172,12 +165,7 @@
 
   const route = $derived(store.route);
 
-  // The optional Nano account: read once after first paint, never before.
-  $effect(() => nanoAccount.startLater());
   const nanoChip = $derived(chipFor(nanoAccount.status));
-  // Runs and Automations have their own entries; the editor and the library
-  // sections (agents, teams, step lists) belong to Pipelines. Exactly one is current.
-  const onPipelines = $derived(route.name === 'pipelines' && route.section !== 'runs' && route.section !== 'schedules');
 </script>
 
 {#if projectDialog}
@@ -190,36 +178,11 @@
 {/if}
 
 <nav class="sidebar" aria-label={$t('Workspace navigation')}>
-  <WorkLocation />
-
   <div class="primary">
-    <button type="button" class="nav-item nav-item--strong" onclick={() => go(() => store.goHome())} aria-current={route.name === 'home' ? 'page' : undefined}>
+    <button type="button" class="nav-item nav-item--strong" onclick={() => go(() => store.goHome())}>
       <SquarePen size={16} />
       <span class="nav-item__label">{$t('New chat')}</span>
       <Kbd keys="Mod+N" />
-    </button>
-    <button type="button" class="nav-item" onclick={onSearch}>
-      <Search size={16} />
-      <span class="nav-item__label">{$t('Search')}</span>
-      <Kbd keys="Mod+K" />
-    </button>
-    <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'inbox' }))} aria-current={route.name === 'inbox' ? 'page' : undefined}>
-      <InboxIcon size={16} />
-      <span class="nav-item__label">{$t('Inbox')}</span>
-      {#if inboxCount > 0}<span class="count" aria-label={$t('{0} waiting', [inboxCount])}>{inboxCount}</span>{/if}
-    </button>
-    <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'pipelines', section: 'systems' }))} aria-current={onPipelines ? 'page' : undefined}>
-      <Workflow size={16} />
-      <span class="nav-item__label">{$t('Pipelines')}</span>
-    </button>
-    <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'pipelines', section: 'runs' }))} aria-current={route.name === 'pipelines' && route.section === 'runs' ? 'page' : undefined}>
-      <History size={16} />
-      <span class="nav-item__label">{$t('Runs')}</span>
-      {#if store.runningSessions.some((session) => session.runId)}<StatusDot status="running" />{/if}
-    </button>
-    <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'pipelines', section: 'schedules' }))} aria-current={route.name === 'pipelines' && route.section === 'schedules' ? 'page' : undefined}>
-      <Clock size={16} />
-      <span class="nav-item__label">{$t('Automations')}</span>
     </button>
   </div>
 
@@ -419,6 +382,9 @@
     gap: 1px;
     flex: none;
   }
+  .primary {
+    padding-top: var(--piui-space-2);
+  }
   .footer {
     padding: var(--piui-space-2) 0;
     border-top: 1px solid var(--piui-border-subtle);
@@ -478,23 +444,12 @@
   .nav-item:focus-visible :global(.kbd) {
     opacity: 1;
   }
-  .count {
-    min-width: 18px;
-    padding: 0 5px;
-    border-radius: var(--piui-radius-full);
-    background: var(--piui-action);
-    color: var(--piui-action-ink);
-    font-size: var(--piui-text-xs);
-    font-weight: var(--piui-weight-semibold);
-    line-height: 18px;
-    text-align: center;
-  }
   .section-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     height: 28px;
-    margin-top: var(--piui-space-4);
+    margin-top: var(--piui-space-2);
     padding: 0 var(--piui-space-2);
     color: var(--piui-text-muted);
     font-size: var(--piui-text-xs);
