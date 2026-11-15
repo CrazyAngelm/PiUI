@@ -29,6 +29,7 @@
   import { untrack } from 'svelte';
   import { teammates } from '../team/teammatesStore.svelte';
   import TeammateAvatar from '../team/TeammateAvatar.svelte';
+  import { remoteMode } from '../nano/remoteMode';
 
   interface Props {
     workspaceId: string;
@@ -93,6 +94,8 @@
         disabledReason: $t(item.reason ?? 'Not available'),
       });
     }
+    // A remote browser chooses the agent only: no teammates, pipelines or templates, which live on the desktop.
+    if (remoteMode) return list;
     for (const teammate of team) {
       const detail = chatPipelines.detailFor(workspaceId, teammate.launchCommandId);
       const status = teammates.status(workspaceId, teammate.id);
@@ -195,7 +198,7 @@
   /** Left and right switch the tab while the search is empty. */
   function searchKeydown(event: KeyboardEvent): void {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || search !== '') return;
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    if (remoteMode || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) return;
     event.preventDefault();
     tab = tab === 'direct' ? 'pipelines' : 'direct';
   }
@@ -207,7 +210,7 @@
   {items}
   value={current}
   label={$t('Who answers')}
-  searchPlaceholder={$t('Search teammates, harnesses and pipelines')}
+  searchPlaceholder={remoteMode ? $t('Search') : $t('Search teammates, harnesses and pipelines')}
   emptyText={waiting ? $t('Loading pipelines…') : $t('Nothing found')}
   width={360}
   onSelect={select}
@@ -230,16 +233,18 @@
     </button>
   {/snippet}
   {#snippet header({ focusSearch })}
-    <Segmented
-      size="sm"
-      label={$t('Executor type')}
-      bind:value={tab}
-      options={[
-        { value: 'direct', label: $t('Direct') },
-        { value: 'pipelines', label: $t('Pipelines') },
-      ]}
-      onValueChange={focusSearch}
-    />
+    {#if !remoteMode}
+      <Segmented
+        size="sm"
+        label={$t('Executor type')}
+        bind:value={tab}
+        options={[
+          { value: 'direct', label: $t('Direct') },
+          { value: 'pipelines', label: $t('Pipelines') },
+        ]}
+        onValueChange={focusSearch}
+      />
+    {/if}
   {/snippet}
 </Picker>
 

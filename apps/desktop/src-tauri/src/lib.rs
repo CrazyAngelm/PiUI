@@ -921,6 +921,14 @@ pub fn run() -> Result<(), tauri::Error> {
             // nothing contacts a Nano server here; a stored session is
             // restored after first paint, and never in safe mode.
             let nano_host = nano::install(app, &app_data_dir, safe_mode, e2e_isolated);
+            // Remote access from Nano Web (ADR-062): off by default; the link
+            // is opened only while switched on, signed in and outside safe mode.
+            nano::remote::install(
+                app.handle().clone(),
+                &app_data_dir,
+                std::sync::Arc::clone(&nano_host),
+                safe_mode,
+            );
             state.workspace.set_nano_host(nano_host);
             app.manage(state);
             let trigger_engine = orchestration_triggers::TriggerEngine::default();
@@ -982,6 +990,11 @@ pub fn run() -> Result<(), tauri::Error> {
             nano::commands::nano_dictation_v1,
             nano::dictation_commands::dictation_settings_v1,
             nano::dictation_commands::dictation_transcribe_v1,
+            nano::remote::nano_remote_status_v1,
+            nano::remote::nano_remote_set_enabled_v1,
+            nano::remote::nano_remote_decide_v1,
+            nano::remote::nano_remote_kick_v1,
+            nano::remote::nano_remote_forget_v1,
             workspace_api::composer_inputs::workspace_composer_inputs_v1,
             plugins::api::plugins_v1,
             plugins::api::plugin_command_v1,

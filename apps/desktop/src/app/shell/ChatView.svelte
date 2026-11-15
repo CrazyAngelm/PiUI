@@ -39,6 +39,7 @@
   import SidekickOfBadge from '../fusion/SidekickOfBadge.svelte';
   import { fusionMembership } from '../fusion/fusionMembership.svelte';
   import NanoPetStatus from '../nano/NanoPetStatus.svelte';
+  import { remoteMode } from '../nano/remoteMode';
 
   // Loaded on first use; a script-level import lets the dev server see its dependencies.
   const loadReviewPanel = () => import('../review/ReviewPanel.svelte');
@@ -65,7 +66,8 @@
   const workspace = $derived(store.catalog.workspaces.find((item) => item.id === session?.workspaceId));
   const running = $derived(session ? ['starting', 'running', 'stopping'].includes(session.status) : false);
   // Project chats (not pipeline members) can have an active board card (ADR-041).
-  const boardProject = $derived(workspace !== undefined && !workspace.personal && !workspace.missing && !session?.runId ? workspace.id : undefined);
+  // A remote browser has no board: the card chip and activity stay out of its chats.
+  const boardProject = $derived(!remoteMode && workspace !== undefined && !workspace.personal && !workspace.missing && !session?.runId ? workspace.id : undefined);
   const notices = $derived(sessionNotices(snapshot));
   // Fusion (ADR-043): a lead chat shows the pair badge, a sidekick chat is read-only.
   const fusion = $derived(fusionMembership.peek(sessionId));
@@ -125,6 +127,7 @@
   }
 
   function keydown(event: KeyboardEvent): void {
+    if (remoteMode && matchesShortcut(event, 'Mod+Shift+G')) return;
     if (matchesShortcut(event, 'Mod+Alt+B')) {
       event.preventDefault();
       toggleDetails();
@@ -190,7 +193,7 @@
           <SidekickOfBadge leadSessionId={fusion.leadSessionId} />
         {/if}
         <div class="chat__actions">
-          {#if snapshot}
+          {#if snapshot && !remoteMode}
             <NanoPetStatus status={session.status} approvals={snapshot.approvals.length} blocks={snapshot.blocks} safeMode={store.safeMode} />
           {/if}
           {#if running && !composerStops}
@@ -208,21 +211,23 @@
             </Button>
           {/if}
           <IconButton label={$t('Search this chat')} shortcut="Mod+F" active={searchOpen} onclick={() => (searchOpen = !searchOpen)}><SearchIcon /></IconButton>
-          <IconButton label={$t('Review changes')} shortcut="Mod+Shift+G" active={reviewOpen} onclick={toggleReview}><GitCompare /></IconButton>
+          {#if !remoteMode}
+            <IconButton label={$t('Review changes')} shortcut="Mod+Shift+G" active={reviewOpen} onclick={toggleReview}><GitCompare /></IconButton>
+          {/if}
           <IconButton label={$t('Details')} shortcut="Mod+Alt+B" active={detailsOpen && !reviewOpen} onclick={toggleDetails}><PanelRight /></IconButton>
           <Menu
             align="end"
             items={[
               { label: $t('Rename'), icon: Pencil, onSelect: beginRename },
               { label: $t('Refresh from history'), icon: RefreshCw, onSelect: () => void store.reconcileSession(session.id) },
-              ...(snapshot && !session.runId
+              ...(snapshot && !session.runId && !remoteMode
                 ? [{ label: $t('Continue in another harness…'), icon: ArrowRightLeft, disabled: store.safeMode, onSelect: () => void startHandoff(store, snapshot, $t) }]
                 : []),
               ...(session.status !== 'closed'
                 ? [{ label: currentSidekick ? $t('Stop sidekick process and its round') : $t('Stop agent process'), icon: Power, disabled: store.sessionActionBusy, onSelect: () => void store.close(session.id) }]
                 : []),
               { type: 'separator' as const },
-              ...(!session.runId && !currentSidekick
+              ...(!session.runId && !currentSidekick && !remoteMode
                 ? [{ label: $t('Delete chat…'), icon: Trash, danger: true, disabled: running || store.safeMode, onSelect: () => onDelete(session.id) }]
                 : []),
             ]}
@@ -296,7 +301,9 @@
             {:else if !snapshot.capabilities.prompt.supported}
               <p class="notice">{snapshot.capabilities.prompt.reason ? $t(snapshot.capabilities.prompt.reason) : $t('{0} is read-only in this mode.', [harnessMeta(session.harness).label])}</p>
             {:else}
-              <PluginComposerActions sessionId={snapshot.session.id} harness={snapshot.session.harness} />
+              {#if !remoteMode}
+                <PluginComposerActions sessionId={snapshot.session.id} harness={snapshot.session.harness} />
+              {/if}
               <!-- Extension-prepared text remounts the composer with the new draft. -->
               {#key `${snapshot.session.id}:${extensionSurfaces.composerEpoch(snapshot.session.id)}:${composerInserts.epoch(snapshot.session.id)}`}
                 <ChatComposer

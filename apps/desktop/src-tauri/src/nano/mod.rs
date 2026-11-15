@@ -13,6 +13,9 @@
 //! contacts a Nano server either: after first paint the host only reads the
 //! credential store for a stored refresh token (`NanoAccount::restore`).
 //! Dictation through another provider (ADR-061) is refused in safe mode too.
+//!
+//! The remote link of ADR-062 is opened only by `remote.rs`: never in safe
+//! mode, never while signed out, and only while the person's toggle is on.
 
 pub(crate) mod avatar;
 pub(crate) mod browser;
@@ -23,6 +26,11 @@ pub(crate) mod dictation_commands;
 pub(crate) mod launch;
 pub(crate) mod provider_commands;
 mod provider_prompt;
+pub(crate) mod remote;
+mod remote_core;
+mod remote_dispatch;
+#[cfg(test)]
+mod remote_tests;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

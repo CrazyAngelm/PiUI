@@ -28,6 +28,7 @@
   import { t } from '../../features/locale/language';
   import { Segmented, Spinner } from '../../lib/ui';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
+  import { remoteMode } from '../nano/remoteMode';
   import { lockCopy } from '../nano/nanoView';
   import type { WorkspaceStore } from '../workspaceStore.svelte';
   import { WORKSPACE_CONTEXT } from './context';
@@ -190,8 +191,9 @@
   }
   // Nano: what the account does not allow, listed after the harness's own rows.
   const nano = $derived(harness === 'nano');
-  const lockedModes = $derived(nano && shownTab === 'all' ? nanoAccount.lockedModes : []);
-  const signInRow = $derived(nano && shownTab === 'all' && nanoAccount.needsSignIn);
+  // Account actions (sign in, plan limits, ChatGPT usage) are the desktop's: a remote browser lists the models only.
+  const lockedModes = $derived(!remoteMode && nano && shownTab === 'all' ? nanoAccount.lockedModes : []);
+  const signInRow = $derived(!remoteMode && nano && shownTab === 'all' && nanoAccount.needsSignIn);
   const workspace = getContext<WorkspaceStore | undefined>(WORKSPACE_CONTEXT);
   $effect(() => {
     if (nano) void nanoAccount.start();
@@ -329,7 +331,7 @@
 
       <div class="piui-models__tune">
         <ReasoningControl {levels} {level} {levelDefault} {fastAvailable} {fast} {busy} {onLevel} {onFast} />
-        {#if usesChatGpt}
+        {#if usesChatGpt && !remoteMode}
           <div class="piui-models__row">
             <span class="piui-models__label">{$t('Using ChatGPT plan')}</span>
             <button type="button" class="manage-usage" onclick={async () => {

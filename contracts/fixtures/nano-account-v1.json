@@ -27,7 +27,7 @@
     "selectedWorkspaceId": null,
     "entitlements": null,
     "usage": null,
-    "capabilities": { "gateway": true, "cloudLaunch": false, "deviceCode": false, "dictation": true, "voice": false, "imageGeneration": false, "avatars": true },
+    "capabilities": { "gateway": true, "cloudLaunch": false, "deviceCode": false, "dictation": true, "voice": false, "imageGeneration": false, "avatars": true, "remoteAccess": false },
     "credentialStore": null,
     "busy": true,
     "lastError": null
@@ -58,7 +58,7 @@
       "limits": { "maxConcurrentRequests": 4, "maxRequestBytes": 8388608, "dictationMaxBytes": 20971520 }
     },
     "usage": null,
-    "capabilities": { "gateway": true, "cloudLaunch": false, "deviceCode": false, "dictation": true, "voice": false, "imageGeneration": false, "avatars": true },
+    "capabilities": { "gateway": true, "cloudLaunch": false, "deviceCode": false, "dictation": true, "voice": false, "imageGeneration": false, "avatars": true, "remoteAccess": false },
     "credentialStore": "os",
     "busy": false,
     "lastError": null

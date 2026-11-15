@@ -1924,3 +1924,11 @@ subscription, OpenAI, Groq or a custom OpenAI-compatible endpoint. The host
 makes the upload, API keys are typed in the native dialog and stay in the OS
 credential store, and safe mode sends no audio. See
 [the decision](adr/061-dictation-sources.md).
+
+## ADR-062 — Remote access from Nano Web
+
+A signed-in Nano Desktop may, only while the person's toggle is on, hold an
+outbound WebSocket to the Nano server so that a browser the person approved at
+the computer can continue chats from Nano Web. The browser proves a stored key,
+reaches a fixed allowlist of chat commands and is not sandboxed from the
+keyboard's powers in chats. See [the decision](adr/062-remote-access.md).

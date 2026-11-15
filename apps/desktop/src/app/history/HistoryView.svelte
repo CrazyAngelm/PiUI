@@ -21,6 +21,7 @@
   import HarnessMark from '../shell/HarnessMark.svelte';
   import HistoryDetails from './HistoryDetails.svelte';
   import ContinueInPiui from './ContinueInPiui.svelte';
+  import { remoteMode } from '../nano/remoteMode';
   import { PiHistoryStore } from './historyStore.svelte';
   import {
     ALL_HARNESSES,
@@ -361,7 +362,7 @@
             <h2 title={selected.title}>{selected.title}</h2>
             <Badge>{$t('Read only')}</Badge>
             <div class="spacer"></div>
-            {#if agentKind === 'pi' && workspace && (personal || workspace.trust === 'trusted')}
+            {#if agentKind === 'pi' && workspace && (personal || workspace.trust === 'trusted') && !remoteMode}
               <ContinueInPiui {workspaceId} {personal} sessionId={selected.id} title={selected.title} />
             {/if}
             <IconButton label={$t('Details')} shortcut="Mod+Alt+B" active={detailsOpen} onclick={toggleDetails}><PanelRight /></IconButton>

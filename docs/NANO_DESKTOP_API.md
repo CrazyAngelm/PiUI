@@ -83,7 +83,7 @@ Public, no authentication, cacheable for a short time.
   "serverVersion": "2026.11.0",
   "minClientVersion": "0.3.0",
   "clientId": "nano-desktop",
-  "capabilities": { "gateway": true, "cloudLaunch": false, "deviceCode": false, "dictation": true, "voice": false, "imageGeneration": false, "avatars": true },
+  "capabilities": { "gateway": true, "cloudLaunch": false, "deviceCode": false, "dictation": true, "voice": false, "imageGeneration": false, "avatars": true, "remoteAccess": false },
   "links": { "billing": "https://nanoagents.ru/billing", "devices": "https://nanoagents.ru/account/devices", "signup": "https://nanoagents.ru/signup", "cloud": "https://hermes.nanoagents.ru/" }
 }
 ```
@@ -94,7 +94,9 @@ Public, no authentication, cacheable for a short time.
 - `capabilities` says which optional parts the server implements. A client
   never calls an endpoint whose capability is false. `gateway` must be true for
   the local Nano agent; `cloudLaunch` for the one-time cloud code;
-  `imageGeneration` and `voice` are reserved and ignored in v1.
+  `imageGeneration` and `voice` are reserved and ignored in v1; `remoteAccess`
+  for the remote link of section 4.9 (absent on an older server, which the
+  client reads as `false`).
 - `links` are absolute `https` URLs on the issuer's site (the cloud link may be
   the Nano web app's own host). The desktop opens them in the system browser,
   chosen by enum (`billing`, `devices`, `signup`), never by a URL from the UI.
@@ -409,6 +411,67 @@ refresh can restore the server-granted right. Old requests cannot change a new
 workspace or sign-in. The WebView receives neither bearer credentials nor reusable asset
 URLs. Media and decoded bitmaps are temporary display data.
 
+### 4.9 Remote link (`remoteAccess`)
+
+A desktop whose person switched on remote access holds one WebSocket to the
+server, and a browser of the same user connects to the server and is paired to
+it. The server is a relay: it copies frames between the two sockets, keeps
+nothing, and must not read, store or log the inner message `d` (log ids, counts,
+sizes and durations only). Decision: ADR-062; contract:
+`contracts/nano-remote-v1.ts`; executable specification:
+`tools/nano-dev-server/` (README, "Remote access").
+
+**Endpoints**
+
+| Who | Request | Auth |
+|---|---|---|
+| Desktop | `GET /api/desktop/v1/remote/link`, WebSocket upgrade, `Sec-WebSocket-Protocol: nano-remote.v1` | `Authorization: Bearer <access token>` (never in the URL), `X-Nano-Client`, scope `nano.desktop`, checked in the order of section 4 |
+| Web | `GET /api/hermes/remote/devices` returns `{ "devices": [ { "id", "name", "platform", "appVersion", "lastSeenAt", "online" } ] }` | member cookie session; guests and support sessions refused |
+| Web | `GET /api/hermes/remote/devices/{deviceId}/socket`, WebSocket upgrade, subprotocol `nano-remote.v1` | the same, plus an exact `Origin` and `Sec-Fetch-Site` other than `cross-site` |
+
+The desktop never calls the link unless `meta.capabilities.remoteAccess` is
+`true`. Refusals before the upgrade use the ordinary error body: `401
+token_expired|device_revoked|unauthorized`, `426 client_too_old`, `403
+scope_missing`, `403 feature_not_in_plan` (the lever is off), `503
+upstream_unavailable` (the backend is on standby or draining). The desktop stops
+retrying after 403, 404 and 426 until the person acts.
+
+**Envelope.** Text frames of UTF-8 JSON, at most 262144 bytes. Unknown `t`,
+invalid JSON, a missing field or a binary frame closes that socket with 4400.
+
+- Device to server: `{"t":"msg","viewer":"<viewerId>","d":{...}}` and
+  `{"t":"drop","viewer":"<viewerId>","reason":"denied|kicked|disabled|protocol"}`.
+- Server to device: `{"t":"hello","device":"dev_...","maxFrame":262144,"maxViewers":2}`
+  (the first frame), `{"t":"viewer-open","viewer":"..."}`,
+  `{"t":"viewer-close","viewer":"..."}` and `{"t":"msg","viewer":"...","d":{...}}`.
+- Browser to server: `{"t":"msg","d":{...}}`. Server to browser:
+  `{"t":"ready","viewer":"<viewerId>","device":{"id":"dev_...","name":"..."}}`
+  (the first frame) and `{"t":"msg","d":{...}}`.
+
+`viewerId` is `vw_` and 22 base64url characters (128 random bits), unique per
+browser socket. The server links a browser to a device only when both belong to
+the same user id.
+
+**Close codes.** 4400 protocol, 4401 authorization ended, 4403 dropped by the
+desktop (the close reason is the `drop` reason), 4404 device not connected,
+4408 keepalive timeout, 4409 replaced by a newer link of the same device, 4429
+limit, 1009 frame too large, 1012 server restarting or draining.
+
+**Limits.** 2 browsers per device and 4 browser sockets per user (4429); 600
+browser messages a minute per browser (4429); an outbound queue of 256 frames or
+8 MiB per socket (that socket closes 4429); a server ping every 25 s with a 20 s
+answer window (4408), and the desktop treats 75 s of silence as a dead link; the
+device is re-checked every 30 s and on revocation (4401). A newer link of the
+same device replaces the older (4409) and ends that link's browsers.
+
+**Inner messages (`d`).** They are the desktop's business and opaque to the
+server: a signed handshake (`hello`, `challenge`, `proof`), a pairing prompt at
+the computer, `welcome` with the contract versions and the allowlist, then
+`req`/`res`/`part`/`ev`/`bye`. Their grammar is in `contracts/nano-remote-v1.ts`.
+An event too large for one frame is not sent; the desktop sends `gap` (`ch`, and
+`sid` when the event named one session) so the browser reads that state again.
+Viewers ignore inner kinds they do not know.
+
 ## 5. Gateway semantics
 
 An OpenAI-compatible Chat Completions facade. The desktop's local relay puts
@@ -516,7 +579,9 @@ The local relay translates these for Pi into the OpenAI-shaped codes
   hashes; all of them fail closed.
 - TLS only. HSTS on the issuer. The authorize page and the consent decision are
   protected against framing and CSRF (single-use transaction id).
-- Do not log tokens, codes, verifiers, prompts or completions.
+- Do not log tokens, codes, verifiers, prompts or completions. The remote relay
+  never logs a frame body (`d`), and its links and viewer sockets carry ids,
+  counts, sizes and durations only.
 - Revocation reaches access tokens within 30 seconds, cloud web sessions
   launched from the device immediately, and is visible in the device list.
 - The server must not require or accept any API key for desktop calls: the
@@ -539,7 +604,8 @@ The local relay translates these for Pi into the OpenAI-shaped codes
   additive changes: new fields in response objects (the desktop's
   deserializers do not use `deny_unknown_fields`, so unknown fields are
   ignored), new `capabilities` and `features` keys, new optional request
-  parameters, new endpoints behind a capability flag. Existing fields are
+  parameters, new endpoints behind a capability flag (`remoteAccess` is one:
+  additive, and false when absent). Existing fields are
   neither removed nor retyped.
 - Adding a value to a closed set is not additive. The desktop's typed
   deserializers reject an unknown member: a success document that carries one

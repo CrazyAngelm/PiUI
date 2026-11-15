@@ -41,6 +41,7 @@
   import { boards } from '../board/boardStore.svelte';
   import { rankTeammates } from '../team/handle';
   import { teammates } from '../team/teammatesStore.svelte';
+  import { remoteMode } from '../nano/remoteMode';
 
   interface Props {
     snapshot: SessionSnapshot;
@@ -100,7 +101,8 @@
       ? [{ name: 'compact', description: 'Compact conversation context', enabled: snapshot.session.status === 'idle' && !composer.queue.items.length }]
       : []),
     { name: 'stop', description: 'Stop the current turn', enabled: running },
-    { name: 'run', description: 'Run a saved pipeline of this project', enabled: true },
+    // Pipelines run on the desktop's screen; a remote browser has no `/run`.
+    ...(remoteMode ? [] : [{ name: 'run', description: 'Run a saved pipeline of this project', enabled: true }]),
   ]);
   // A PiUI command wins over a native one of the same name: PiUI runs it on send.
   const nativeCommands = $derived(catalog.commands.filter((command) => !commands.some((own) => own.name === command.name)));
@@ -109,7 +111,8 @@
   const mention = $derived(
     menuDismissed
       ? undefined
-      : activeMention(text, caret, { slash: true, at: Boolean(workspaceId), dollar: support.skillMentions && catalog.skills.length > 0, macros: macros.list.length > 0 }),
+      // A remote browser cannot read the desktop's files or skills: no `@` file or `$` skill menus.
+      : activeMention(text, caret, { slash: true, at: !remoteMode && Boolean(workspaceId), dollar: !remoteMode && support.skillMentions && catalog.skills.length > 0, macros: macros.list.length > 0 }),
   );
   $effect(() => {
     const id = workspaceId;
@@ -280,7 +283,7 @@
   // Native commands and skills of the live session: loaded once, then again
   // when a `/` or `$` menu opens after a minute (commands can change).
   let catalogLoadedAt = 0;
-  const catalogWanted = $derived(support.nativeCommands || support.skillMentions);
+  const catalogWanted = $derived(!remoteMode && (support.nativeCommands || support.skillMentions));
   const menuTrigger = $derived(mention?.trigger);
   $effect(() => {
     const id = sessionId;
@@ -329,7 +332,8 @@
         void read();
       }
     });
-    const unregister = composerDropTargets.register((dropId) => void attachments.redeem(workspaceId, dropId, imageState));
+    // Files dropped on the desktop window belong to the desktop; a remote browser takes text only.
+    const unregister = remoteMode ? () => undefined : composerDropTargets.register((dropId) => void attachments.redeem(workspaceId, dropId, imageState));
     queueMicrotask(() => input?.focus());
     return () => {
       disposed = true;
@@ -529,6 +533,7 @@
     const files = [...(event.clipboardData?.files ?? [])];
     if (!files.length) return;
     event.preventDefault();
+    if (remoteMode) return;
     void attachments.paste(workspaceId, files, imageState);
   }
 
@@ -538,6 +543,7 @@
     htmlDragging = false;
     if (!carriesFiles(event)) return;
     event.preventDefault();
+    if (remoteMode) return;
     void attachments.paste(workspaceId, [...(event.dataTransfer?.files ?? [])], imageState);
   }
 
@@ -638,7 +644,7 @@
     ondragover={(event) => {
       if (!carriesFiles(event)) return;
       event.preventDefault();
-      htmlDragging = true;
+      htmlDragging = !remoteMode;
     }}
     ondragleave={() => (htmlDragging = false)}
     ondrop={dropped}
@@ -664,7 +670,7 @@
     {:else if pendingResults}
       <p class="handoff">{$t('The next message hands the pipeline result to {0}.', [harnessMeta(harness).label])}</p>
     {/if}
-    {#if !pipelineId}
+    {#if !pipelineId && !remoteMode}
       <HandoffChips {workspaceId} {sessionId} {text} disabled={busy || safeMode} onHandedOff={() => void place('', 0)} />
     {/if}
     <div class="composer__field">
@@ -691,7 +697,7 @@
         aria-autocomplete="list"
         aria-controls={menu ? menuId : undefined}
         aria-activedescendant={menu && menu.items.length ? `${menuId}-${activeIndex}` : undefined}
-        placeholder={pipelineId ? $t('Describe the task for the pipeline…') : running ? (mode === 'steer' && canSteer ? $t('Send to the agent now…') : $t('Queue a follow-up…')) : $t('Reply, type / for commands or @ to mention a file…')}
+        placeholder={pipelineId ? $t('Describe the task for the pipeline…') : remoteMode ? $t('Message') : running ? (mode === 'steer' && canSteer ? $t('Send to the agent now…') : $t('Queue a follow-up…')) : $t('Reply, type / for commands or @ to mention a file…')}
       />
       {#if macroTokens.length}
         <MacroLayer {input} {text} tokens={macroTokens} syntax={skillSyntax} quiet={Boolean(menu)} onEdit={onEditMacro ? (macro) => onEditMacro(macro.id) : undefined} />
@@ -699,15 +705,18 @@
     </div>
     <div data-nano-composer="bar">
       <div class="composer__left">
-        <AttachButton images={imageState} busy={attachments.busy} disabled={busy || Boolean(pipelineId)} onPick={() => void attachments.pick(workspaceId, imageState)} />
-        <DictateButton onText={dictated} disabled={busy || safeMode} />
-        <ExecutorPicker
-          {workspaceId}
-          value={executor}
-          harnesses={[{ kind: harness, name: harnessMeta(harness).label, available: true }]}
-          disabled={busy || safeMode}
-          onChange={(next) => void chooseExecutor(next)}
-        />
+        <!-- Attachments, dictation and pipelines need this computer's files, microphone and library: not offered to a remote browser. -->
+        {#if !remoteMode}
+          <AttachButton images={imageState} busy={attachments.busy} disabled={busy || Boolean(pipelineId)} onPick={() => void attachments.pick(workspaceId, imageState)} />
+          <DictateButton onText={dictated} disabled={busy || safeMode} />
+          <ExecutorPicker
+            {workspaceId}
+            value={executor}
+            harnesses={[{ kind: harness, name: harnessMeta(harness).label, available: true }]}
+            disabled={busy || safeMode}
+            onChange={(next) => void chooseExecutor(next)}
+          />
+        {/if}
         {#if !pipelineId}
           <RuntimeChip
             session={snapshot.session}

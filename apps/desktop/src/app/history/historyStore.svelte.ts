@@ -1,4 +1,5 @@
 import { acceptsCatalogSnapshot } from '../../features/sessions/catalogView';
+import { remoteMode } from '../nano/remoteMode';
 import {
   isCatalogForScope,
   piHistoryError,
@@ -90,7 +91,8 @@ export class PiHistoryStore {
     try {
       const stops = await Promise.all([
         this.client.listenCatalog((event) => this.applyCatalogEvent(event)),
-        this.client.listenRootHints((hint) => this.applyRootHint(hint)),
+        // Root hints come from this computer's file watcher; a remote browser is not offered that channel.
+        ...(remoteMode ? [] : [this.client.listenRootHints((hint) => this.applyRootHint(hint))]),
       ]);
       if (this.disposed) stops.forEach((stop) => stop());
       else this.unlisten = stops;

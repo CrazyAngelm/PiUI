@@ -61,6 +61,12 @@ export interface NanoCapabilitiesV1 {
   readonly voice: boolean;
   readonly imageGeneration: boolean;
   readonly avatars: boolean;
+  /**
+   * The remote link (`GET /api/desktop/v1/remote/link`, ADR-062). Absent on
+   * servers that predate it; the host reads an absent value as `false` and
+   * always reports a boolean.
+   */
+  readonly remoteAccess: boolean;
 }
 
 /** Absolute https URLs; the host opens only those on the issuer's site. */

@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/remote/**/*.ts",
+    "src/remote/**/*.svelte",
+    "vite.remote.config.ts",
+    "vitest.remote.config.ts",
+    "playwright.remote.config.ts",
+    "tests/remote.spec.ts",
+    "../../contracts/nano-remote-v1.ts"
+  ],
+  "exclude": ["**/*.test.ts"]
+}

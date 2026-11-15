@@ -1,7 +1,9 @@
 import { expect, it } from 'vitest';
 import { DICTATION_ERROR_COPY } from '../../../app/nano/dictation';
 import { NANO_LOCK_COPY, NANO_TIER_COPY, chipFor } from '../../../app/nano/nanoView';
+import { REMOTE_UNAVAILABLE_COPY } from '../../../app/nano/remoteMode';
 import { NANO_ACCOUNT_ERROR_COPY } from '../../../host-api/nanoAccountClient';
+import { NANO_REMOTE_ERROR_COPY } from '../../../host-api/nanoRemoteClient';
 import { translate } from '../language';
 import { nanoRu } from './nano';
 
@@ -11,6 +13,8 @@ it('translates every Nano account failure, lock, tier and dictation error', () =
     ...Object.values(NANO_LOCK_COPY),
     ...Object.values(NANO_TIER_COPY),
     ...Object.values(DICTATION_ERROR_COPY),
+    ...Object.values(NANO_REMOTE_ERROR_COPY),
+    REMOTE_UNAVAILABLE_COPY,
   ];
   for (const message of copies) expect(translate(message, 'ru'), message).not.toBe(message);
 });

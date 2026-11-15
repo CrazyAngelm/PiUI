@@ -46,6 +46,7 @@ import {
 import { rememberHarnessNames } from './harnessMeta';
 import { newChatPlacement, type PlacementRequest } from './worktrees/newChatPlacement.svelte';
 import { placementRequest, placements } from './worktrees/placements.svelte';
+import { REMOTE_UNAVAILABLE_COPY, remoteMode } from './nano/remoteMode';
 
 export type PipelineSection = 'systems' | 'runs' | 'schedules' | 'agents' | 'teams' | 'pipelines';
 export type SettingsSection = 'general' | 'nano' | 'harnesses' | 'extensions' | 'projects' | 'worktrees' | 'background' | 'macros' | 'dictation' | 'shortcuts' | 'about' | 'plugins';
@@ -117,6 +118,21 @@ function writeJson(key: string, value: unknown): void {
   } catch {
     // UI metadata is optional; native sessions stay host-owned.
   }
+}
+
+/**
+ * A remote browser (Nano Web) drives chats and the project list only: the other
+ * screens call host commands the remote allowlist refuses, so they land on home.
+ * On the desktop nothing changes.
+ */
+const REMOTE_BLOCKED_ROUTES: readonly Route['name'][] = ['pipelines', 'settings', 'board', 'team'];
+function allowedRoute(route: Route): Route {
+  return remoteMode && REMOTE_BLOCKED_ROUTES.includes(route.name) ? { name: 'home' } : route;
+}
+
+/** The refusal of an action this window may not take (remote mode only); it reads as ordinary failure text. */
+function refuseRemote(): void {
+  if (remoteMode) throw new Error(REMOTE_UNAVAILABLE_COPY);
 }
 
 const PIPELINE_SECTIONS: readonly PipelineSection[] = ['systems', 'runs', 'schedules', 'agents', 'teams', 'pipelines'];
@@ -269,7 +285,7 @@ export class WorkspaceStore {
   async start(): Promise<void> {
     this.restoreUiState();
     void this.loadPreferences();
-    void this.startExtensionSurfaces();
+    if (!remoteMode) void this.startExtensionSurfaces();
     // ACP discovery and registry changes alter the catalog's harness rows (ADR-034).
     void harnessRegistryHost.listen(() => void this.loadCatalog()).then((stop) => {
       if (this.disposed) stop();
@@ -372,9 +388,9 @@ export class WorkspaceStore {
 
   navigate(route: Route): void {
     this.guard(() => {
-      this.route = route;
+      this.route = allowedRoute(route);
       this.sessionError = undefined;
-      writeJson(ROUTE_KEY, route);
+      writeJson(ROUTE_KEY, this.route);
     });
   }
 
@@ -382,7 +398,7 @@ export class WorkspaceStore {
   openRun(workspaceId: string, runId: string | undefined): void {
     this.guard(() => {
       this.selectWorkspace(workspaceId);
-      this.route = runId ? { name: 'pipelines', section: 'runs', runId } : { name: 'pipelines', section: 'runs' };
+      this.route = allowedRoute(runId ? { name: 'pipelines', section: 'runs', runId } : { name: 'pipelines', section: 'runs' });
       this.sessionError = undefined;
       writeJson(ROUTE_KEY, this.route);
     });
@@ -465,7 +481,7 @@ export class WorkspaceStore {
 
   private restoreUiState(): void {
     const route = readJson<unknown>(ROUTE_KEY);
-    if (isRoute(route)) this.route = route;
+    if (isRoute(route)) this.route = allowedRoute(route);
     const workspace = readJson<unknown>(SELECTION_KEY);
     if (typeof workspace === 'string') this.selectedWorkspaceId = workspace;
     const drafts = readJson<unknown>(DRAFTS_KEY);
@@ -506,6 +522,8 @@ export class WorkspaceStore {
   }
 
   async savePreferences(next: Preferences): Promise<void> {
+    // The remote browser keeps its own look; the desktop's saved preferences are never written from there.
+    if (remoteMode) return;
     // Only the latest save settles the shown preferences: an earlier answer
     // arriving late must not undo a choice made after it.
     const request = ++this.preferencesRequest;
@@ -886,6 +904,7 @@ export class WorkspaceStore {
   }
 
   async deleteChat(sessionId: string): Promise<void> {
+    refuseRemote();
     await deleteWorkspaceSession(sessionId);
     this.deleted.add(sessionId);
     // A deleted lead takes its pair with it: its sidekick chats are asked about again.
@@ -934,6 +953,10 @@ export class WorkspaceStore {
 
   async addProject(): Promise<void> {
     if (this.addingProject) return;
+    if (remoteMode) {
+      this.catalogError = REMOTE_UNAVAILABLE_COPY;
+      return;
+    }
     this.addingProject = true;
     this.catalogError = undefined;
     try {
@@ -947,6 +970,7 @@ export class WorkspaceStore {
   }
 
   async trustProject(workspaceId: string): Promise<void> {
+    refuseRemote();
     await host.setProjectTrust(workspaceId, 'trusted');
     await this.loadCatalog(workspaceId);
   }
@@ -963,12 +987,14 @@ export class WorkspaceStore {
 
   /** Renames PiUI's label only; the folder on disk keeps its name. */
   async renameProject(workspaceId: string, name: string): Promise<void> {
+    refuseRemote();
     await host.renameProject(workspaceId, name);
     await Promise.all([this.loadCatalog(workspaceId), this.loadProjects()]);
   }
 
   /** Pinned folders sort first in the host registry order. */
   async setProjectPinned(workspaceId: string, pinned: boolean): Promise<void> {
+    refuseRemote();
     await host.setProjectPinned(workspaceId, pinned);
     await Promise.all([this.loadCatalog(), this.loadProjects()]);
   }
@@ -978,6 +1004,7 @@ export class WorkspaceStore {
    * folder, its files and every harness's own history stay on disk.
    */
   async removeProject(workspaceId: string): Promise<void> {
+    refuseRemote();
     await host.removeProject(workspaceId);
     const route = this.route;
     const affected =

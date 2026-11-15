@@ -1,0 +1,40 @@
+{
+  "protocol": 1,
+  "commands": ["bootstrap_v10", "workspace_command_v15", "workspace_history_v1", "workspace_settings_v16", "workspace_session_mode_v1", "workspace_composer_v19", "harness_models_v19", "harness_registry_v1", "get_session_catalog", "get_personal_session_catalog", "refresh_session_catalog", "refresh_personal_session_catalog", "get_timeline_page", "get_personal_timeline_page", "search_sessions", "nano_account_status_v1"],
+  "channels": ["piui://workspace-event", "piui://composer-v19", "piui://session-catalog", "piui://harness-registry-v1", "piui://nano-account-v1"],
+  "shellContracts": { "workspace": 15, "composer": 19, "settings": 16, "history": 1, "models": 19 },
+  "refusedExamples": ["nano_remote_set_enabled_v1", "nano_remote_decide_v1", "nano_account_sign_out_v1", "nano_providers_v1", "nano_chatgpt_v1", "harness_connect_v1", "plugin_command_v1", "add_project_v10", "pick_and_add_project_v10", "set_project_trust", "workspace_lifecycle_v17", "workspace_composer_inputs_v1", "workspace_review_v1", "orchestration_start_run_v6", "update_preferences_v8", "nano_dictation_v1"],
+  "pairingVector": {
+    "key": "BAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-P0A",
+    "nonce": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo",
+    "code": "908621",
+    "fingerprint": "0ed3a6ab957ff6f5"
+  },
+  "proofMessage": {
+    "deviceId": "dev_synthetic01",
+    "viewerId": "vw_synthetic0000000000001",
+    "nonce": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo",
+    "message": "nano-remote-v1\ndev_synthetic01\nvw_synthetic0000000000001\nqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo"
+  },
+  "statusOff": { "protocol": 1, "revision": 1, "unavailable": null, "enabled": false, "link": "off", "viewers": [], "pending": null, "browsers": [] },
+  "statusSafeMode": { "protocol": 1, "revision": 1, "unavailable": "safe-mode", "enabled": false, "link": "off", "viewers": [], "pending": null, "browsers": [] },
+  "statusPending": {
+    "protocol": 1, "revision": 4, "unavailable": null, "enabled": true, "link": "online", "viewers": [],
+    "pending": { "requestId": "req_synthetic01", "label": "Chrome · Android", "code": "908621", "fingerprint": "0ed3a6ab957ff6f5", "expiresAt": "2026-11-15T09:02:00Z" },
+    "browsers": []
+  },
+  "statusViewer": {
+    "protocol": 1, "revision": 6, "unavailable": null, "enabled": true, "link": "online",
+    "viewers": [{ "id": "vw_synthetic0000000000001", "label": "Chrome · Android", "fingerprint": "0ed3a6ab957ff6f5", "grant": "always", "connectedAt": "2026-11-15T09:00:30Z" }],
+    "pending": null,
+    "browsers": [{ "id": "br_synthetic01", "label": "Chrome · Android", "fingerprint": "0ed3a6ab957ff6f5", "createdAt": "2026-11-15T09:00:30Z", "lastUsedAt": "2026-11-15T09:00:30Z" }]
+  },
+  "frames": {
+    "serverHello": { "t": "hello", "device": "dev_synthetic01", "maxFrame": 262144, "maxViewers": 2 },
+    "viewerOpen": { "t": "viewer-open", "viewer": "vw_synthetic0000000000001" },
+    "ready": { "t": "ready", "viewer": "vw_synthetic0000000000001", "device": { "id": "dev_synthetic01", "name": "Nano Desktop on Windows" } },
+    "request": { "t": "msg", "d": { "k": "req", "id": 1, "cmd": "workspace_command_v15", "args": { "command": { "type": "catalog" } } } },
+    "refusal": { "t": "msg", "viewer": "vw_synthetic0000000000001", "d": { "k": "res", "id": 2, "ok": false, "error": { "code": "remote-not-allowed" } } },
+    "drop": { "t": "drop", "viewer": "vw_synthetic0000000000001", "reason": "kicked" }
+  }
+}

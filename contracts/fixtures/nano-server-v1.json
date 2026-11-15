@@ -22,7 +22,8 @@
       "dictation": true,
       "voice": false,
       "imageGeneration": false,
-      "avatars": true
+      "avatars": true,
+      "remoteAccess": true
     },
     "links": {
       "billing": "https://nanoagents.ru/billing",

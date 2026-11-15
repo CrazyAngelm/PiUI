@@ -14,6 +14,7 @@
   import ChatOrigin from '../worktrees/ChatOrigin.svelte';
   import PluginChatPanels from '../plugins/PluginChatPanels.svelte';
   import { useWorkspace } from './context';
+  import { remoteMode } from '../nano/remoteMode';
 
   interface Props {
     snapshot: SessionSnapshot;
@@ -68,14 +69,15 @@
       <div><dt>{$t('Updated')}</dt><dd>{Number.isFinite(parseTimestamp(session.updatedAt)) ? new Date(parseTimestamp(session.updatedAt)).toLocaleString() : '—'}</dd></div>
     </dl>
 
-    {#if session.runId}
+    {#if session.runId && !remoteMode}
       <Button size="sm" onclick={() => store.openRun(session.workspaceId, session.runId)}>
         {#snippet leading()}<Workflow />{/snippet}
         {$t('Part of a pipeline run')}
       </Button>
     {/if}
 
-    <ChatOrigin sessionId={session.id} {onReview} />
+    <!-- Worktrees, handoff links and review belong to this computer's screen; a remote browser has none. -->
+    {#if !remoteMode}<ChatOrigin sessionId={session.id} {onReview} />{/if}
 
     <section>
       <h3>{$t('What this agent can do here')}</h3>
@@ -92,7 +94,7 @@
       </ul>
     </section>
 
-    <PluginChatPanels sessionId={session.id} title={session.title} />
+    {#if !remoteMode}<PluginChatPanels sessionId={session.id} title={session.title} />{/if}
   </div>
 </aside>
 

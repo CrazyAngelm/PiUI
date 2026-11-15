@@ -9,6 +9,7 @@
   import { t } from '../../features/locale/language';
   import { IconButton, Menu, StatusDot, type MenuEntry } from '../../lib/ui';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
+  import { remoteMode } from '../nano/remoteMode';
   import { useWorkspace } from './context';
   import { railCurrent, type RailItem } from './navRail';
 
@@ -42,7 +43,9 @@
     shortcut: string | undefined;
     run: () => void;
   }
-  const items = $derived<Entry[]>([
+  /** A remote browser (Nano Web, ADR-062) sees chats and projects only. */
+  const REMOTE_ITEMS: ReadonlySet<RailItem> = new Set(['home', 'search', 'inbox']);
+  const allItems = $derived<Entry[]>([
     { id: 'home', label: $t('New chat'), icon: SquarePen, shortcut: 'Mod+N', run: () => go(() => store.goHome()) },
     { id: 'search', label: $t('Search'), icon: Search, shortcut: 'Mod+K', run: onSearch },
     {
@@ -56,6 +59,7 @@
     { id: 'runs', label: $t('Runs'), icon: History, shortcut: undefined, run: () => go(() => store.navigate({ name: 'pipelines', section: 'runs' })) },
     { id: 'automations', label: $t('Automations'), icon: Clock, shortcut: undefined, run: () => go(() => store.navigate({ name: 'pipelines', section: 'schedules' })) },
   ]);
+  const items = $derived(remoteMode ? allItems.filter((item) => REMOTE_ITEMS.has(item.id)) : allItems);
 
   const more = $derived.by<MenuEntry[]>(() => {
     const entries: MenuEntry[] = [
@@ -91,12 +95,14 @@
       {/if}
     </span>
   {/each}
-  <Menu side="right" align="end" items={more}>
-    {#snippet trigger(props)}
-      <IconButton size="lg" label={$t('More')} tooltip={false} title={$t('More')} {...props}><Ellipsis /></IconButton>
-    {/snippet}
-  </Menu>
-  {#if nanoAccount.canUseCloud}
+  {#if !remoteMode}
+    <Menu side="right" align="end" items={more}>
+      {#snippet trigger(props)}
+        <IconButton size="lg" label={$t('More')} tooltip={false} title={$t('More')} {...props}><Ellipsis /></IconButton>
+      {/snippet}
+    </Menu>
+  {/if}
+  {#if nanoAccount.canUseCloud && !remoteMode}
     <div class="rail__end">
       <!-- Never needed at first paint; its own chunk keeps the first-paint budget. -->
       {#key locationAttempt}

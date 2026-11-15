@@ -43,6 +43,7 @@ describe('Nano account v1 client', () => {
       { ...base, selectedWorkspaceId: 4 },
       { ...base, capabilities: { gateway: true } },
       { ...base, capabilities: { ...base.capabilities, voice: 'yes' } },
+      { ...base, capabilities: { ...base.capabilities, remoteAccess: 'yes' } },
       { ...base, credentialStore: 'file' },
       { ...base, busy: 'no' },
       { ...base, lastError: 'disk-full' },

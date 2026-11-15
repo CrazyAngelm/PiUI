@@ -31,6 +31,8 @@
   import { chatTree } from './chatTree';
   import { dictationSource } from '../nano/dictationSource.svelte';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
+  import { remoteMode } from '../nano/remoteMode';
+  import { remoteShell } from '../nano/remoteShell.svelte';
   import { chipFor, creditsText } from '../nano/nanoView';
 
   interface Props {
@@ -112,6 +114,8 @@
   let boards = $state.raw<BoardRegistry | undefined>();
   // Loaded once: project updates (a streaming chat) must not keep postponing it.
   $effect(() => {
+    // A remote browser has no boards: the chunk is never fetched.
+    if (remoteMode) return;
     const timer = setTimeout(() => {
       void import('../board/boardStore.svelte')
         .then((module) => {
@@ -181,6 +185,10 @@
 {/if}
 
 <nav class="sidebar" aria-label={$t('Workspace navigation')}>
+  {#if remoteShell.Indicator}
+    <remoteShell.Indicator onOpen={() => go(() => store.navigate({ name: 'settings', section: 'nano' }))} />
+  {/if}
+
   <div class="primary">
     <button type="button" class="nav-item nav-item--strong" onclick={() => go(() => store.goHome())}>
       <SquarePen size={16} />
@@ -191,11 +199,13 @@
 
   <div class="section-head">
     <span>{$t('Projects')}</span>
-    <div class="section-head__actions">
-      <button type="button" class="tiny-action" aria-label={$t('Add project')} onclick={() => void store.addProject()} disabled={store.addingProject}>
-        <Plus size={14} />
-      </button>
-    </div>
+    {#if !remoteMode}
+      <div class="section-head__actions">
+        <button type="button" class="tiny-action" aria-label={$t('Add project')} onclick={() => void store.addProject()} disabled={store.addingProject}>
+          <Plus size={14} />
+        </button>
+      </div>
+    {/if}
   </div>
 
   <div class="tree">
@@ -211,7 +221,7 @@
           {#if personal}{@render project(personal, MessagesSquare, $t('Personal chats'))}{/if}
         </div>
       {/if}
-      {#if projects.length === 0}
+      {#if projects.length === 0 && !remoteMode}
         <div class="hint">
           <p>{$t('Add a project folder to work with agents on its files.')}</p>
           <button type="button" class="link" onclick={() => void store.addProject()}>{$t('Add project…')}</button>
@@ -220,6 +230,7 @@
     {/if}
   </div>
 
+  {#if !remoteMode}
   <div class="footer">
     <button
       type="button"
@@ -240,6 +251,7 @@
       <Kbd keys="Mod+," />
     </button>
   </div>
+  {/if}
 </nav>
 
 {#snippet chat(session: WorkspaceSession, hidden: WorkspaceSession[])}
@@ -288,7 +300,7 @@
         {/if}
       </button>
       <div class="project__actions">
-        {#if !workspace.personal}
+        {#if !workspace.personal && !remoteMode}
           <Menu
             align="end"
             items={[

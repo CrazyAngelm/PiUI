@@ -84,4 +84,33 @@ export const nanoRu: Readonly<Record<string, string>> = {
   'Could not record. Try again.': 'Не удалось записать. Попробуйте ещё раз.',
   'The recording was too large to send.': 'Запись слишком большая для отправки.',
   'No speech was recognized. Try again.': 'Речь не распознана. Попробуйте ещё раз.',
+  // Remote access from Nano Web: Settings → Nano account, the pairing prompt and the sidebar indicator
+  'Allow remote access from Nano Web': 'Разрешить удалённый доступ из Nano Web',
+  "Browsers you approve on this computer can open your chats here, send messages and answer approvals. While one is connected, your chat list and the content of all open chats pass through Nano's server to it and are not stored there.":
+    'Браузеры, которые вы разрешите на этом компьютере, смогут открывать ваши чаты здесь, отправлять сообщения и отвечать на запросы подтверждения. Пока браузер подключён, список чатов и содержимое всех открытых чатов передаются через сервер Nano и там не сохраняются.',
+  'Not available in safe mode.': 'Недоступно в безопасном режиме.',
+  'Sign in to use remote access.': 'Войдите в аккаунт, чтобы включить удалённый доступ.',
+  'This Nano server does not support remote access yet.': 'Этот сервер Nano пока не поддерживает удалённый доступ.',
+  'Waiting for connections': 'Ожидание подключений',
+  'Connecting…': 'Подключение…',
+  'The Nano server refused remote access.': 'Сервер Nano отклонил удалённый доступ.',
+  'Connected now': 'Подключены сейчас',
+  'Allowed browsers': 'Разрешённые браузеры',
+  'Allowed once': 'Разрешён один раз',
+  'Added {0}': 'Добавлен {0}',
+  'Last used {0}': 'Использован {0}',
+  'Allow this browser to control Nano Desktop?': 'Разрешить этому браузеру управлять Nano Desktop?',
+  'Code {0}': 'Код {0}',
+  'Check that the same code is shown in Nano Web. If you did not start this, choose Deny.':
+    'Убедитесь, что в Nano Web показан тот же код. Если вы не начинали подключение, выберите «Запретить».',
+  'Always allow this browser': 'Всегда разрешать этому браузеру',
+  'Remote access: {0} connected': 'Удалённый доступ: подключено {0}',
+  // Remote access failures (host codes) and the remote session guard
+  'The remote access request was not valid.': 'Некорректный запрос удалённого доступа.',
+  'That request or browser is no longer available.': 'Этот запрос или браузер больше недоступен.',
+  'This computer already remembers as many browsers as it can. Remove one first.':
+    'Этот компьютер уже помнит максимум браузеров. Сначала уберите один.',
+  'Nano Desktop could not save the remote access settings.': 'Nano Desktop не смог сохранить настройки удалённого доступа.',
+  'The remote access action could not be completed.': 'Не удалось выполнить действие удалённого доступа.',
+  'This is not available in a remote session.': 'Недоступно в удалённом сеансе.',
 };

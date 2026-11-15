@@ -13,17 +13,21 @@
   import { Badge, Button, Skeleton, Spinner, Switch } from '../../lib/ui';
   import { nanoAccount as sharedAccount, type NanoAccount } from '../nano/nanoAccount.svelte';
   import { nanoPetPreference } from '../nano/nanoPetPreference.svelte';
+  import type { NanoRemote } from '../nano/nanoRemote.svelte';
   import { NANO_TIER_COPY, creditsFraction, creditsLevel, creditsText, lockCopy, retryAction } from '../nano/nanoView';
+  import RemoteAccessSettings from './RemoteAccessSettings.svelte';
 
   interface Props {
     /** Safe mode: Nano is not contacted, so only the local sign-out is offered. */
     safeMode: boolean;
     /** Test seam; the settings page uses the application's account. */
     account?: NanoAccount;
+    /** Test seam for the remote access block; the settings page uses the application's. */
+    remote?: NanoRemote;
     /** Opens Settings → About, where updates live (a too-old client is told to update). */
     onOpenUpdates?: () => void;
   }
-  let { safeMode, account = sharedAccount, onOpenUpdates = () => {} }: Props = $props();
+  let { safeMode, account = sharedAccount, remote = undefined, onOpenUpdates = () => {} }: Props = $props();
 
   const status = $derived(account.status);
   const accountState = $derived(account.state);
@@ -238,6 +242,11 @@
       {$t('Sign out')}
     </Button>
   </div>
+{/if}
+
+<!-- Remote access needs the account: absent while signed out, signing in or expired. Safe mode shows it switched off. -->
+{#if safeMode || (status !== undefined && (accountState === 'signed-in' || accountState === 'offline'))}
+  <RemoteAccessSettings {safeMode} {remote} />
 {/if}
 
 {#if !safeMode && account.canUseAvatars}

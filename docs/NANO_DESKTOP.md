@@ -4,10 +4,11 @@ How the optional Nano account, the Nano harness and the Nano Cloud window work,
 and what each of them may and may not do. Written for engineers working on this
 repository. Decisions: ADR-046 (rebrand, frozen identifiers), ADR-047 (the
 account and its privacy model), ADR-048 (the Nano harness and the relay),
-ADR-049 (the cloud window). Contracts: `contracts/nano-account-v1.ts` (WebView
-and host), `contracts/nano-server-v1.ts` (host and server). The server side is
-specified in [NANO_DESKTOP_API.md](NANO_DESKTOP_API.md); a synthetic server for
-development lives in `tools/nano-dev-server/`.
+ADR-049 (the cloud window), ADR-062 (remote access from Nano Web). Contracts:
+`contracts/nano-account-v1.ts` (WebView and host), `contracts/nano-server-v1.ts`
+(host and server), `contracts/nano-remote-v1.ts` (remote access). The server
+side is specified in [NANO_DESKTOP_API.md](NANO_DESKTOP_API.md); a synthetic
+server for development lives in `tools/nano-dev-server/`.
 
 Nano Desktop is PiUI under a new name. It is still a workbench over native
 harnesses (Codex, Claude Code, Pi, Hermes, Prime Agent, ACP agents). It does
@@ -71,7 +72,10 @@ Code map: account state and flows `crates/piui-nano` and
 `apps/desktop/src/host-api/nanoAccountClient.ts` (Lab fake
 `host-api/lab/nanoAccountFake.ts`); the lane in `crates/piui-runtime`
 (`bridge/pi.mjs`, `bridge/nano-guard.ts`, `src/nano.rs`); presentation metadata
-`apps/desktop/src/harness-adapters/nano.ts`.
+`apps/desktop/src/harness-adapters/nano.ts`; remote access (section 15)
+`crates/piui-nano/src/remote/` (link, pairing proof, grant store) and
+`apps/desktop/src-tauri/src/nano/remote*.rs`, the WebView contract
+`nano-remote-v1.ts` and `apps/desktop/src/host-api/nanoRemoteClient.ts`.
 
 ## 3. Sign-in
 
@@ -274,6 +278,10 @@ The privacy model of ADR-047, as a list:
    receives nothing.
 4. Devices: the server learns a device name, platform and app version at
    sign-in.
+5. While remote access is on and a paired browser is connected, the chat list
+   and the content of all open chats, including tool output shown in them (not
+   only the chats that browser opens), pass through the Nano server to that
+   browser and are not stored there (section 15).
 
 What does not leave: local Nano histories (never uploaded or synced), other
 harnesses' traffic, credentials of other products, telemetry (there is none).
@@ -389,12 +397,13 @@ on the Nano web app (`meta.links.cloud`, default `https://hermes.nanoagents.ru/`
 ## 11. Safe mode
 
 Safe mode makes no Nano network call: no discovery, no refresh, no relay, no
-dictation, no cloud window; the `nano` harness refuses with `SAFE_MODE`. No
-dictation audio is sent to any provider in safe mode; dictation settings can be
-read but not changed. The
-account status is read from local data and local sign-out is allowed (it
-forgets the credential without a network call). Every other command of
-`nano-account-v1` answers `safe-mode`. The generic fallback for Nano chats
+remote link, no dictation, no cloud window; the `nano` harness refuses with
+`SAFE_MODE`. No dictation audio is sent to any provider in safe mode; dictation
+settings can be read but not changed. The account status is read from local
+data and local sign-out is allowed (it forgets the credential without a network
+call). Every other command of `nano-account-v1` answers `safe-mode`, and so does
+switching remote access on (`nano-remote-v1`); its status and switching it off
+still work. The generic fallback for Nano chats
 (Pi's projection) is unchanged.
 
 ## 12. Threat model
@@ -415,6 +424,11 @@ otherwise.
 | Script in the WebView (model output, plugin panel) | No token in the WebView; CSP blocks network; typed commands; guard allowlist | UI spoofing inside the app |
 | A changed settings file or a hostile custom endpoint tries to obtain a provider API key | The key is stored under a hash of the provider and the exact address and is read only for that address; https or loopback http only; redirects are never followed; the WebView cannot supply an address for a request | A custom endpoint the person entered receives the recordings and the key they gave it |
 | Cost exhaustion (unattended schedules, farming) | The server's plan limits: credit balance, locked modes, per-device limits. The relay's own limits are the entitled-mode check, request size, concurrency, an upload deadline and the account generation | The relay has no spending budget per session or per schedule. Spending is bounded only by the account's plan limits on the server, and a scheduled Nano step spends unattended |
+| A stolen Nano account, password or web cookie used from another browser (remote access) | Off by default; the desktop verifies a per-browser key; an unknown key needs approval at the computer with a code both screens show; three refusals in ten minutes lock unknown keys for ten minutes | An attacker can make a prompt appear while the owner is at the computer; a code that differs and the browser label are the defence |
+| Script on the Nano Web origin, or a compromised Nano server (remote access) | Allowlist without shell, filesystem, credentials, settings or plugins; a visible indicator and a disconnect button; the toggle closes the channel; the server lever and `minClientVersion` | Such code can drive a paired browser's session: read the content of all open chats and send prompts and approvals. Frames are not end-to-end encrypted in version 1 |
+| The server relays a browser to the wrong account (remote access) | The desktop refuses any browser without a valid signature bound to its own device id and the browser's relay session | None practical for an unpaired browser |
+| Revoked device, sign-out or expiry while remote access is on | The link closes on any account generation change; the server closes it within a request of a revocation | A running agent keeps running locally |
+| Flooding and oversized frames (remote access) | 256 KiB frames, two browsers per device, eight requests in flight per browser, a 64 MiB result cap, 600 messages a minute on the server | A paired browser can still spend the account's credits by prompting, as at the keyboard |
 
 Non-goals: OS isolation of the agent (Pi has none and Windows containment only
 ends process trees), protection against malware running as the user, hiding
@@ -449,6 +463,11 @@ server-side limits.
   dialog).
 - Evidence so far is synthetic (the dev server and fixtures). Real-provider
   behavior is reported separately once the production server ships the API.
+- Remote access (section 15) follow-ups: end-to-end encryption of frames between
+  the browser and the desktop, image attachments and file mentions, pipelines,
+  runs and the board, and more channels and commands (advertised in `welcome`,
+  additive within `nano-remote.v1`). Presence lives in one server process, so a
+  server restart ends every link until the desktop reconnects.
 
 ## 14. Development and testing
 
@@ -460,6 +479,71 @@ server-side limits.
   version bump and a compatibility test.
 - Identifiers that stay as they were are listed in ADR-046 and AGENTS.md; the
   `piui` prefix in code is historical.
+
+## 15. Remote access
+
+Decision: ADR-062. Protocol and limits: [NANO_DESKTOP_API.md](NANO_DESKTOP_API.md)
+section 4.9. Contract: `contracts/nano-remote-v1.ts` with its fixture
+`contracts/fixtures/nano-remote-v1.json`.
+
+Remote access lets a browser the person approved continue chats from Nano Web.
+It is off by default and the person switches it on in Settings. It is remote
+control of agents that run as the user, with the powers the keyboard has in
+chats; it is not a sandbox and no screen says it is.
+
+**Lifecycle.** The host opens one outbound WebSocket to the Nano server only
+while all of these hold: the application is not in safe mode, the account is
+signed in, the server's `meta.capabilities.remoteAccess` is `true`, and the
+person's toggle for this device is on. Any of them stopping to hold closes the
+link, after a `bye` to every browser (`disabled`, or `signed-out`). Backoff 1 s
+to 60 s with jitter; HTTP 403, 404 and 426 end the attempts until the person
+toggles again or signs in again. The toggle and the remembered browsers are in
+`nano-remote-v1.json` in the application data folder, bound to the issuer and
+the device id; another sign-in is another device and starts disabled. There is
+no listener on this computer: the loopback relay stays the only one.
+
+**Pairing.** A browser sends its public key and signs a challenge that names
+this device and its relay session. The host verifies the signature itself. A
+remembered key is welcomed without a prompt. An unknown key brings the main
+window forward with a 6-digit code that the browser shows too, the browser's
+label and a short fingerprint of its key; the person chooses Deny, Allow once or
+Always allow this browser. One prompt at a time, 120 seconds; three denials or
+timeouts in ten minutes refuse unknown keys for ten minutes (`busy`). At most
+eight browsers are remembered, as public keys only, and each can be forgotten in
+Settings. A browser that fails the signature or sends a message out of order is
+dropped.
+
+**What a paired browser may do.** Sixteen commands and five event channels, the
+same lists in `contracts/nano-remote-v1.ts`, `nano/remote_dispatch.rs` and the
+fixture. Chats: the project and chat lists, the native history and transcripts,
+new chat, prompt, steer, follow-up, cancel, close, rename, approvals, model and
+reasoning picks, session modes, text-only queued messages. The harness registry
+is list-only and a composer send with attachments is refused. Everything else
+is refused with `remote-not-allowed`: settings, project add, trust and removal,
+plugins, pipelines, runs, automations, board, review, worktrees, attachments
+and file mentions, dictation, avatars, harness sign-in, Nano account actions,
+deleting a chat, and every `nano_remote_*` command. Admitted commands run the
+same functions as the WebView's IPC, bypassing `guarded_commands` (a guard for
+the WebView's origin) in favour of the allowlist.
+
+**Indicator and kick.** While a browser is connected the shell shows who and
+how (once or always) and a button that disconnects it at once. Settings lists
+the remembered browsers with their last use and lets the person forget them.
+
+**Limits.** 262144-byte frames (larger results are split in `part` frames and
+refused above 64 MiB; an event over one frame is replaced by a small `gap` frame
+that makes the browser read that session again), two browsers per device, eight requests in flight per
+browser, 75 s of silence ends the link, one pairing prompt at a time.
+
+**Disclosure.** The Nano server relays the frames in memory and keeps none; it
+does see the chat list and the content of all open chats, in transit, over TLS
+on both legs: the shell loads the snapshots of every open session and the host
+forwards the events of every session to each connected browser, not only the
+chats that browser opens. Frames are not end-to-end encrypted in version 1.
+
+**Development.** `tools/nano-dev-server` implements the relay (README, "Remote
+access") and can host the remote shell with `--remote-ui`. Its evidence is
+synthetic and is reported separately from a real server.
 
 ## Краткое содержание (RU)
 
@@ -490,3 +574,11 @@ WebView, мост и Pi их не видят.
 или свой OpenAI-совместимый адрес; запрос делает хост, ключ API вводится в
 системном окне и хранится в хранилище учётных данных ОС, в безопасном режиме
 аудио никуда не отправляется.
+
+Удалённый доступ (ADR-062) выключен по умолчанию. Включённый, он держит одно
+исходящее соединение с сервером Nano и пускает только браузер, который человек
+подтвердил на этом компьютере: браузер доказывает владение ключом, неизвестный
+ключ ждёт решения с 6-значным кодом, а допустимые команды ограничены белым
+списком чатов. Это не песочница: сопряжённый браузер может в чатах то же, что
+клавиатура. Сервер Nano пересылает кадры в памяти и не хранит их, но видит
+открытые чаты при передаче.

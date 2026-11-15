@@ -51,7 +51,7 @@ const PERSONAL = { id: 'ws_synthetic01', name: 'Personal', role: 'owner' } as co
 const TEAM = { id: 'ws_synthetic02', name: 'Team', role: 'member' } as const;
 const RENEWS = '2026-12-01T00:00:00Z';
 
-const CAPABILITIES: NanoCapabilitiesV1 = { gateway: true, cloudLaunch: true, deviceCode: false, dictation: true, voice: false, imageGeneration: false, avatars: true };
+const CAPABILITIES: NanoCapabilitiesV1 = { gateway: true, cloudLaunch: true, deviceCode: false, dictation: true, voice: false, imageGeneration: false, avatars: true, remoteAccess: true };
 
 const MODES: readonly NanoModeV1[] = [
   { id: 'auto', name: 'Auto', tier: 'mixed', available: true, lockedReason: null, costHint: 'Picks a model per request', contextWindow: 200000, maxOutputTokens: 32000, input: ['text', 'image'], reasoning: true },
