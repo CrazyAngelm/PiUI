@@ -32,8 +32,10 @@ import {
   type AgentGraph,
   type ConnectionKind,
   type GraphIssue,
+  type GraphLayout,
   type GraphNode,
 } from '../../features/orchestration/agentGraph';
+import { freeStepPosition, resetBlockPositions, withBlockPositions } from '../../features/orchestration/graphBlocks';
 import { connectAgents, connectRoute } from '../../features/orchestration/graphConnections';
 import { parentIssues, preflightGraph, subpipelineIssues, type PreflightIssue } from '../../features/orchestration/graphPreflight';
 import { pluginNodeIssues } from '../plugins/pluginNodes';
@@ -218,10 +220,11 @@ export class PipelineEditorStore {
   }
 
   private load(graph: AgentGraph, revisions: Revisions): void {
-    this.graph = graph;
-    this.baseline = JSON.stringify(graph);
+    const settled = withBlockPositions(graph);
+    this.graph = settled;
+    this.baseline = JSON.stringify(settled);
     this.revisions = revisions;
-    this.history.reset(graph);
+    this.history.reset(settled);
     this.canUndo = false;
     this.canRedo = false;
     this.selectedId = '';
@@ -352,7 +355,7 @@ export class PipelineEditorStore {
 
   /** Replace the graph and record one undo step. */
   private commit(next: AgentGraph): void {
-    this.graph = syncRouterInputs(next);
+    this.graph = withBlockPositions(syncRouterInputs(next));
     this.history.record(this.graph);
     this.canUndo = this.history.canUndo;
     this.canRedo = this.history.canRedo;
@@ -366,7 +369,8 @@ export class PipelineEditorStore {
     this.selectedId = '';
     this.selectedEdge = '';
     this.checkedNotice = '';
-    this.commit(next);
+    // The assistant may add steps where a block stood: place the blocks around the new graph.
+    this.commit(resetBlockPositions(next));
   }
 
   /** Text edits update the graph live; `settle` records them as one step. */
@@ -425,8 +429,7 @@ export class PipelineEditorStore {
     const index = this.graph.nodes.length;
     const node =
       kind === 'router' ? newRouterNode(index) : kind === 'llm' ? newLlmNode(index) : kind === 'script' ? newScriptNode(index) : newGraphNode(index);
-    node.x = Math.round(position.x);
-    node.y = Math.round(position.y);
+    Object.assign(node, freeStepPosition(this.graph, { x: Math.round(position.x), y: Math.round(position.y) }));
     this.commit({ ...this.graph, nodes: [...this.graph.nodes, node] });
     this.selectedId = node.id;
     return node.id;
@@ -439,8 +442,7 @@ export class PipelineEditorStore {
     position: { x: number; y: number },
   ): string {
     const node = newPluginNode(this.graph.nodes.length, plugin, resultFields);
-    node.x = Math.round(position.x);
-    node.y = Math.round(position.y);
+    Object.assign(node, freeStepPosition(this.graph, { x: Math.round(position.x), y: Math.round(position.y) }));
     this.commit({ ...this.graph, nodes: [...this.graph.nodes, node] });
     this.selectedId = node.id;
     return node.id;
@@ -455,8 +457,7 @@ export class PipelineEditorStore {
     const child = this.subpipelines.get(commandId);
     const name = child?.name ?? this.systems.find((item) => item.id === commandId)?.name ?? '';
     const node = newSubpipelineNode(this.graph.nodes.length, { commandId, name }, child ? outputFields(child.outputs) : undefined);
-    node.x = Math.round(position.x);
-    node.y = Math.round(position.y);
+    Object.assign(node, freeStepPosition(this.graph, { x: Math.round(position.x), y: Math.round(position.y) }));
     this.commit({ ...this.graph, nodes: [...this.graph.nodes, node] });
     this.selectedId = node.id;
     return node.id;
@@ -490,8 +491,7 @@ export class PipelineEditorStore {
   addFromProfile(profile: AgentProfile, position: { x: number; y: number }): string {
     const node = newGraphNode(this.graph.nodes.length);
     node.profile = { ...structuredClone(profile), id: crypto.randomUUID(), allowedSpawnProfileIds: [] };
-    node.x = Math.round(position.x);
-    node.y = Math.round(position.y);
+    Object.assign(node, freeStepPosition(this.graph, { x: Math.round(position.x), y: Math.round(position.y) }));
     this.commit({ ...this.graph, nodes: [...this.graph.nodes, node] });
     this.selectedId = node.id;
     return node.id;
@@ -550,15 +550,18 @@ export class PipelineEditorStore {
     this.removeSelection([], keys);
   }
 
-  /** Deletes nodes (with their connections) and edges as one undo step. */
-  removeSelection(nodeIds: readonly string[], edgeKeys: readonly string[]): void {
-    if (this.readOnly || (!nodeIds.length && !edgeKeys.length)) return;
+  /** Deletes nodes (with their connections), edges and the outputs declared from `outputSources` as one undo step. */
+  removeSelection(nodeIds: readonly string[], edgeKeys: readonly string[], outputSources: readonly string[] = []): void {
+    if (this.readOnly || (!nodeIds.length && !edgeKeys.length && !outputSources.length)) return;
     const nodes = new Set(nodeIds);
     const edges = new Set(edgeKeys);
+    const sources = new Set(outputSources);
+    const outputs = (this.graph.outputs ?? []).filter((output) => !sources.has(output.sourceStepId));
     this.commit({
       ...this.graph,
       nodes: this.graph.nodes.filter((node) => !nodes.has(node.id)),
       edges: this.graph.edges.filter((edge) => !edges.has(edgeKey(edge)) && !nodes.has(edge.from) && !nodes.has(edge.to)),
+      ...(sources.size ? { outputs: outputs.length ? outputs : undefined } : {}),
     });
     if (nodes.has(this.selectedId)) this.selectedId = '';
     if (edges.has(this.selectedEdge)) this.selectedEdge = '';
@@ -593,7 +596,8 @@ export class PipelineEditorStore {
     return undefined;
   }
 
-  movedNodes(positions: readonly { id: string; x: number; y: number }[]): void {
+  movedNodes(positions: readonly { id: string; x: number; y: number }[], blocks: Partial<GraphLayout> | undefined = undefined): void {
+    if (this.readOnly) return;
     const byId = new Map(positions.map((position) => [position.id, position]));
     let changed = false;
     const nodes = this.graph.nodes.map((node) => {
@@ -605,13 +609,24 @@ export class PipelineEditorStore {
       changed = true;
       return { ...node, x, y };
     });
-    if (changed) this.commit({ ...this.graph, nodes });
+    const current = this.graph.layout;
+    let layout = current;
+    if (current && blocks) {
+      const round = (place: { x: number; y: number }) => ({ x: Math.round(place.x), y: Math.round(place.y) });
+      const start = blocks.start ? round(blocks.start) : current.start;
+      const output = blocks.output ? round(blocks.output) : current.output;
+      if (start.x !== current.start.x || start.y !== current.start.y || output.x !== current.output.x || output.y !== current.output.y) {
+        layout = { start, output };
+        changed = true;
+      }
+    }
+    if (changed) this.commit({ ...this.graph, nodes, layout });
   }
 
   /** Layered left-to-right layout over result and route edges. */
   arrange(heights: ReadonlyMap<string, number> = new Map()): void {
     if (!this.graph.nodes.length) return;
-    this.commit(autoLayout(this.graph, heights));
+    this.commit(resetBlockPositions(autoLayout(this.graph, heights)));
   }
 
   /** A wire to Output declares a result; Output is never an executable step. */

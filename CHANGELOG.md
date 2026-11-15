@@ -12,12 +12,14 @@ Nano Desktop is currently a developer preview. Versions before 1.0 may change wi
 
 ### Changed
 
+- Pipelines: **Start** and **Output** are ordinary blocks of the canvas. Drag them, move them with the arrow keys, box-select them or press Arrange; they stay where you leave them and keep their place after Save. A wire dragged to or from Start explains why a step does or does not start with the run, and a declared Output wire is selected and deleted like any other connection.
 - While a Fusion pair works, the sidekick's chat is shown under its lead in the chat list without being opened first.
 - Russian: the send choice while an agent works reads **В очередь / Сразу** instead of **В очередь / Уточнить ход**.
 - A new chat is named after its first message instead of `New Claude Code session`. A Fusion sidekick's chat is named `Sidekick · ` and the name of its lead. An older chat that still has the generated name takes its first message as the name the next time it is opened.
 
 ### Fixed
 
+- Pipelines: Delete after clicking an automatic wire no longer removes the step that was selected before. A step moved left of or above the canvas origin keeps its place after reopening and no longer stops Export JSON or Save as template. New steps are no longer created on top of each other, arrow-key moves are kept, and Tab no longer traps keyboard focus inside the canvas.
 - A message sent into a running turn appears in the chat at once, marked as not read yet. It used to appear only when the agent read it at its next step, which could take half a minute.
 - OpenCode models show their reasoning levels in the model picker, in a new chat and in an open one. Each model offers its own levels, and `default` is no longer listed as a level.
 - The new-chat harness, model, reasoning, speed and permission picks are remembered as soon as they are made, not when a message is sent. A project without its own choice starts from the latest one, and a harness that was still being checked at startup takes over once it is ready.

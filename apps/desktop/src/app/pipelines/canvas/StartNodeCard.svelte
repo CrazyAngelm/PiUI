@@ -7,6 +7,9 @@
   export interface StartNodeData extends Record<string, unknown> {
     inputs: readonly PipelineInput[];
     problems: number;
+    readOnly: boolean;
+    /** At least one step starts with the run. */
+    wired: boolean;
   }
   export type StartFlowNode = Node<StartNodeData, 'start'>;
 </script>
@@ -38,7 +41,15 @@
       {#if data.inputs.length > shown.length}<li class="muted">{$t('+{0} more', [data.inputs.length - shown.length])}</li>{/if}
     </ul>
   {/if}
-  <Handle type="source" position={Position.Right} id="out" class="port port--out" isConnectable={false} />
+  <Handle
+    type="source"
+    position={Position.Right}
+    id="out"
+    class={data.wired ? 'port port--out port--wired' : 'port port--out'}
+    style="--port: var(--piui-success)"
+    isConnectable={!data.readOnly}
+    aria-label={$t('Start connects automatically')}
+  />
 </div>
 
 <style>
@@ -50,7 +61,6 @@
     background: color-mix(in srgb, var(--piui-success) 7%, var(--piui-surface-1));
     box-shadow: var(--piui-shadow-1);
     color: var(--piui-text);
-    cursor: pointer;
   }
   .start--selected {
     border-color: var(--piui-accent);

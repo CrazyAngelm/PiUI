@@ -2,7 +2,7 @@
  * Loading and saving an agent system (the canvas graph) through the existing
  * orchestration host commands. The graph compiles into profiles, a team, a
  * dependency pipeline and a launch command, saved in one host transaction.
- * Node positions are rebuildable UI metadata kept per system in localStorage.
+ * Node and block positions are rebuildable UI metadata kept per system in localStorage.
  */
 import type {
   AgentProfile,
@@ -13,6 +13,7 @@ import type {
   StoredDefinition,
   TeamDefinition,
 } from '../../host-api/orchestrationClient';
+import { readBlockPositions, writeBlockPositions } from '../../features/orchestration/graphBlocks';
 import {
   compileGraph,
   nodeHasNoMember,
@@ -181,8 +182,11 @@ export async function openGraph(client: OrchestrationClient, workspaceId: string
   const needsLayout = graph.nodes.length > 1 && !graph.nodes.some((node) => positions.has(node.id));
   graph.nodes = graph.nodes.map((node) => {
     const position = positions.get(node.id);
-    return position ? { ...node, x: Math.max(0, position.x), y: Math.max(0, position.y) } : node;
+    return position ? { ...node, x: position.x, y: position.y } : node;
   });
+  // Stored block places belong to the stored step positions; a graph laid out afresh gets fresh ones.
+  const blocks = needsLayout ? undefined : readBlockPositions(workspaceId, commandId);
+  if (blocks) graph.layout = blocks;
 
   const revisions: Revisions = new Map([
     [commandId, command.revision],
@@ -216,6 +220,7 @@ export async function saveGraph(
     command: request(definition.command),
   });
   writePositions(workspaceId, graph);
+  writeBlockPositions(workspaceId, graph);
   return new Map(
     [...definition.profiles, definition.team, definition.pipeline, definition.command].map((value) => [value.id, (revisions.get(value.id) ?? -1) + 1]),
   );

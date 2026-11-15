@@ -13,7 +13,8 @@
   import EyeOff from '@lucide/svelte/icons/eye-off';
   import { useTranslation } from '../../../features/locale/context';
   const t = useTranslation();
-  import type { ConnectionKind } from '../../../features/orchestration/agentGraph';
+  import type { ConnectionKind, GraphLayout } from '../../../features/orchestration/agentGraph';
+  import { defaultBlockPositions, entrySteps } from '../../../features/orchestration/graphBlocks';
   import { IconButton, Segmented, toasts } from '../../../lib/ui';
   import { edgeKey } from '../../../features/orchestration/graphCanvasEditing';
   import type { GraphCanvasController } from './graphCanvasController';
@@ -22,7 +23,7 @@
   import PiuiEdge, { type PiuiFlowEdge } from './PiuiEdge.svelte';
   import StartNodeCard, { type StartFlowNode } from './StartNodeCard.svelte';
   import OutputNodeCard, { type OutputFlowNode } from './OutputNodeCard.svelte';
-  import { presentationNodeIds, presentationEdgeId, isPresentationEdge as blockEdge } from './graphRenderIdentity';
+  import { presentationNodeIds, presentationEdgeId, presentationEdge, isPresentationEdge as blockEdge } from './graphRenderIdentity';
   import { RUN_INPUT_ISSUES } from '../../../host-api/runInputs';
   import { SUBPIPELINE_ISSUES } from '../../../host-api/subpipelines';
 
@@ -44,8 +45,8 @@
   let { editor, onAddRequest, onready }: Props = $props();
 
   type FlowNode = AgentFlowNode | RouterFlowNode | StartFlowNode | OutputFlowNode;
-  const nodeTypes = { agent: AgentNodeCard, router: RouterNodeCard, start: StartNodeCard, output: OutputNodeCard };
-  /** Presentation-only blocks: never deleted, moved or saved. */
+  const nodeTypes = { agent: AgentNodeCard, router: RouterNodeCard, start: StartNodeCard, end: OutputNodeCard };
+  /** Start and Output: blocks of every pipeline with steps; never steps, never deleted. */
   const blocks = $derived(presentationNodeIds(editor.graph.nodes.map(node => node.id)));
   const BLOCK_IDS: ReadonlySet<string> = $derived(new Set([blocks.start, blocks.output]));
   const edgeTypes = { piui: PiuiEdge };
@@ -124,30 +125,27 @@
       draggable: !readOnly,
       deletable: !readOnly,
     })) as FlowNode[];
-    // The start node is presentation only: it shows the run inputs and which
-    // agents begin the run. It never becomes part of the saved graph.
-    const entries = graph.nodes.filter(
-      (node) => node.executionMode !== 'callable' && !graph.edges.some((edge) => edge.to === node.id && (edge.kind === 'result' || edge.kind === 'route')),
-    );
+    // Start and Output are blocks of every pipeline with steps. Their wires are drawn
+    // from the graph; only their place on the canvas is kept (`graph.layout`).
+    const layout = graph.layout ?? defaultBlockPositions(graph);
+    const entries = entrySteps(graph);
     const startEdges: PiuiFlowEdge[] = [];
     const startNodes: StartFlowNode[] = [];
-    if (entries.length) {
-      const x = Math.min(...entries.map((node) => node.x)) - 290;
-      const y = entries.reduce((sum, node) => sum + node.y, 0) / entries.length + 8;
+    const outputNodes: OutputFlowNode[] = [];
+    const outputEdges: PiuiFlowEdge[] = [];
+    if (layout) {
       const inputProblems = editor.issues.filter((issue) => INPUT_ISSUES.has(issue.message)).length;
-      startNodes.push(
-        {
-          id: blocks.start,
-          type: 'start',
-          ariaLabel: $t('Start'),
-          position: { x, y },
-          data: { inputs: graph.inputs ?? [], problems: inputProblems },
-          selected: editor.selectedBlock === 'start',
-          draggable: false,
-          deletable: false,
-          connectable: false,
-        } as StartFlowNode,
-      );
+      startNodes.push({
+        id: blocks.start,
+        type: 'start',
+        ariaLabel: $t('Start'),
+        position: { ...layout.start },
+        data: { inputs: graph.inputs ?? [], problems: inputProblems, readOnly, wired: entries.length > 0 },
+        selected: editor.selectedBlock === 'start',
+        draggable: !readOnly,
+        deletable: false,
+        connectable: !readOnly,
+      } as StartFlowNode);
       for (const entry of entries) {
         startEdges.push({
           id: presentationEdgeId('start', entry.id),
@@ -164,43 +162,35 @@
           markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: 'var(--piui-success)' },
         });
       }
-    }
-    // With no declared fields, Output marks the end of each scheduled branch.
-    // Like Start, these links are presentation only, never saved dependencies.
-    const outputNodes: OutputFlowNode[] = [];
-    const outputEdges: PiuiFlowEdge[] = [];
-    if (graph.nodes.length) {
-      const exits = graph.nodes.filter(
-        (node) => node.executionMode !== 'callable' && !graph.edges.some((edge) => edge.from === node.id && (edge.kind === 'result' || edge.kind === 'route')),
-      );
-      const placed = exits.length ? exits : graph.nodes;
-      const x = Math.max(...placed.map((node) => node.x)) + 300;
-      const y = placed.reduce((sum, node) => sum + node.y, 0) / placed.length + 8;
-      const outputs = graph.outputs ?? [];
       outputNodes.push({
         id: blocks.output,
-        type: 'output',
+        type: 'end',
         ariaLabel: $t('Output'),
-        position: { x, y },
-        data: { outputs, wired: output.sources.size > 0, readOnly, problems: editor.issues.filter((issue) => issue.message === SUBPIPELINE_ISSUES.outputs).length },
+        position: { ...layout.output },
+        data: { outputs: graph.outputs ?? [], wired: output.sources.size > 0, readOnly, problems: editor.issues.filter((issue) => issue.message === SUBPIPELINE_ISSUES.outputs).length },
         selected: editor.selectedBlock === 'output',
-        draggable: false,
+        draggable: !readOnly,
         deletable: false,
         connectable: !readOnly,
       } as OutputFlowNode);
       for (const source of output.sources) {
+        // A declared result is a wire the person made: selected and deleted like any other.
+        // A completion wire only says where the pipeline ends.
+        const declared = output.declared.has(source);
+        const id = presentationEdgeId('output', source);
         outputEdges.push({
-          id: presentationEdgeId('output', source),
+          id,
           type: 'piui',
           source,
           target: blocks.output,
-          ariaLabel: connectionLabel($t, output.implicit ? 'completion' : 'result', names.get(source) ?? '', $t('Output')),
+          ariaLabel: connectionLabel($t, declared ? 'result' : 'completion', names.get(source) ?? '', $t('Output')),
           sourceHandle: 'out',
           targetHandle: 'in',
           data: { kind: 'result' },
-          class: 'output-edge',
-          selectable: false,
-          deletable: false,
+          class: declared ? 'output-edge output-edge--declared' : 'output-edge',
+          selectable: declared,
+          deletable: declared && !readOnly,
+          selected: declared && editor.selectedEdge === id,
           markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: 'var(--piui-decoration-secondary)' },
         });
       }
@@ -253,7 +243,31 @@
     return heights;
   }
 
+  /** Start's wires are drawn, not made: say why this step does or does not start with the run. */
+  function explainStart(stepId: string): void {
+    if (editor.readOnly) return;
+    const graph = editor.graph;
+    const node = graph.nodes.find((item) => item.id === stepId);
+    if (!node) {
+      toasts.show({ title: $t('Start connects automatically') });
+      return;
+    }
+    const name = node.profile.name || $t('Untitled agent');
+    const description =
+      node.executionMode === 'callable'
+        ? $t('{0} is on call: it starts only when another agent calls it.', [name])
+        : entrySteps(graph).some((item) => item.id === stepId)
+          ? $t('{0} has nothing before it, so it already starts with the run.', [name])
+          : $t('{0} waits for the steps connected to it. Remove those connections to start it with the run.', [name]);
+    toasts.show({ title: $t('Start connects automatically'), description });
+  }
+
   function beforeConnect(connection: Connection): false {
+    if (connection.source === blocks.start) {
+      explainStart(connection.target);
+      sync();
+      return false;
+    }
     if (connection.target === blocks.output) {
       const error = editor.connectOutput(connection.source);
       if (error) toasts.error($t('Cannot connect'), $t(error));
@@ -279,11 +293,48 @@
     return false;
   }
 
+  /** A drag or an arrow-key move of steps and blocks: one undo step. */
+  function commitMoves(moved: readonly FlowNode[]): void {
+    if (editor.readOnly) return;
+    const steps: { id: string; x: number; y: number }[] = [];
+    const moves: Partial<GraphLayout> = {};
+    for (const node of moved) {
+      const place = { x: node.position.x, y: node.position.y };
+      if (node.id === blocks.start) moves.start = place;
+      else if (node.id === blocks.output) moves.output = place;
+      else steps.push({ id: node.id, ...place });
+    }
+    editor.movedNodes(steps, moves);
+  }
+
+  $effect(() => {
+    const element = container;
+    if (!element) return;
+    // Svelte Flow moves selected cards on arrow keys without a drag event; keep that move like a drag.
+    const keyup = (event: KeyboardEvent): void => {
+      if (event.key.startsWith('Arrow') && event.target instanceof HTMLElement && event.target.closest('.svelte-flow__node')) {
+        // Every card is reported; the store records only the ones whose place changed.
+        commitMoves(nodes);
+      }
+    };
+    element.addEventListener('keyup', keyup);
+    return () => element.removeEventListener('keyup', keyup);
+  });
+
+  function selectBlock(block: 'start' | 'output'): void {
+    if (editor.selectedBlock !== block) {
+      editor.selectedId = '';
+      editor.selectedBlock = block;
+    }
+    if (editor.selectedEdge) editor.selectedEdge = '';
+  }
+
   function selectNode(node: FlowNode): void {
-    const block = node.type === 'start' ? 'start' : node.type === 'output' ? 'output' : undefined;
-    if (block) {
-      if (editor.selectedBlock !== block) { editor.selectedId = ''; editor.selectedBlock = block; }
-    } else if (editor.selectedId !== node.id || editor.selectedBlock !== undefined) editor.selectedId = node.id;
+    if (node.type === 'start' || node.type === 'end') {
+      selectBlock(node.type === 'start' ? 'start' : 'output');
+      return;
+    }
+    if (editor.selectedId !== node.id || editor.selectedBlock !== undefined) editor.selectedId = node.id;
     if (editor.selectedEdge) editor.selectedEdge = '';
   }
 
@@ -314,14 +365,24 @@
     class="piui-flow"
     onbeforeconnect={beforeConnect}
     onbeforedelete={async ({ nodes: removedNodes, edges: removedEdges }) => {
-      editor.removeSelection(
-        removedNodes.map((node) => node.id).filter((id) => !BLOCK_IDS.has(id)),
-        removedEdges.map((edge) => edge.id).filter((id) => !blockEdge(id)),
-      );
+      const steps = removedNodes.map((node) => node.id).filter((id) => !BLOCK_IDS.has(id));
+      const wires = removedEdges.map((edge) => edge.id).filter((id) => !blockEdge(id));
+      // Only a wire the person selected removes its outputs; deleting a step leaves them to be fixed in Output.
+      const outputs = removedEdges.flatMap((edge) => {
+        const wire = presentationEdge(edge.id);
+        return wire?.kind === 'output' && edge.selected ? [wire.nodeId] : [];
+      });
+      if (!steps.length && !wires.length && !outputs.length) {
+        if (editor.selectedBlock && !editor.readOnly) {
+          toasts.show({ title: $t('Start and Output stay in every pipeline'), description: $t('Delete steps or connections instead.') });
+        }
+        return false;
+      }
+      editor.removeSelection(steps, wires, outputs);
+      if (outputs.length) editor.selectedEdge = '';
       return false;
     }}
-    onnodedragstop={({ nodes: moved }) =>
-      editor.movedNodes(moved.filter((node) => !BLOCK_IDS.has(node.id)).map((node) => ({ id: node.id, x: node.position.x, y: node.position.y })))}
+    onnodedragstop={({ nodes: moved }) => commitMoves(moved)}
     onnodeclick={({ node }) => selectNode(node)}
     onselectionchange={({ nodes: selectedNodes, edges: selectedEdges }) => untrack(() => {
       // Svelte Flow invokes this callback from its selection effect. Reading the
@@ -331,12 +392,18 @@
       // selection stays owned by Svelte Flow for bulk delete and movement.
       if (selectedNodes.length === 1) selectNode(selectedNodes[0]);
       else if (selectedNodes.length === 0) {
-        const edge = selectedEdges.find(item => !blockEdge(item.id));
+        const edge = selectedEdges.find((item) => item.selectable !== false);
         if (edge && editor.selectedEdge !== edge.id) { editor.selectedId = ''; editor.selectedEdge = edge.id; }
       }
     })}
     onedgeclick={({ edge }) => {
-      if (blockEdge(edge.id)) return;
+      const wire = presentationEdge(edge.id);
+      // An automatic wire belongs to its block: selecting the block also drops any other selection,
+      // so Delete can never remove a step the person is no longer looking at.
+      if (wire && edge.selectable === false) {
+        selectBlock(wire.kind);
+        return;
+      }
       editor.selectedEdge = edge.id;
       editor.selectedId = '';
     }}
@@ -448,6 +515,10 @@
   .canvas :global(.output-edge .piui-edge) {
     stroke: color-mix(in srgb, var(--piui-decoration-secondary) 70%, transparent);
     stroke-dasharray: 5 4;
+  }
+  .canvas :global(.output-edge--declared .piui-edge) {
+    stroke: var(--piui-decoration-secondary);
+    stroke-dasharray: none;
   }
   .canvas :global(.port:hover),
   .canvas :global(.svelte-flow__handle.connectingfrom) {

@@ -17,12 +17,14 @@ import { formatIssue, pipelineOutputIssues, SUBPIPELINE_ISSUE_TEMPLATES, SUBPIPE
 export interface GraphNode { kind?: 'agent' | 'router'; executor?: StepExecutor; pipelineName?: string; pinnedOutput?: import('../../../../../contracts/orchestration-v6').PinnedOutput; inputBindings?: import('../../../../../contracts/orchestration-v6').InputBinding[]; condition?: import('../../../../../contracts/orchestration-v6').ResultCondition; review?: import('../../../../../contracts/orchestration-v6').ReviewRule; requireApproval?: boolean; resultFields?: import('../../../../../contracts/orchestration-v6').ResultField[]; executionMode?: 'scheduled' | 'callable'; id: string; profile: AgentProfile; router?: RouterConfig; task: string; input?: string; x: number; y: number; }
 export type ConnectionKind = 'result' | 'send' | 'observe' | 'spawn' | 'route';
 export interface GraphEdge { from: string; to: string; kind: ConnectionKind; branchId?: string; }
+/** Canvas places of the Start and Output blocks. UI metadata: never compiled, saved to the host or exported. */
+export interface GraphLayout { start: { x: number; y: number }; output: { x: number; y: number } }
 /**
  * `inputs` are the pipeline's run inputs (v6.1): values requested when a run
  * starts. `outputs` (v6.7) are the results the pipeline returns when another
  * pipeline runs it as a sub-pipeline.
  */
-export interface AgentGraph { id: string; name: string; teamId: string; pipelineId: string; orchestratorId?: string; spawnedAgentsJoinTeam?: boolean; inputs?: PipelineInput[]; outputs?: PipelineOutput[]; nodes: GraphNode[]; edges: GraphEdge[]; }
+export interface AgentGraph { id: string; name: string; teamId: string; pipelineId: string; orchestratorId?: string; spawnedAgentsJoinTeam?: boolean; inputs?: PipelineInput[]; outputs?: PipelineOutput[]; layout?: GraphLayout; nodes: GraphNode[]; edges: GraphEdge[]; }
 export function emptyGraph(): AgentGraph { return { id: crypto.randomUUID(), name: '', teamId: crypto.randomUUID(), pipelineId: crypto.randomUUID(), nodes: [], edges: [] }; }
 export function newGraphNode(index: number): GraphNode {
   return { kind: 'agent', id: crypto.randomUUID(), x: 60 + index * 280, y: 100, task: '', profile: {

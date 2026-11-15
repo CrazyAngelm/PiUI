@@ -103,16 +103,30 @@ one-way. Messaging permits sending to the target; observation permits reading
 the target's activity; delegation permits spawning the target profile subject
 to the existing host permission checks.
 
-With no declared outputs, the graph draws completion links from scheduled
-steps with no downstream result dependency, excluding routers. These links
-are visual only; they are not saved as connections and do not select results.
-When there are declared outputs, the graph shows links from their sources.
+Start and Output are blocks of every pipeline with steps: one each, never
+steps, never deleted. They are dragged, moved with arrow keys, box-selected,
+undone and arranged like step cards and stay where they are until the person
+moves them or uses Arrange; their places are editor metadata kept with the step
+positions and are not part of the saved definition or of a system file.
 
-Dragging a scheduled step's result port to the pipeline Output block declares
-its whole result text and opens the output settings, where a named field can be
-chosen instead. Reconnecting the same source preserves its declarations. This
-is one undoable edit to the pipeline outputs, not a dependency or executable
-step; collaboration links, callable agents and router branches are refused.
+Start's wires state a fact: a dashed wire goes to every scheduled step with
+nothing before it. They are never drawn or deleted by hand; a wire dragged to
+or from Start explains why that step does or does not start with the run. A
+dashed wire to Output marks a final scheduled step (routers excluded) and is
+drawn whether or not outputs are declared. Clicking a dashed wire selects its
+block. None of these wires is saved as a connection or selects a result.
+
+Dragging a scheduled step's result port to Output declares its whole result
+text and opens the output settings, where a named field can be chosen instead.
+The declared result is a solid wire, selected and deleted like any connection;
+deleting it removes the outputs declared from that step as one undoable edit.
+Reconnecting the same source preserves its declarations. Collaboration links,
+callable agents and router branches are refused. Delete on Start or Output says
+that they stay.
+
+Tab opens the Add menu after a click on the empty canvas; with focus on a card
+or control it moves focus. New steps are placed beside existing cards, never on
+top of them.
 Russian interface copy calls a pipeline «конвейер».
 
 

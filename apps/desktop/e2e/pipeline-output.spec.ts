@@ -52,6 +52,7 @@ test('an explicitly mapped router result keeps its wire and uses a non-connectab
   const anchor = canvas.getByRole('group', { name: 'Route by category', exact: true }).locator('[data-handleid="out"]');
   await expect(anchor).toHaveClass(/port--wired/);
   await expect(anchor).not.toHaveClass(/(?:^|\s)connectable(?:\s|$)/);
+  await expect(canvas.getByRole('group', { name: /^Completion connection from / })).toHaveCount(2);
   await settings.getByRole('button', { name: 'Remove output result' }).click();
   await expect(anchor).toHaveCount(0);
   await expect(canvas.getByRole('group', { name: /^Completion connection from / })).toHaveCount(2);

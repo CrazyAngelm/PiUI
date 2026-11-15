@@ -155,6 +155,27 @@ describe('portable system files', () => {
     expect(reopened.nodes[0]!.profile.networkAccess).toBe(true);
     expect(reopened.nodes[1]!.profile.baseInstructions).toBeUndefined();
   });
+  it('exports steps left of or above the origin by moving the whole picture, and never writes the block places', () => {
+    const graph = systemFileToGraph(parseSystemFile(JSON.stringify(example())));
+    const moved = {
+      ...graph,
+      layout: { start: { x: -900, y: -40 }, output: { x: 800, y: 20 } },
+      nodes: graph.nodes.map((node, index) => (index === 0 ? { ...node, x: -200, y: -50 } : index === 1 ? { ...node, x: 100, y: 30 } : node)),
+    };
+    const text = serializeSystemFile(moved);
+    const parsed = parseSystemFile(text);
+    expect(parsed.agents[0]!.position).toEqual({ x: 0, y: 0 });
+    expect(parsed.agents[1]!.position).toEqual({ x: 300, y: 80 });
+    expect(text).not.toContain('layout');
+    expect(text).not.toContain('__start');
+    expect(text).not.toContain('__output');
+  });
+  it('writes the same document with and without block places when no step is left of the origin', () => {
+    const graph = systemFileToGraph(parseSystemFile(JSON.stringify(example())));
+    const placed = { ...graph, layout: { start: { x: -900, y: -40 }, output: { x: 800, y: 20 } } };
+    expect(serializeSystemFile(placed)).toBe(serializeSystemFile(graph));
+    expect(graphToSystemFile(graph).agents.map(agent => agent.position)).toEqual(graph.nodes.map(node => ({ x: node.x, y: node.y })));
+  });
   it.each(['version','unknown','duplicate','dangling','cycle','resource','privileges'])('rejects %s without coercing or dropping fields', failure => {
     const file = example();
     if (failure==='version') file.version=99;
