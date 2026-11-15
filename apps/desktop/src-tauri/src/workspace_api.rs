@@ -535,6 +535,23 @@ fn snapshot_differs(remembered: &RememberedSettings, native: &NativeSnapshot) ->
     )
 }
 
+/// A confirmed choice replaces what the settings notices said: the chat now
+/// runs with what was chosen, and only a choice that could not be saved is
+/// reported again.
+fn settle_settings_notices(state: &LiveState, saved: bool) {
+    if let Ok(mut notices) = state.notices.lock() {
+        notices.retain(|code| {
+            !matches!(
+                code,
+                NativeNoticeCode::SettingsNotRestored | NativeNoticeCode::SettingsNotRemembered
+            )
+        });
+        if !saved {
+            notices.push(NativeNoticeCode::SettingsNotRemembered);
+        }
+    }
+}
+
 impl From<ApiError> for WorkspaceError {
     fn from(value: ApiError) -> Self {
         Self {
@@ -1024,6 +1041,8 @@ struct PendingStart {
     options: RuntimeStartOptions,
     /// A new session's unbound catalog row is removed if its start fails.
     created: bool,
+    /// The settings chosen for a new session could not be saved for reopen.
+    settings_not_remembered: bool,
 }
 
 /// Native half of a start, produced without the operation gate.
@@ -1032,8 +1051,9 @@ struct StartedRuntime {
     events: NativeEventReceiver,
     native: NativeSnapshot,
     binding_persisted: bool,
-    /// The remembered settings could not be re-applied after a reopen.
-    settings_not_restored: bool,
+    /// Host-decided notice about the remembered settings: not re-applied after
+    /// a reopen, or not saved for a new session.
+    settings_notice: Option<NativeNoticeCode>,
 }
 
 /// A started native runtime that no command can reach yet.
@@ -1044,7 +1064,7 @@ struct SpawnedStart {
     events: NativeEventReceiver,
     native: NativeSnapshot,
     binding_persisted: bool,
-    settings_not_restored: bool,
+    settings_notice: Option<NativeNoticeCode>,
     coordinator: Option<CoordinatorBinding>,
     board: Option<(BoardBinding, Arc<dyn BoardSessionHooks>, BoardSessionSetup)>,
     publisher: WorkspaceEventPublisher,
@@ -1634,16 +1654,15 @@ impl WorkspaceHost {
             materialized: Some(false),
         };
         self.insert_record(record.clone())?;
-        if record.run_id.is_none()
-            && let Some(model) = &record.model
-        {
-            self.remember_settings(
-                &record.id,
-                model,
-                record.thinking_level.as_deref(),
-                chosen_tier.as_deref(),
-            );
-        }
+        let settings_not_remembered = record.run_id.is_none()
+            && record.model.as_ref().is_some_and(|model| {
+                !self.remember_settings(
+                    &record.id,
+                    model,
+                    record.thinking_level.as_deref(),
+                    chosen_tier.as_deref(),
+                )
+            });
         Ok(PendingStart {
             reservation,
             cwd,
@@ -1662,6 +1681,7 @@ impl WorkspaceHost {
                 publisher,
             },
             created: true,
+            settings_not_remembered,
         })
     }
 
@@ -1777,6 +1797,7 @@ impl WorkspaceHost {
                         // (`restore_remembered_settings`).
                         options: RuntimeStartOptions::ordinary_open(publisher),
                         created: false,
+                        settings_not_remembered: false,
                     }))
                 }
             },
@@ -1906,6 +1927,7 @@ impl WorkspaceHost {
             record,
             options,
             created,
+            settings_not_remembered,
         } = pending;
         let RuntimeStartOptions {
             model,
@@ -2047,11 +2069,19 @@ impl WorkspaceHost {
             }
             // Settings a person confirmed come back before the registry row
             // takes the snapshot's model, which would otherwise overwrite them.
-            let (native, settings_not_restored) = if created {
-                (native, false)
+            let (native, settings_notice) = if created {
+                (
+                    native,
+                    settings_not_remembered.then_some(NativeNoticeCode::SettingsNotRemembered),
+                )
             } else {
-                self.restore_remembered_settings(&record, &runtime, &mut events, native)
-                    .await
+                let (native, not_restored) = self
+                    .restore_remembered_settings(&record, &runtime, &mut events, native)
+                    .await;
+                (
+                    native,
+                    not_restored.then_some(NativeNoticeCode::SettingsNotRestored),
+                )
             };
             if !record.nano_connector
                 && let Some(agent) = record.harness.acp_agent()
@@ -2073,7 +2103,7 @@ impl WorkspaceHost {
                 events,
                 native,
                 binding_persisted,
-                settings_not_restored,
+                settings_notice,
             })
         }
         .await;
@@ -2083,7 +2113,7 @@ impl WorkspaceHost {
                 events,
                 native,
                 binding_persisted,
-                settings_not_restored,
+                settings_notice,
             }) => Ok(SpawnedStart {
                 reservation,
                 record,
@@ -2091,7 +2121,7 @@ impl WorkspaceHost {
                 events,
                 native,
                 binding_persisted,
-                settings_not_restored,
+                settings_notice,
                 coordinator,
                 board,
                 publisher,
@@ -2137,7 +2167,7 @@ impl WorkspaceHost {
             events,
             native,
             binding_persisted,
-            settings_not_restored,
+            settings_notice,
             coordinator,
             board,
             publisher,
@@ -2154,9 +2184,7 @@ impl WorkspaceHost {
             ),
             None => (None, Vec::new()),
         };
-        if settings_not_restored {
-            notices.push(NativeNoticeCode::SettingsNotRestored);
-        }
+        notices.extend(settings_notice);
         let state = Arc::new(LiveState {
             composer_gate: tokio::sync::Mutex::new(()),
             composer_notify: Mutex::new(None),
@@ -2454,12 +2482,13 @@ impl WorkspaceHost {
                 .settings
                 .get(session_id)
                 .and_then(|remembered| remembered.service_tier);
-            self.remember_settings(
+            let saved = self.remember_settings(
                 session_id,
                 &remembered_model,
                 remembered_level.as_deref(),
                 tier.as_deref(),
             );
+            settle_settings_notices(&state, saved);
         }
         let record = self.record(session_id)?;
         let status = *lock(&state.status)?;
@@ -2909,20 +2938,22 @@ impl WorkspaceHost {
             .map_err(|_| WorkspaceError::io())
     }
 
-    /// Remembers the settings a person confirmed for an ordinary chat. The
-    /// native change already happened; a failed write only means the chat
-    /// reopens with the harness's own settings.
+    /// Remembers the settings a person confirmed for an ordinary chat and says
+    /// whether they were saved. The native change already happened; a failed
+    /// write forgets the earlier choice too (so a reopen never re-applies a
+    /// stale one) and only means the chat reopens with the harness's own
+    /// settings, which the caller reports as `settings-not-remembered`.
     fn remember_settings(
         &self,
         session_id: &str,
         model: &WorkspaceModel,
         thinking_level: Option<&str>,
         service_tier: Option<&str>,
-    ) {
-        let _ = self
-            .inner
+    ) -> bool {
+        self.inner
             .settings
-            .save(session_id, model, thinking_level, service_tier);
+            .save(session_id, model, thinking_level, service_tier)
+            .is_ok()
     }
 
     /// Re-applies the model, reasoning level and speed a person last confirmed
@@ -2955,22 +2986,24 @@ impl WorkspaceHost {
         {
             return (native, true);
         }
-        let applied = events
+        // Some adapters (Codex) fill their model catalog only when it is
+        // requested and refuse a model they have not listed. A catalog that
+        // cannot be read is not fatal: the request below reports its own refusal.
+        let _ = events.buffer_while(runtime.models()).await;
+        let _ = events
             .buffer_while(runtime.set_model(
                 remembered.model.clone(),
                 remembered.thinking_level.clone(),
                 remembered.service_tier.clone(),
             ))
             .await;
-        if applied.is_err() {
-            return (native, true);
-        }
+        // The chat reports what it really runs. A refused request may have
+        // applied part of it (ACP selects the model, then the reasoning level),
+        // and an adapter that accepted it may not have applied it at all.
         match events.buffer_while(runtime.snapshot()).await {
-            Ok(restored) => {
-                // An adapter that accepted the request without applying it is
-                // reported too, never passed over.
-                let failed = snapshot_differs(&remembered, &restored);
-                (restored, failed)
+            Ok(actual) => {
+                let failed = snapshot_differs(&remembered, &actual);
+                (actual, failed)
             }
             Err(_) => (native, true),
         }
@@ -3428,15 +3461,13 @@ async fn runtime_settings(
     if let Some(requested) = applied {
         // The confirmed native readback is what the chat is remembered with.
         let model = native.model.clone().unwrap_or(requested);
-        host.workspace.remember_settings(
+        let saved = host.workspace.remember_settings(
             session_id,
             &model,
             native.thinking_level.as_deref(),
             native.service_tier.as_deref(),
         );
-        if let Ok(mut notices) = state.notices.lock() {
-            notices.retain(|code| *code != NativeNoticeCode::SettingsNotRestored);
-        }
+        settle_settings_notices(&state, saved);
     }
     Ok(RuntimeSettings {
         protocol: 16,
@@ -8358,25 +8389,32 @@ mod native_host_tests {
 
     /// Forgets its settings with its process, like Claude Code on `--resume`:
     /// every start reports the default model and no reasoning level. A title
-    /// containing `gone` withdraws the `chosen` model.
+    /// containing `gone` withdraws the `chosen` model, `lazy` makes it refuse
+    /// every model until `models()` was called (Codex fills its catalog only
+    /// then), and `partial` applies the model but refuses the reasoning level
+    /// (ACP selects them one after the other).
     const FORGETFUL_ADAPTER: &str = r#"
         const native = {supported:true,enforcement:'native'};
         const unsupported = {supported:false,enforcement:'unsupported'};
+        const title = String(config.title ?? '');
         const models = [{id:'default',name:'Default',thinkingLevels:['low','high']}];
-        if (!String(config.title ?? '').includes('gone')) models.push({id:'chosen',name:'Chosen',thinkingLevels:['low','high']});
+        if (!title.includes('gone')) models.push({id:'chosen',name:'Chosen',thinkingLevels:['low','high']});
         let model = models[0];
         let thinkingLevel;
+        let catalogLoaded = !title.includes('lazy');
         return {
           snapshot() {
             return {nativeId:'native-forgetful',materialized:true,title:config.title ?? 'Chat',status:'idle',model,
               ...(thinkingLevel ? {thinkingLevel} : {}),blocks:[],approvals:[],
               capabilities:{prompt:native,resume:native,models:native,approvals:native,instructions:unsupported,toolPolicy:native,nativeSubagents:unsupported},models};
           },
-          models() { return models; },
+          models() { catalogLoaded = true; return models; },
           setModel({ model: next, thinkingLevel: level }) {
+            if (!catalogLoaded) throw new Error('catalog not loaded');
             const found = models.find((item) => item.id === next.id);
             if (!found) throw new Error('model unavailable');
             model = found;
+            if (level && title.includes('partial')) throw new Error('reasoning unavailable');
             if (level) thinkingLevel = level;
             return null;
           },
@@ -8397,6 +8435,14 @@ mod native_host_tests {
 
     fn forgetful_spawner(host: &WorkspaceHost) {
         install_test_spawner(host, |config| {
+            NativeRuntime::spawn_test_adapter(config, FORGETFUL_ADAPTER)
+        });
+    }
+
+    /// The adapter of a restarted host, behaving as the `flag` in the title asks.
+    fn flagged_spawner(host: &WorkspaceHost, flag: &'static str) {
+        install_test_spawner(host, move |mut config: NativeRuntimeConfig| {
+            config.title = Some(flag.into());
             NativeRuntime::spawn_test_adapter(config, FORGETFUL_ADAPTER)
         });
     }
@@ -8524,6 +8570,158 @@ mod native_host_tests {
             .await,
         );
         assert!(refreshed.notices.is_empty(), "{:?}", refreshed.notices);
+        host.workspace.shutdown_all().await;
+        cleanup(host, root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_model_catalog_is_loaded_before_a_remembered_model_is_re_applied() {
+        let root = test_root("remembered-settings-lazy");
+        let id = choose_settings_then_stop_host(&root, HarnessKind::ClaudeCode).await;
+
+        let host = Arc::new(HostState::open(&root, false).expect("restarted host state"));
+        // This adapter refuses every model until its catalog was requested.
+        flagged_spawner(&host.workspace, "lazy");
+        let reopened = session_of(
+            dispatch(
+                &host,
+                WorkspaceCommand::OpenSession {
+                    session_id: id.clone(),
+                },
+            )
+            .await,
+        );
+        assert!(reopened.notices.is_empty(), "{:?}", reopened.notices);
+        let settings = native_settings(&host, &id).await;
+        assert_eq!(
+            settings.model.as_ref().map(|model| model.id.as_str()),
+            Some("chosen")
+        );
+        assert_eq!(settings.thinking_level.as_deref(), Some("high"));
+        host.workspace.shutdown_all().await;
+        cleanup(host, root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_partly_applied_restore_reports_what_the_chat_really_runs() {
+        let root = test_root("remembered-settings-partial");
+        let id = choose_settings_then_stop_host(&root, HarnessKind::ClaudeCode).await;
+
+        let host = Arc::new(HostState::open(&root, false).expect("restarted host state"));
+        // The model is selected, then the reasoning level is refused.
+        flagged_spawner(&host.workspace, "partial");
+        let reopened = session_of(
+            dispatch(
+                &host,
+                WorkspaceCommand::OpenSession {
+                    session_id: id.clone(),
+                },
+            )
+            .await,
+        );
+        assert_eq!(
+            reopened.notices,
+            vec![NativeNoticeCode::SettingsNotRestored]
+        );
+        assert_eq!(
+            reopened
+                .session
+                .model
+                .as_ref()
+                .map(|model| model.id.as_str()),
+            Some("chosen"),
+            "the chat row follows the model the adapter really selected"
+        );
+        let settings = native_settings(&host, &id).await;
+        assert_eq!(
+            settings.model.as_ref().map(|model| model.id.as_str()),
+            Some("chosen")
+        );
+        assert_eq!(settings.thinking_level, None);
+        host.workspace.shutdown_all().await;
+        cleanup(host, root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_choice_that_could_not_be_saved_never_brings_back_the_earlier_one() {
+        let root = test_root("remembered-settings-unsaved");
+        let host = Arc::new(HostState::open(&root, false).expect("host state"));
+        forgetful_spawner(&host.workspace);
+        let workspace_id = host.personal_workspace.project_id.clone();
+        let id = session_of(
+            dispatch(
+                &host,
+                WorkspaceCommand::CreateSession {
+                    workspace_id,
+                    harness: HarnessKind::ClaudeCode,
+                    title: Some("Chat".into()),
+                    model: None,
+                    permission_mode: PermissionMode::Native,
+                },
+            )
+            .await,
+        )
+        .session
+        .id;
+        runtime_settings(
+            &host,
+            RuntimeSettingsCommand::Set {
+                session_id: id.clone(),
+                model: chosen_model(),
+                thinking_level: Some("high".into()),
+                service_tier: None,
+            },
+        )
+        .await
+        .expect("the first choice is remembered");
+
+        // The next choice cannot be written: the settings directory is gone.
+        std::fs::remove_dir_all(root.join(super::remembered_settings::SETTINGS_DIRECTORY))
+            .expect("remove the settings directory");
+        let default = native_settings(&host, &id)
+            .await
+            .models
+            .into_iter()
+            .find(|model| model.id == "default")
+            .expect("the default model is offered");
+        runtime_settings(&host, set_settings(&id, &default))
+            .await
+            .expect("the native change itself succeeds");
+        let refreshed = session_of(
+            dispatch(
+                &host,
+                WorkspaceCommand::Snapshot {
+                    session_id: id.clone(),
+                },
+            )
+            .await,
+        );
+        assert_eq!(
+            refreshed.notices,
+            vec![NativeNoticeCode::SettingsNotRemembered]
+        );
+        host.workspace.shutdown_all().await;
+        drop(host);
+
+        // The restart brings back the harness's settings, not the stale choice.
+        let host = Arc::new(HostState::open(&root, false).expect("restarted host state"));
+        forgetful_spawner(&host.workspace);
+        let reopened = session_of(
+            dispatch(
+                &host,
+                WorkspaceCommand::OpenSession {
+                    session_id: id.clone(),
+                },
+            )
+            .await,
+        );
+        assert!(reopened.notices.is_empty(), "{:?}", reopened.notices);
+        let settings = native_settings(&host, &id).await;
+        assert_eq!(
+            settings.model.as_ref().map(|model| model.id.as_str()),
+            Some("default")
+        );
+        assert_eq!(settings.thinking_level, None);
         host.workspace.shutdown_all().await;
         cleanup(host, root);
     }

@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use uuid::Uuid;
 
-const SETTINGS_DIRECTORY: &str = "workspace-session-settings-v1";
+pub(super) const SETTINGS_DIRECTORY: &str = "workspace-session-settings-v1";
 const SETTINGS_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -75,9 +75,26 @@ impl RememberedSettingsStore {
         self.records.lock().ok()?.get(session_id).cloned()
     }
 
+    /// Remembers a new choice. A failed save also forgets what was remembered
+    /// before (memory and, best effort, the file): the earlier choice is stale
+    /// now, and a reopen must never silently re-apply it.
+    pub(super) fn save(
+        &self,
+        session_id: &str,
+        model: &WorkspaceModel,
+        thinking_level: Option<&str>,
+        service_tier: Option<&str>,
+    ) -> io::Result<()> {
+        let saved = self.write(session_id, model, thinking_level, service_tier);
+        if saved.is_err() {
+            self.discard(session_id);
+        }
+        saved
+    }
+
     /// Writes a complete file next to the target, then renames it into place.
     /// The in-memory copy changes only after the rename succeeded.
-    pub(super) fn save(
+    fn write(
         &self,
         session_id: &str,
         model: &WorkspaceModel,
@@ -235,6 +252,26 @@ mod tests {
         drop(store);
         let reopened = RememberedSettingsStore::open(&root).expect("reopen");
         assert!(reopened.get(&partial).is_some());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_failed_save_forgets_the_earlier_choice() {
+        let root = temp_root();
+        let id = Uuid::new_v4().to_string();
+        let store = RememberedSettingsStore::open(&root).expect("open");
+        store.save(&id, &model(), Some("high"), None).expect("save");
+        assert!(store.get(&id).is_some());
+
+        // The next write cannot succeed: the directory is gone.
+        fs::remove_dir_all(root.join(SETTINGS_DIRECTORY)).expect("remove directory");
+        assert!(store.save(&id, &model(), Some("low"), None).is_err());
+        assert!(
+            store.get(&id).is_none(),
+            "the stale choice is not kept after a failed save"
+        );
+        let reopened = RememberedSettingsStore::open(&root).expect("reopen");
+        assert!(reopened.get(&id).is_none());
         let _ = fs::remove_dir_all(&root);
     }
 

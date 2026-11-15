@@ -11,6 +11,7 @@ export const SESSION_NOTICE_CODES = [
   'unsupported-sidekick-tool',
   'unsupported-sidekick-tool-resume',
   'settings-not-restored',
+  'settings-not-remembered',
 ] as const;
 export type SessionNoticeCode = (typeof SESSION_NOTICE_CODES)[number];
 

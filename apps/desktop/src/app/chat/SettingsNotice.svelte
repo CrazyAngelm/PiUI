@@ -1,21 +1,31 @@
 <script lang="ts">
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
   import { t } from '../../features/locale/language';
+  import type { SessionNoticeCode } from '../../features/workspace/sessionNotices';
 
   /**
-   * A reopened chat whose remembered model, reasoning or speed could not be
-   * re-applied: it opened and works, with the harness's own settings.
+   * The chat's model, reasoning or speed did not survive a restart: either a
+   * reopened chat could not get its remembered settings back, or a choice just
+   * made could not be saved. The chat works with the harness's own settings.
    */
   interface Props {
-    shown: boolean;
+    notices: readonly SessionNoticeCode[];
   }
-  let { shown }: Props = $props();
+  let { notices }: Props = $props();
+
+  const text = $derived(
+    notices.includes('settings-not-restored')
+      ? $t("This chat's saved model and reasoning could not be restored. It is using the harness defaults; choose them again.")
+      : notices.includes('settings-not-remembered')
+        ? $t("This chat's model and reasoning could not be saved. After a restart it uses the harness defaults.")
+        : '',
+  );
 </script>
 
-{#if shown}
+{#if text}
   <p class="notice" role="status">
     <TriangleAlert size={14} aria-hidden="true" />
-    <span>{$t("This chat's saved model and reasoning could not be restored. It is using the harness defaults; choose them again.")}</span>
+    <span>{text}</span>
   </p>
 {/if}
 

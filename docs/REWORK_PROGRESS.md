@@ -788,8 +788,11 @@ four read-only GPT 6.1 Sol passes.
   confirmed model, reasoning and speed in `workspace-session-settings-v1/` (UI
   metadata next to the unchanged v11 registry) and, after the native resume,
   re-applies them through `setModel` only when the snapshot differs. Pi and Nano
-  restore from their own history and are exempt. A refused re-apply never fails
-  the open and shows the notice `settings-not-restored`.
+  restore from their own history and are exempt. The model catalog is loaded
+  before the re-apply (Codex refuses unlisted models), the snapshot is read back
+  after a refused request (a partial ACP apply), and a refused re-apply never
+  fails the open: it shows `settings-not-restored`. A choice that cannot be
+  saved drops the earlier remembered one and shows `settings-not-remembered`.
 - Tests were written but not run by the implementer: Rust unit tests for the
   store, the comparison and `restores_session_settings`, three host restart
   tests with a synthetic adapter, Vitest for the change signal, notice codes and

@@ -264,7 +264,7 @@
               <ApprovalCard {approval} session={snapshot.session} />
             {/each}
             <FusionNotice code={sidekickToolNotice(notices)} />
-            <SettingsNotice shown={notices.includes('settings-not-restored')} />
+            <SettingsNotice {notices} />
             {#if boardProject}
               <ChatBoardActivity workspaceId={boardProject} sessionId={snapshot.session.id} blocks={snapshot.blocks} />
             {/if}

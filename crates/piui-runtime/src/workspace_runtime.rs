@@ -1030,6 +1030,9 @@ pub enum NativeNoticeCode {
     /// Host-decided: the settings remembered for a reopened chat could not be
     /// re-applied; the chat runs with the harness's own settings.
     SettingsNotRestored,
+    /// Host-decided: the settings a person just confirmed could not be saved,
+    /// so after a restart the chat runs with the harness's own settings.
+    SettingsNotRemembered,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -6545,6 +6548,10 @@ mod tests {
             (
                 "settings-not-restored",
                 NativeNoticeCode::SettingsNotRestored,
+            ),
+            (
+                "settings-not-remembered",
+                NativeNoticeCode::SettingsNotRemembered,
             ),
         ] {
             let notice: NativeEvent =
