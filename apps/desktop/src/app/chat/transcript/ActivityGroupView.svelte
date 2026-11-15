@@ -108,7 +108,7 @@
     min-width: 0;
     max-width: 48ch;
     overflow: hidden;
-    color: var(--piui-text-disabled);
+    color: var(--piui-text-muted);
     font-family: var(--piui-font-mono);
     font-size: var(--piui-text-xs);
     text-overflow: ellipsis;

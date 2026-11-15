@@ -182,6 +182,6 @@
     opacity: 0.55;
   }
   .chip__sub {
-    color: var(--piui-text-disabled);
+    color: var(--piui-text-muted);
   }
 </style>
