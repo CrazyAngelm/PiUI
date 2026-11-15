@@ -1,7 +1,7 @@
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import type { TimelineBlock } from '../../../host-api/types';
-import type { ReasoningClock } from './reasoningClock';
+import { createReasoningClock, type ReasoningClock } from './reasoningClock';
 import ReasoningView from './ReasoningView.svelte';
 
 const unseen: ReasoningClock = { observe: () => undefined };
@@ -32,6 +32,24 @@ function attribute(tag: string, name: string): string | undefined {
 const flagged = (tag: string, name: string): boolean => tag.split(/\s+/).some((part) => part === name || part.startsWith(`${name}=`));
 
 describe('ReasoningView', () => {
+  it('times a block it saw streaming with the real clock', () => {
+    const clock = createReasoningClock();
+    const realNow = Date.now;
+    try {
+      Date.now = () => 1_000;
+      view(thought({ status: 'streaming', text: 'Working' }), true, clock);
+      Date.now = () => 13_000;
+      expect(head(view(thought({ text: 'Working' }), false, clock)).label).toBe('Thought for 12s');
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  it('says when the stored reasoning was shortened', () => {
+    const markup = view(thought({ text: 'Long', truncated: true }), true);
+    expect(text(markup)).toContain('Output was shortened to keep the chat responsive.');
+  });
+
   it('shows the streamed text under "Thinking…" while the block streams', () => {
     const markup = view(thought({ status: 'streaming', text: 'Checking the scheduler tests' }), true);
     expect(head(markup).label).toBe('Thinking…');
