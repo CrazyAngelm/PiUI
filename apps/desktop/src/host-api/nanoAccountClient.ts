@@ -89,7 +89,7 @@ const LOCKS = ['plan', 'credits', 'disabled'];
 const PLAN_KINDS = ['free', 'trial', 'paid'];
 const INPUTS = ['text', 'image'];
 const STORES = ['os', 'memory'];
-const CAPABILITY_KEYS = ['gateway', 'cloudLaunch', 'deviceCode', 'dictation', 'voice', 'imageGeneration', 'avatars'];
+const CAPABILITY_KEYS = ['gateway', 'cloudLaunch', 'deviceCode', 'dictation', 'voice', 'imageGeneration', 'avatars', 'remoteAccess'];
 const FEATURE_KEYS = ['localAgent', 'cloud', 'dictation', 'imageGeneration', 'voice', 'avatars'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {

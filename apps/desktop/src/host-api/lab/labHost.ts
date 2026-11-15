@@ -5,6 +5,7 @@ import { acpHandlers } from './acpFake';
 import { appUpdateHandlers, updateScenarioFromSearch, type LabUpdateScenario } from './appUpdateFake';
 import { classicHandlers } from './classicFake';
 import { createLabNanoAccount, nanoScenarioFromSearch, type LabNanoScenario } from './nanoAccountFake';
+import { createLabNanoRemote, remoteScenarioFromSearch, type LabRemoteScenario } from './nanoRemoteFake';
 import { nanoChatGptHandler, nanoProvidersHandler } from './nanoProvidersFake';
 import { composerHandlers } from './composerFake';
 import { composerInputsHandlers } from './composerInputsFake';
@@ -52,6 +53,8 @@ export interface LabHostOptions {
   readonly updates?: LabUpdateScenario;
   /** Nano account state (see `nanoAccountFake.ts`). Defaults to `?nano=`, then `signed-out`. */
   readonly nano?: LabNanoScenario;
+  /** Remote access state (see `nanoRemoteFake.ts`). Defaults to `?remote=`, then `off`. */
+  readonly remote?: LabRemoteScenario;
   /** Native catalog probe behavior. Defaults to `?catalog=`, then `normal`. */
   readonly catalog?: LabCatalogBehavior;
 }
@@ -165,6 +168,14 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     state.safeMode,
   );
   state.nanoAccount = nanoAccount;
+  // Remote access (ADR-062) follows the account and safe mode, as the host's supervisor does.
+  const nanoRemote = createLabNanoRemote(
+    options.remote ?? (typeof window === 'undefined' ? 'off' : remoteScenarioFromSearch(window.location.search)),
+    bus,
+    clock,
+    nanoAccount.status,
+    state.safeMode,
+  );
   const handlers: LabHandlers = {
     ...workspaceHandlers(runtime),
     ...composerHandlers(runtime),
@@ -184,6 +195,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
       clock,
     ),
     ...nanoAccount.handlers,
+    ...nanoRemote.handlers,
     nano_providers_v1: (args) => nanoProvidersHandler(state, args),
     nano_chatgpt_v1: (args) => nanoChatGptHandler(state, args),
     ...sessionToolsHandlers(runtime, seed.nativeHistory ?? EMPTY_NATIVE_HISTORY),

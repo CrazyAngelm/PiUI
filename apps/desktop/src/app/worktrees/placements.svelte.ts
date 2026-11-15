@@ -1,3 +1,4 @@
+import { remoteMode } from '../nano/remoteMode';
 import type { ChatPlacementV1, WorkspacePlacementCommandV1, WorkspacePlacementResultV1 } from '../../../../../contracts/workspace-placement-v1';
 
 /** The placement client, loaded on first use so first paint stays small. */
@@ -38,6 +39,8 @@ export class Placements {
 
   /** Reloads the list; concurrent calls coalesce into one more load. */
   refresh(): Promise<void> {
+    // A remote browser has no worktrees or handoff links: the host is not asked.
+    if (remoteMode) return Promise.resolve();
     if (this.pending !== undefined) {
       this.again = true;
       return this.pending;

@@ -35,6 +35,8 @@
   import { chatTree } from './chatTree';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
   import WorkLocation from '../nano/WorkLocation.svelte';
+  import { remoteMode } from '../nano/remoteMode';
+  import { remoteShell } from '../nano/remoteShell.svelte';
   import { chipFor, creditsText } from '../nano/nanoView';
 
   interface Props {
@@ -118,6 +120,8 @@
   let boards = $state.raw<BoardRegistry | undefined>();
   // Loaded once: project updates (a streaming chat) must not keep postponing it.
   $effect(() => {
+    // A remote browser has no boards: the chunk is never fetched.
+    if (remoteMode) return;
     const timer = setTimeout(() => {
       void import('../board/boardStore.svelte')
         .then((module) => {
@@ -190,7 +194,13 @@
 {/if}
 
 <nav class="sidebar" aria-label={$t('Workspace navigation')}>
-  <WorkLocation />
+  <!-- A remote browser (Nano Web) sees chats and projects only: no cloud entry, pipelines, settings or account. -->
+  {#if !remoteMode}
+    <WorkLocation />
+    {#if remoteShell.Indicator}
+      <remoteShell.Indicator onOpen={() => go(() => store.navigate({ name: 'settings', section: 'nano' }))} />
+    {/if}
+  {/if}
 
   <div class="primary">
     <button type="button" class="nav-item nav-item--strong" onclick={() => go(() => store.goHome())} aria-current={route.name === 'home' ? 'page' : undefined}>
@@ -208,28 +218,32 @@
       <span class="nav-item__label">{$t('Inbox')}</span>
       {#if inboxCount > 0}<span class="count" aria-label={$t('{0} waiting', [inboxCount])}>{inboxCount}</span>{/if}
     </button>
-    <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'pipelines', section: 'systems' }))} aria-current={onPipelines ? 'page' : undefined}>
-      <Workflow size={16} />
-      <span class="nav-item__label">{$t('Pipelines')}</span>
-    </button>
-    <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'pipelines', section: 'runs' }))} aria-current={route.name === 'pipelines' && route.section === 'runs' ? 'page' : undefined}>
-      <History size={16} />
-      <span class="nav-item__label">{$t('Runs')}</span>
-      {#if store.runningSessions.some((session) => session.runId)}<StatusDot status="running" />{/if}
-    </button>
-    <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'pipelines', section: 'schedules' }))} aria-current={route.name === 'pipelines' && route.section === 'schedules' ? 'page' : undefined}>
-      <Clock size={16} />
-      <span class="nav-item__label">{$t('Automations')}</span>
-    </button>
+    {#if !remoteMode}
+      <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'pipelines', section: 'systems' }))} aria-current={onPipelines ? 'page' : undefined}>
+        <Workflow size={16} />
+        <span class="nav-item__label">{$t('Pipelines')}</span>
+      </button>
+      <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'pipelines', section: 'runs' }))} aria-current={route.name === 'pipelines' && route.section === 'runs' ? 'page' : undefined}>
+        <History size={16} />
+        <span class="nav-item__label">{$t('Runs')}</span>
+        {#if store.runningSessions.some((session) => session.runId)}<StatusDot status="running" />{/if}
+      </button>
+      <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'pipelines', section: 'schedules' }))} aria-current={route.name === 'pipelines' && route.section === 'schedules' ? 'page' : undefined}>
+        <Clock size={16} />
+        <span class="nav-item__label">{$t('Automations')}</span>
+      </button>
+    {/if}
   </div>
 
   <div class="section-head">
     <span>{$t('Projects')}</span>
-    <div class="section-head__actions">
-      <button type="button" class="tiny-action" aria-label={$t('Add project')} onclick={() => void store.addProject()} disabled={store.addingProject}>
-        <Plus size={14} />
-      </button>
-    </div>
+    {#if !remoteMode}
+      <div class="section-head__actions">
+        <button type="button" class="tiny-action" aria-label={$t('Add project')} onclick={() => void store.addProject()} disabled={store.addingProject}>
+          <Plus size={14} />
+        </button>
+      </div>
+    {/if}
   </div>
 
   <div class="tree">
@@ -245,7 +259,7 @@
           {#if personal}{@render project(personal, MessagesSquare, $t('Personal chats'))}{/if}
         </div>
       {/if}
-      {#if projects.length === 0}
+      {#if projects.length === 0 && !remoteMode}
         <div class="hint">
           <p>{$t('Add a project folder to work with agents on its files.')}</p>
           <button type="button" class="link" onclick={() => void store.addProject()}>{$t('Add project…')}</button>
@@ -254,6 +268,7 @@
     {/if}
   </div>
 
+  {#if !remoteMode}
   <div class="footer">
     <button
       type="button"
@@ -274,6 +289,7 @@
       <Kbd keys="Mod+," />
     </button>
   </div>
+  {/if}
 </nav>
 
 {#snippet chat(session: WorkspaceSession, hidden: WorkspaceSession[])}
@@ -322,7 +338,7 @@
         {/if}
       </button>
       <div class="project__actions">
-        {#if !workspace.personal}
+        {#if !workspace.personal && !remoteMode}
           <Menu
             align="end"
             items={[

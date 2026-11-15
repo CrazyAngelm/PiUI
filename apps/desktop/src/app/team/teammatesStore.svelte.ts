@@ -11,6 +11,7 @@ import {
   type TeammateStatusV1,
   type TeammateV1,
 } from '../../host-api/teammatesClient';
+import { remoteMode } from '../nano/remoteMode';
 
 export interface ProjectTeam {
   readonly teammates: readonly TeammateV1[];
@@ -51,6 +52,8 @@ export class TeammatesStore {
 
   /** Loads once per project; `force` reloads. */
   ensure(workspaceId: string, force = false): Promise<void> {
+    // A remote browser has no teammates: the host is not asked.
+    if (remoteMode) return Promise.resolve();
     this.listen();
     if (!workspaceId || (!force && (this.teams[workspaceId] !== undefined || this.loading[workspaceId]))) return Promise.resolve();
     return this.load(workspaceId);

@@ -18,6 +18,9 @@ export interface HostTransport {
 
 export const desktopAvailable = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
+/** True only in the Nano Web remote bundle, where this module is replaced (packages/nano-ui). */
+export const hostRemote: boolean = false;
+
 const desktopTransport: HostTransport = {
   invoke: (command, args) => invoke(command, args),
   listen: async (channel, handler) => listen(channel, (event) => handler(event.payload as never)),

@@ -8,6 +8,7 @@
  * result reaches the chat's agent only inside the person's next message.
  */
 import { SvelteSet } from 'svelte/reactivity';
+import { remoteMode } from '../nano/remoteMode';
 import type { HarnessKind, PermissionMode, WorkspaceModel } from '../../../../../contracts/workspace-v15';
 import {
   orchestrationError,
@@ -111,7 +112,8 @@ export class ChatPipelinesStore {
 
   /** Saved pipelines of a project with their chat readiness, plus its library. */
   async loadProject(workspaceId: string): Promise<void> {
-    if (!workspaceId || this.loadingProjects.has(workspaceId)) return;
+    // A remote browser has no pipelines: chats stay direct and the host is not asked.
+    if (remoteMode || !workspaceId || this.loadingProjects.has(workspaceId)) return;
     this.loadingProjects.add(workspaceId);
     try {
       const [catalog] = await Promise.all([
@@ -132,6 +134,7 @@ export class ChatPipelinesStore {
   }
 
   async loadLibrary(workspaceId: string): Promise<ProjectLibrary | undefined> {
+    if (remoteMode) return undefined;
     try {
       const result = await this.library.request({ type: 'list', workspaceId });
       if (result.type !== 'library') return undefined;
@@ -236,6 +239,8 @@ export class ChatPipelinesStore {
   // ---- chats ----------------------------------------------------------
 
   async loadChat(sessionId: string): Promise<ChatPipelineV1 | null> {
+    // Nothing is written here: this runs inside the chat view's effect, which would track the write.
+    if (remoteMode) return null;
     try {
       const result = await this.library.request({ type: 'chat', sessionId });
       const chat = result.type === 'chat' ? result.chat : null;

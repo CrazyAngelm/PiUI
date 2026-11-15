@@ -12,6 +12,7 @@ import type {
 } from '../../../../../contracts/plugins-v1';
 import { pluginsError, pluginsHost, type PluginsClient } from '../../host-api/pluginsClient';
 import { hostInvoke } from '../../host-api/transport';
+import { remoteMode } from '../nano/remoteMode';
 import type { PiUiContributionCatalog } from '../../host-api/types';
 
 /**
@@ -72,6 +73,8 @@ export class PluginRegistry {
 
   /** Loads once and follows host changes. */
   start(): Promise<void> {
+    // A remote browser runs no plugins: the registry stays empty and the host is not asked.
+    if (remoteMode) return Promise.resolve();
     this.starting ??= (async () => {
       this.unlisten = await this.client.listen(() => void this.refresh()).catch(() => undefined);
       await this.refresh();
@@ -84,6 +87,7 @@ export class PluginRegistry {
    * palette needs them (listing reads the Pi package inventory).
    */
   loadContributions(): Promise<void> {
+    if (remoteMode) return Promise.resolve();
     this.contributionsLoading ??= this.refreshContributions();
     return this.contributionsLoading;
   }

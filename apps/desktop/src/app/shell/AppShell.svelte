@@ -17,10 +17,15 @@
   import { placements } from '../worktrees/placements.svelte';
   import { WorkspaceOperationError } from '../../host-api/workspaceClient';
   import { fusionMembership } from '../fusion/fusionMembership.svelte';
+  import { remoteMode } from '../nano/remoteMode';
+  import { remoteShell } from '../nano/remoteShell.svelte';
 
   const store = provideWorkspace(new WorkspaceStore());
   // The tray menu (background mode) speaks the interface language.
-  $effect(() => syncTrayLabels($t));
+  $effect(() => {
+    // Only the desktop has a tray; a remote browser never touches it.
+    if (!remoteMode) syncTrayLabels($t);
+  });
 
   let paletteOpen = $state(false);
   let drawerOpen = $state(false);
@@ -112,9 +117,14 @@
   onMount(() => {
     void store.start();
     lazyViews.prefetch();
-    const stopUpdateNotices = scheduleUpdateNotices(() => store.navigate({ name: 'settings', section: 'about' }));
+    // A remote browser has no updater: update notices, plugins and the plugin theme stay out of it.
+    const stopUpdateNotices = remoteMode ? () => undefined : scheduleUpdateNotices(() => store.navigate({ name: 'settings', section: 'about' }));
+    // Remote access (a local status read, no network) loads after first paint here, not in
+    // the sidebar: a narrow window has no sidebar until the drawer opens, and a waiting
+    // browser must still be able to ask for permission.
+    const stopRemote = remoteShell.loadLater();
     // An active plugin theme applies after first paint; plugin code is its own chunk.
-    setTimeout(() => {
+    if (!remoteMode) setTimeout(() => {
       void import('../plugins/pluginTheme.svelte').then((module) => module.startPluginTheme()).catch(() => undefined);
       void import('../plugins/PluginShellContributions.svelte').then((module) => (PluginShell = module.default)).catch(() => undefined);
     }, 800);
@@ -125,6 +135,7 @@
     return () => {
       query.removeEventListener('change', update);
       stopUpdateNotices();
+      stopRemote();
       store.dispose();
     };
   });
@@ -142,7 +153,7 @@
     } else if (matchesShortcut(event, 'Mod+K')) {
       event.preventDefault();
       paletteOpen = !paletteOpen;
-    } else if (matchesShortcut(event, 'Mod+,')) {
+    } else if (!remoteMode && matchesShortcut(event, 'Mod+,')) {
       event.preventDefault();
       store.navigate({ name: 'settings', section: 'general' });
     } else if (matchesShortcut(event, 'Mod+Shift+I')) {
@@ -233,6 +244,9 @@
           <div class="narrow-bar">
             <IconButton label={$t('Open navigation')} onclick={() => (drawerOpen = true)}><Menu /></IconButton>
             <strong>Nano Desktop</strong>
+            {#if remoteShell.Indicator}
+              <remoteShell.Indicator placement="bar" onOpen={() => store.navigate({ name: 'settings', section: 'nano' })} />
+            {/if}
           </div>
         {/if}
         {#if store.catalogError}
@@ -298,6 +312,11 @@
         <module.default />
       {/key}
     {/await}
+  {/if}
+
+  <!-- Remote access: starts its state and asks permission for a waiting browser; its own chunk. -->
+  {#if remoteShell.Controller}
+    <remoteShell.Controller />
   {/if}
 
   {#if Confirmations}

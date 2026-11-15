@@ -5,6 +5,7 @@
  * refuses them.
  */
 import { SvelteMap } from 'svelte/reactivity';
+import { remoteMode } from '../nano/remoteMode';
 import {
   boardError,
   boardHost,
@@ -251,7 +252,8 @@ export class BoardRegistry {
     if (store === undefined) {
       store = new BoardStore(workspaceId, this.client);
       this.stores.set(workspaceId, store);
-      void store.load();
+      // A remote browser has no boards: the stores stay empty and the host is not asked.
+      if (!remoteMode) void store.load();
     }
     this.listen();
     return store;
@@ -279,6 +281,7 @@ export class BoardRegistry {
   }
 
   private listen(): void {
+    if (remoteMode) return;
     this.listening ??= this.client
       .onChanged((event) => this.stores.get(event.workspaceId)?.changed(event))
       .then(() => undefined)

@@ -18,6 +18,7 @@
   import { WorkspaceOperationError, workspaceError } from '../../host-api/workspaceClient';
   import AttachButton from '../chat/composer/AttachButton.svelte';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
+  import { remoteMode } from '../nano/remoteMode';
   import { NANO_SOURCE_HARNESSES } from '../nano/nanoView';
   import { ComposerAttachments } from '../chat/composer/composerAttachments.svelte';
   import { FileMentions } from '../chat/composer/composerLookups.svelte';
@@ -155,7 +156,8 @@
   const mention = $derived(
     menuDismissed || store.safeMode
       ? undefined
-      : activeMention(text, caret, { slash: false, at: Boolean(workspaceId), dollar: skillMentions.length > 0, macros: macros.list.length > 0 }),
+      // A remote browser cannot read the desktop's files or skills: no `@` file or `$` skill menus.
+      : activeMention(text, caret, { slash: false, at: !remoteMode && Boolean(workspaceId), dollar: !remoteMode && skillMentions.length > 0, macros: macros.list.length > 0 }),
   );
   type Menu = { kind: 'macro'; items: ComposerMenuItem[]; names: string[] } | { kind: 'file'; items: ComposerMenuItem[]; paths: string[] } | { kind: 'skill'; items: ComposerMenuItem[]; mentions: string[] };
   const menu = $derived.by((): Menu | undefined => {
@@ -339,7 +341,8 @@
   // New chats talk directly unless the project names a default chat pipeline.
   let defaultFor: string | undefined;
   const chatDefault = $derived(chatPipelines.libraries[workspaceId]?.chatDefault);
-  const pipelinesAllowed = $derived(trusted && !store.safeMode);
+  // Pipelines and templates are the desktop's screen: a remote browser starts direct chats only.
+  const pipelinesAllowed = $derived(!remoteMode && trusted && !store.safeMode);
   $effect(() => {
     const id = workspaceId;
     if (!id || !pipelinesAllowed) return;
@@ -422,7 +425,8 @@
   });
 
   onMount(() => {
-    const unregister = composerDropTargets.register((dropId) => {
+    // Files dropped on the desktop window belong to the desktop; a remote browser takes text only.
+    const unregister = remoteMode ? () => undefined : composerDropTargets.register((dropId) => {
       if (workspaceId && trusted) void attachments.redeem(workspaceId, dropId, imageState);
     });
     return () => {
@@ -822,6 +826,7 @@
     const files = [...(event.clipboardData?.files ?? [])];
     if (!files.length || !workspaceId) return;
     event.preventDefault();
+    if (remoteMode) return;
     void attachments.paste(workspaceId, files, imageState);
   }
 
@@ -831,6 +836,7 @@
     htmlDragging = false;
     if (!carriesFiles(event) || !workspaceId) return;
     event.preventDefault();
+    if (remoteMode) return;
     void attachments.paste(workspaceId, [...(event.dataTransfer?.files ?? [])], imageState);
   }
 
@@ -858,15 +864,17 @@
 </script>
 
 <div data-nano-composer="root" class="new-composer">
-<FusionModeBar
-  {workspaceId}
-  {trusted}
-  harnesses={executorHarnesses}
-  disabled={busy || store.safeMode}
-  bind:active={fusionMode}
-  bind:pair={fusionPair}
-  bind:ready={fusionReady}
-/>
+{#if !remoteMode}
+  <FusionModeBar
+    {workspaceId}
+    {trusted}
+    harnesses={executorHarnesses}
+    disabled={busy || store.safeMode}
+    bind:active={fusionMode}
+    bind:pair={fusionPair}
+    bind:ready={fusionReady}
+  />
+{/if}
 <!-- svelte-ignore a11y_no_static_element_interactions (Drop target for files; the paperclip is the keyboard path.) -->
 <div
   class="composer"
@@ -876,7 +884,7 @@
   ondragover={(event) => {
     if (!carriesFiles(event)) return;
     event.preventDefault();
-    htmlDragging = true;
+    htmlDragging = !remoteMode;
   }}
   ondragleave={() => (htmlDragging = false)}
   ondrop={dropped}
@@ -936,7 +944,7 @@
       onpaste={pasted}
       minRows={3}
       maxRows={14}
-      placeholder={usesPipeline ? $t('Describe the task for the pipeline…') : $t('Describe a task, ask a question or @mention a file…')}
+      placeholder={usesPipeline ? $t('Describe the task for the pipeline…') : remoteMode ? $t('Message') : $t('Describe a task, ask a question or @mention a file…')}
       aria-label={$t('Message')}
       aria-autocomplete="list"
       aria-controls={menu ? 'new-chat-menu' : undefined}
@@ -952,8 +960,10 @@
   </div>
   <div data-nano-composer="bar">
     <div class="chips">
-      <AttachButton images={imageState} busy={attachments.busy} disabled={busy || store.safeMode || !workspaceId || (usesPipeline && !fusionMode)} onPick={pick} />
-      {#if nanoAccount.canDictate}
+      {#if !remoteMode}
+        <AttachButton images={imageState} busy={attachments.busy} disabled={busy || store.safeMode || !workspaceId || (usesPipeline && !fusionMode)} onPick={pick} />
+      {/if}
+      {#if nanoAccount.canDictate && !remoteMode}
         {#await loadDictate() then { default: DictateButton }}
           <DictateButton onText={dictated} disabled={busy || store.safeMode} />
         {/await}
@@ -1015,7 +1025,7 @@
         {workspaceId}
         {permissionMode}
         permissions={permissionItems}
-        worktree={!usesPipeline && !fusionMode}
+        worktree={!usesPipeline && !fusionMode && !remoteMode}
         permissionsApply={!fusionMode}
         disabled={store.safeMode}
         onWorkspace={(value) => (workspaceId = value)}
@@ -1036,7 +1046,7 @@
 {#if templateChoice && !fusionMode && !draftLoading}
   <p class="notice">{$t('Sending saves this template as a pipeline in this project.')}</p>
 {/if}
-{#if chatHarness === 'claude-code' && workspaceId}{#await import('../chat/ClaudeSignInStatus.svelte') then status}<status.default {workspaceId} observe />{/await}{/if}
+{#if chatHarness === 'claude-code' && workspaceId && !remoteMode}{#await import('../chat/ClaudeSignInStatus.svelte') then status}<status.default {workspaceId} observe />{/await}{/if}
 {#if workspace && !workspace.personal && workspace.trust !== 'trusted'}
   <p class="notice">
     {$t('This folder is restricted. Trust it to let agents work on its files.')}

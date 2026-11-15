@@ -29,6 +29,7 @@
   import PluginPaletteGroup from '../plugins/PluginPaletteGroup.svelte';
   import NativeCommandsPaletteGroup from './NativeCommandsPaletteGroup.svelte';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
+  import { remoteMode } from '../nano/remoteMode';
   import { openNanoCloud } from '../nano/openCloud';
   import { useWorkspace } from './context';
 
@@ -126,6 +127,7 @@
                 <Command.Item class="palette__item" value="action:inbox" keywords={[$t('Open inbox'), 'inbox', 'approvals']} onSelect={() => run(() => store.navigate({ name: 'inbox' }))}>
                   <InboxIcon size={15} /><span>{$t('Open inbox')}</span>
                 </Command.Item>
+                {#if !remoteMode}
                 <Command.Item class="palette__item" value="action:pipelines" keywords={[$t('Open pipelines'), 'pipeline', 'graph', 'agents']} onSelect={() => run(() => store.navigate({ name: 'pipelines', section: 'systems' }))}>
                   <Workflow size={15} /><span>{$t('Open pipelines')}</span>
                 </Command.Item>
@@ -135,12 +137,13 @@
                 <Command.Item class="palette__item" value="action:automations" keywords={[$t('Open automations'), 'automations', 'automation', 'schedules', 'triggers']} onSelect={() => run(() => store.navigate({ name: 'pipelines', section: 'schedules' }))}>
                   <Clock size={15} /><span>{$t('Open automations')}</span>
                 </Command.Item>
+                {/if}
                 {#if historyWorkspaceId}
                   <Command.Item class="palette__item" value="action:history" keywords={[$t('Open session history'), 'history', 'sessions', 'branches', 'pi']} onSelect={() => run(() => store.navigate({ name: 'history', workspaceId: historyWorkspaceId }))}>
                     <ScrollText size={15} /><span>{$t('Open session history')}</span>
                   </Command.Item>
                 {/if}
-                {#if boardWorkspaceId}
+                {#if boardWorkspaceId && !remoteMode}
                   <Command.Item class="palette__item" value="action:board" keywords={[$t('Open board'), 'board', 'kanban', 'cards', 'доска']} onSelect={() => run(() => openBoard(false))}>
                     <KanbanSquare size={15} /><span>{$t('Open board')}</span>
                   </Command.Item>
@@ -154,6 +157,7 @@
                     <UserPlus size={15} /><span>{$t('New teammate')}</span>
                   </Command.Item>
                 {/if}
+                {#if !remoteMode}
                 <Command.Item
                   class="palette__item"
                   value="action:run-pipeline"
@@ -185,9 +189,11 @@
                 <Command.Item class="palette__item" value="action:macros" keywords={[$t('Manage macros'), 'macro', 'macros', 'prompt', 'макрос']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'macros' }))}>
                   <SquareSlash size={15} /><span>{$t('Manage macros')}</span>
                 </Command.Item>
+                {/if}
                 <Command.Item class="palette__item" value="action:refresh-projects" keywords={[$t('Refresh projects'), 'refresh', 'reload', 'projects', 'folders']} onSelect={() => run(refreshProjects)}>
                   <RefreshCw size={15} /><span>{$t('Refresh projects')}</span>
                 </Command.Item>
+                {#if !remoteMode}
                 <Command.Item class="palette__item" value="action:nano-account" keywords={[$t('Nano account'), 'nano', 'account', 'sign in', 'credits', 'аккаунт']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'nano' }))}>
                   <UserRound size={15} /><span>{$t('Nano account')}</span>
                 </Command.Item>
@@ -199,10 +205,13 @@
                 <Command.Item class="palette__item" value="action:settings" keywords={[$t('Settings'), 'settings', 'preferences']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'general' }))}>
                   <Settings size={15} /><span>{$t('Settings')}</span>
                 </Command.Item>
+                {/if}
               </Command.GroupItems>
             </Command.Group>
-            <PluginPaletteGroup onDone={() => (open = false)} />
-            <NativeCommandsPaletteGroup onDone={() => (open = false)} />
+            {#if !remoteMode}
+              <PluginPaletteGroup onDone={() => (open = false)} />
+              <NativeCommandsPaletteGroup onDone={() => (open = false)} />
+            {/if}
             {#if chats.length}
               <Command.Group>
                 <Command.GroupHeading class="palette__heading">{$t('Chats')}</Command.GroupHeading>

@@ -1,6 +1,7 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { FusionError, fusionHost, type FusionRoleNameV1, type FusionStateV1 } from '../../host-api/fusionClient';
 import { coalesceReads } from '../../lib/coalescedReads';
+import { remoteMode } from '../nano/remoteMode';
 
 /** Whether a chat is a Fusion lead, the sidekick of a lead, or neither. */
 export interface FusionMember {
@@ -104,6 +105,8 @@ class FusionMembership {
   }
 
   load(sessionId: string): Promise<void> {
+    // A remote browser has no Fusion: every chat is an ordinary one and the host is not asked.
+    if (remoteMode) return Promise.resolve();
     const known = this.entries.get(sessionId);
     if (known !== undefined) return known.role === 'sidekick' && known.leadSessionId && !this.retired.has(sessionId) ? this.loadLead(known.leadSessionId) : Promise.resolve();
     const running = this.pending.get(sessionId);
@@ -159,7 +162,7 @@ class FusionMembership {
 
   /** One listener for the app's life: a reset retires the sidekick and a new one takes over. */
   private listen(): void {
-    if (this.listening) return;
+    if (this.listening || remoteMode) return;
     this.listening = true;
     fusionHost
       .onChanged((event) => {

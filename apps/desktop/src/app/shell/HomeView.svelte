@@ -4,6 +4,7 @@
   import NewChatComposer from './NewChatComposer.svelte';
   import { newChatPlacement } from '../worktrees/newChatPlacement.svelte';
   import { useWorkspace } from './context';
+  import { remoteMode } from '../nano/remoteMode';
 
   interface Props {
     onTrust: (workspace: WorkspaceSummary) => void;
@@ -22,7 +23,9 @@
       {#if noHarness}
         <p class="hero__hint">
           {$t('No agent harness is ready yet.')}
-          <button type="button" class="link" onclick={() => store.navigate({ name: 'settings', section: 'harnesses' })}>{$t('Set up harnesses')}</button>
+          {#if !remoteMode}
+            <button type="button" class="link" onclick={() => store.navigate({ name: 'settings', section: 'harnesses' })}>{$t('Set up harnesses')}</button>
+          {/if}
         </p>
       {/if}
     </div>

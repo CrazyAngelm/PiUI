@@ -1,3 +1,4 @@
+import { remoteMode } from './remoteMode';
 import { nanoAvatarHost, type NanoAvatarAnswerV1, type NanoAvatarClient, type NanoAvatarManifestV1, type NanoAvatarScopeV1 } from '../../host-api/nanoAvatarClient';
 
 export interface ReadyAvatar { readonly manifest: NanoAvatarManifestV1; readonly bitmap: ImageBitmap }
@@ -31,7 +32,8 @@ export class NanoAvatar {
 
   acquire(): () => void {
     this.users += 1;
-    if (this.users === 1) void this.start();
+    // A remote browser shows no Nano avatar: the host is not asked.
+    if (this.users === 1 && !remoteMode) void this.start();
     let released = false;
     return () => {
       if (released) return;
