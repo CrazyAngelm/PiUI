@@ -3,11 +3,13 @@
   import Mic from '@lucide/svelte/icons/mic';
   import Square from '@lucide/svelte/icons/square';
   import { t } from '../../features/locale/language';
-  import { nanoAccountHost, type NanoAccountClient } from '../../host-api/nanoAccountClient';
+  import { DictationOperationError, dictationHost, type DictationClient } from '../../host-api/dictationClient';
+  import { nanoAccountError, nanoAccountHost, type NanoAccountClient } from '../../host-api/nanoAccountClient';
   import { Spinner, Tooltip, toasts } from '../../lib/ui';
   import { dictationClock } from './dictation';
+  import { DICTATION_SOURCE_ERROR_COPY } from './dictationCopy';
   import { Dictation, type DictationEnvironment } from './dictationSession.svelte';
-  import { nanoAccount } from './nanoAccount.svelte';
+  import { dictationSource as sharedSource, whenKeyChanges, type DictationSource } from './dictationSource.svelte';
 
   interface Props {
     /** Receives the recognized words; the composer puts them at its caret. */
@@ -16,12 +18,24 @@
     disabled?: boolean;
     /** Test seams; the desktop uses the host client and the browser's recorder. */
     client?: Pick<NanoAccountClient, 'dictate'>;
+    provider?: Pick<DictationClient, 'transcribe'>;
+    source?: DictationSource;
     environment?: DictationEnvironment;
   }
-  let { onText, disabled = false, client = nanoAccountHost, environment = undefined }: Props = $props();
+  let { onText, disabled = false, client = nanoAccountHost, provider = dictationHost, source = sharedSource, environment = undefined }: Props = $props();
 
   const dictation = untrack(
-    () => new Dictation(client, { maxBytes: () => nanoAccount.dictationMaxBytes, onText: (text) => onText(text) }, environment),
+    () =>
+      new Dictation(
+        // The clip goes to the source that is active when it is sent.
+        { dictate: (request) => (source.active === 'nano' ? client.dictate(request) : provider.transcribe(request)) },
+        {
+          maxBytes: () => source.maxBytes,
+          onText: (text) => onText(text),
+          errorCopy: (cause) => (cause instanceof DictationOperationError ? DICTATION_SOURCE_ERROR_COPY[cause.code] : nanoAccountError(cause).message),
+        },
+        environment,
+      ),
   );
   const recording = $derived(dictation.phase === 'recording');
   const working = $derived(dictation.phase === 'requesting' || dictation.phase === 'sending');
@@ -42,10 +56,12 @@
   // Nothing is left recording when the composer goes away.
   onDestroy(() => dictation.cancel());
 
-  // The recording is cancelled when the account stops allowing dictation.
-  $effect(() => {
-    if (!nanoAccount.canDictate) untrack(() => dictation.cancel());
-  });
+  // A recording belongs to the source it started with: it is cancelled when the source changes or goes away.
+  // Only a change of the key counts: the account status is replaced by every token refresh, and that
+  // must not discard a clip that is being transcribed.
+  const sourceKey = $derived(source.key);
+  const cancelWhenSourceChanges = untrack(() => whenKeyChanges(source.key, () => dictation.cancel()));
+  $effect(() => cancelWhenSourceChanges(sourceKey));
 
   function keydown(event: KeyboardEvent): void {
     if (event.key === 'Escape' && dictation.phase !== 'idle') {
@@ -57,7 +73,7 @@
 
 <svelte:window onkeydown={keydown} />
 
-{#if nanoAccount.canDictate}
+{#if source.available}
   <Tooltip content={tooltip}>
     {#snippet trigger(props)}
       <button

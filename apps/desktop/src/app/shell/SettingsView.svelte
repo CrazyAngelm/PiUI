@@ -3,6 +3,7 @@
   import Bot from '@lucide/svelte/icons/bot';
   import FolderCog from '@lucide/svelte/icons/folder-cog';
   import Keyboard from '@lucide/svelte/icons/keyboard';
+  import Mic from '@lucide/svelte/icons/mic';
   import SquareSlash from '@lucide/svelte/icons/square-slash';
   import Info from '@lucide/svelte/icons/info';
   import UserRound from '@lucide/svelte/icons/user-round';
@@ -14,6 +15,7 @@
   import GitBranch from '@lucide/svelte/icons/git-branch';
   import WorktreesSettings from '../worktrees/WorktreesSettings.svelte';
   import BackgroundSettings from '../settings/BackgroundSettings.svelte';
+  import DictationSettings from '../settings/DictationSettings.svelte';
   import MacrosSettings from '../settings/MacrosSettings.svelte';
   import { t, language, setLanguage, type Language } from '../../features/locale/language';
   import type { Preferences } from '../../host-api/types';
@@ -47,6 +49,7 @@
     { id: 'worktrees', label: 'Worktrees', icon: GitBranch },
     { id: 'background', label: 'Background', icon: Power },
     { id: 'macros', label: 'Macros', icon: SquareSlash },
+    { id: 'dictation', label: 'Dictation', icon: Mic },
     { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard },
     { id: 'about', label: 'About', icon: Info },
   ];
@@ -247,6 +250,8 @@
       <BackgroundSettings />
     {:else if section === 'macros'}
       <MacrosSettings />
+    {:else if section === 'dictation'}
+      <DictationSettings safeMode={store.safeMode} />
     {:else if section === 'shortcuts'}
       <h2>{$t('Shortcuts')}</h2>
       {#each shortcutGroups as group (group.title ?? '')}

@@ -29,6 +29,7 @@
   import { useWorkspace } from './context';
   import { fusionMembership } from '../fusion/fusionMembership.svelte';
   import { chatTree } from './chatTree';
+  import { dictationSource } from '../nano/dictationSource.svelte';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
   import { chipFor, creditsText } from '../nano/nanoView';
 
@@ -165,6 +166,8 @@
 
   const route = $derived(store.route);
 
+  // Where dictation goes: a local settings read after first paint, never a network call.
+  $effect(() => dictationSource.startLater());
   const nanoChip = $derived(chipFor(nanoAccount.status));
 </script>
 

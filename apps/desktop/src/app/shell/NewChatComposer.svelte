@@ -17,6 +17,7 @@
   import { errorMessage } from '../workspaceStore.svelte';
   import { WorkspaceOperationError, workspaceError } from '../../host-api/workspaceClient';
   import AttachButton from '../chat/composer/AttachButton.svelte';
+  import { dictationSource } from '../nano/dictationSource.svelte';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
   import { NANO_SOURCE_HARNESSES } from '../nano/nanoView';
   import { ComposerAttachments } from '../chat/composer/composerAttachments.svelte';
@@ -576,7 +577,7 @@
     caret = textarea?.selectionStart ?? text.length;
   }
 
-  // The dictation button and its recorder load once the Nano account allows dictation,
+  // The dictation button and its recorder load once a dictation source is ready,
   // outside the first-paint bundle.
   const loadDictate = () => import('../nano/DictateButton.svelte');
 
@@ -953,7 +954,7 @@
   <div data-nano-composer="bar">
     <div class="chips">
       <AttachButton images={imageState} busy={attachments.busy} disabled={busy || store.safeMode || !workspaceId || (usesPipeline && !fusionMode)} onPick={pick} />
-      {#if nanoAccount.canDictate}
+      {#if dictationSource.available}
         {#await loadDictate() then { default: DictateButton }}
           <DictateButton onText={dictated} disabled={busy || store.safeMode} />
         {/await}

@@ -168,6 +168,22 @@ pub(crate) fn external_provider_store(id: &str) -> Option<Arc<dyn CredentialStor
     }
 }
 
+/// A separate OS credential entry for a dictation provider key (ADR-061).
+pub(crate) fn dictation_store(id: &str) -> Option<Arc<dyn CredentialStore>> {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        Some(Arc::new(OsCredentialStore {
+            service: "dev.piui.desktop.dictation".to_owned(),
+            user: id.to_owned(),
+        }))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = id;
+        None
+    }
+}
+
 /// The persistent store plus the in-memory fallback.
 pub(crate) struct TokenVault {
     persistent: Option<Arc<dyn CredentialStore>>,

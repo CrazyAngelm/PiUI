@@ -8,6 +8,7 @@ Nano Desktop is currently a developer preview. Versions before 1.0 may change wi
 
 ### Added
 
+- **Dictation sources.** Settings → Dictation chooses what turns speech into text: your Nano subscription, OpenAI, Groq, or your own OpenAI-compatible address (for example a local Whisper server). The dictation button now appears without a Nano sign-in once a source is set up. API keys are entered in a system dialog and kept in the Windows credential store; the app's window never sees them (ADR-061).
 - **Macros.** Settings → Macros keeps your ready prompts and sets of skills. Type `//name` in a message to add one, or several. The macro is highlighted as you type; hover it, or move the caret onto it, to see what it adds and to open it for editing, or press `F2`. Sending replaces it with its text, with skills written the way the chat's agent expects (ADR-060).
 
 ### Changed

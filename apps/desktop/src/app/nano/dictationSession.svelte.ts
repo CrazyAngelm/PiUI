@@ -1,4 +1,4 @@
-import { nanoAccountError, type NanoAccountClient } from '../../host-api/nanoAccountClient';
+import { nanoAccountError } from '../../host-api/nanoAccountClient';
 import {
   DICTATION_ERROR_COPY,
   DICTATION_TIMESLICE_MS,
@@ -47,9 +47,14 @@ export function browserDictationEnvironment(): DictationEnvironment {
 
 export type DictationPhase = 'idle' | 'requesting' | 'recording' | 'sending';
 
+/** Sends one clip for transcription. */
+export interface DictationTransport {
+  dictate(request: { readonly audioBase64: string; readonly mimeType: string }): Promise<{ readonly text: string }>;
+}
+
 /**
- * One composer's dictation: record from the microphone, send the clip to Nano
- * through the host, hand the text back. The clip lives only in memory for the
+ * One composer's dictation: record from the microphone, send the clip through
+ * the host to the chosen speech service, hand the text back. The clip lives only in memory for the
  * length of the request and is dropped on success, failure and cancel. A
  * recording stops by itself at two minutes or at the size the plan allows.
  */
@@ -71,8 +76,13 @@ export class Dictation {
   private generation = 0;
 
   constructor(
-    private readonly client: Pick<NanoAccountClient, 'dictate'>,
-    private readonly options: { readonly maxBytes: () => number | undefined; readonly onText: (text: string) => void },
+    private readonly client: DictationTransport,
+    private readonly options: {
+      readonly maxBytes: () => number | undefined;
+      readonly onText: (text: string) => void;
+      /** English source copy for a failed request; the Nano account's copy when absent. */
+      readonly errorCopy?: (cause: unknown) => string;
+    },
     private readonly environment: DictationEnvironment = browserDictationEnvironment(),
   ) {}
 
@@ -209,7 +219,7 @@ export class Dictation {
     } catch (cause) {
       if (generation !== this.generation) return;
       this.phase = 'idle';
-      this.error = nanoAccountError(cause).message;
+      this.error = (this.options.errorCopy ?? ((failure: unknown) => nanoAccountError(failure).message))(cause);
     }
   }
 

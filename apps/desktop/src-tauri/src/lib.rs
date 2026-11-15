@@ -980,6 +980,8 @@ pub fn run() -> Result<(), tauri::Error> {
             nano::commands::nano_account_open_link_v1,
             nano::commands::nano_cloud_open_v1,
             nano::commands::nano_dictation_v1,
+            nano::dictation_commands::dictation_settings_v1,
+            nano::dictation_commands::dictation_transcribe_v1,
             workspace_api::composer_inputs::workspace_composer_inputs_v1,
             plugins::api::plugins_v1,
             plugins::api::plugin_command_v1,
