@@ -65,6 +65,7 @@
 
   let api = $state.raw<FlowApi | undefined>();
   let filePicker = $state<HTMLInputElement | null>(null);
+  let canvasElement = $state<HTMLDivElement | null>(null);
   let addMenuOpen = $state(false);
   let inputsOpen = $state(false);
   let saveTemplateOpen = $state(false);
@@ -325,7 +326,12 @@
     } else if (matchesShortcut(event, 'Mod+S')) {
       event.preventDefault();
       if (!editor.readOnly && editor.graph.nodes.length > 0 && dirty) void save();
-    } else if (event.key === 'Tab' && !event.ctrlKey && !event.metaKey && target.closest('.editor__canvas')) {
+    } else if (
+      event.key === 'Tab' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !editor.readOnly &&
+      (target === document.body || target.localName === 'main') && canvasElement?.matches(':hover')
+    ) {
+      // Tab opens Add right after a click on the empty canvas (focus is then on the page, not on a control).
+      // With focus on a card or a button, or while editing is off (safe mode, busy), Tab moves focus as everywhere else.
       event.preventDefault();
       addMenuOpen = true;
     }
@@ -410,7 +416,7 @@
   {/if}
 
   <div class="workspace">
-    <div class="editor__canvas">
+    <div class="editor__canvas" bind:this={canvasElement}>
       <FlowCanvas {editor} onready={(next) => (api = next)} onAddRequest={(point) => void addAt('agent', point)} />
 
       <div class="add">

@@ -12,9 +12,18 @@ export function presentationNodeIds(ids: readonly string[]): { start: string; ou
 export function presentationEdgeId(kind: 'start' | 'output', nodeId: string): string {
   return JSON.stringify(['presentation', kind, nodeId]);
 }
-export function isPresentationEdge(id: string): boolean {
+/** The block and step of a wire drawn for Start or Output, or undefined for a saved connection. */
+export function presentationEdge(id: string): { kind: 'start' | 'output'; nodeId: string } | undefined {
   try {
     const value: unknown = JSON.parse(id);
-    return Array.isArray(value) && value.length === 3 && value[0] === 'presentation' && (value[1] === 'start' || value[1] === 'output') && typeof value[2] === 'string';
-  } catch { return false; }
+    if (Array.isArray(value) && value.length === 3 && value[0] === 'presentation' && (value[1] === 'start' || value[1] === 'output') && typeof value[2] === 'string') {
+      return { kind: value[1], nodeId: value[2] };
+    }
+  } catch {
+    // Not a presentation wire.
+  }
+  return undefined;
+}
+export function isPresentationEdge(id: string): boolean {
+  return presentationEdge(id) !== undefined;
 }

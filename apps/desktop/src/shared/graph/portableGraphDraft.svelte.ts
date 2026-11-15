@@ -3,8 +3,9 @@ import { checkedCreationProfile, cloudProfile } from './cloudCreationProfile';
 import type { GraphCanvasController } from '../../app/pipelines/canvas/graphCanvasController';
 import { inputNameFrom } from '../../app/pipelines/inputs/runInputs';
 import {
-  emptyGraph, graphIssues, newGraphNode, type AgentGraph, type ConnectionKind, type GraphIssue, type GraphNode,
+  emptyGraph, graphIssues, newGraphNode, type AgentGraph, type ConnectionKind, type GraphIssue, type GraphLayout, type GraphNode,
 } from '../../features/orchestration/agentGraph';
+import { freeStepPosition, readBlockPositions, resetBlockPositions, withBlockPositions, writeBlockPositions } from '../../features/orchestration/graphBlocks';
 import { autoLayout, edgeKey, syncRouterInputs } from '../../features/orchestration/graphCanvasEditing';
 import { connectAgents, connectRoute } from '../../features/orchestration/graphConnections';
 import { GraphHistory } from '../../features/orchestration/graphHistory';
@@ -60,9 +61,10 @@ export class PortableGraphDraft implements GraphCanvasController {
   dispose(): void { this.disposed = true; }
 
   private accept(graph: AgentGraph, revision: number | null, saved: boolean): void {
-    this.graph = graph;
+    const settled = withBlockPositions(graph);
+    this.graph = settled;
     this.revision = revision;
-    this.history.reset(graph);
+    this.history.reset(settled);
     this.canUndo = this.canRedo = false;
     this.selectedId = this.selectedEdge = '';
     this.conflict = false;
@@ -71,7 +73,7 @@ export class PortableGraphDraft implements GraphCanvasController {
     this.issues = [];
     this.notice = '';
     this.pendingDocument = undefined;
-    this.baseline = saved ? JSON.stringify(graph) : '';
+    this.baseline = saved ? JSON.stringify(settled) : '';
   }
 
   newDraft(): void {
@@ -104,7 +106,8 @@ export class PortableGraphDraft implements GraphCanvasController {
       if (this.disposed) return false;
       if (snapshot === null) throw new Error('The saved pipeline is no longer available.');
       const graph = this.decode(snapshot, id);
-      this.accept(graph, snapshot.revision, true);
+      const blocks = readBlockPositions('portable', id);
+      this.accept(blocks ? { ...graph, layout: blocks } : graph, snapshot.revision, true);
       return true;
     } catch (error) {
       if (!this.disposed) this.errors = [error instanceof Error ? error.message : 'Could not load the pipeline.'];
@@ -131,7 +134,7 @@ export class PortableGraphDraft implements GraphCanvasController {
     if (this.unavailable) return false;
     try {
       const next = systemFileToGraph(parseSystemFile(text));
-      this.commit({ ...next, id: this.graph.id, teamId: this.graph.teamId, pipelineId: this.graph.pipelineId }, true);
+      this.commit({ ...next, id: this.graph.id, teamId: this.graph.teamId, pipelineId: this.graph.pipelineId, layout: this.graph.layout }, true);
       this.pendingDocument = undefined;
       this.errors = [];
       return true;
@@ -180,6 +183,7 @@ export class PortableGraphDraft implements GraphCanvasController {
       if (serializeSystemFile(saved) !== document) throw new Error('The server returned a different pipeline. The local draft was kept.');
       this.revision = result.snapshot.revision;
       this.baseline = JSON.stringify(this.graph);
+      writeBlockPositions('portable', this.graph);
       this.conflict = false;
       this.saveUncertain = false;
       this.notice = 'Pipeline saved.';
@@ -201,7 +205,7 @@ export class PortableGraphDraft implements GraphCanvasController {
 
   private commit(next: AgentGraph, fromDocument = false): void {
     if (this.unavailable || (!fromDocument && this.pendingDocument !== undefined)) return;
-    this.graph = syncRouterInputs(next);
+    this.graph = withBlockPositions(syncRouterInputs(next));
     this.history.record(this.graph);
     this.canUndo = this.history.canUndo;
     this.canRedo = this.history.canRedo;
@@ -217,8 +221,7 @@ export class PortableGraphDraft implements GraphCanvasController {
     if (this.readOnly) return;
     const node = newGraphNode(this.graph.nodes.length);
     if (this.creationProfile) node.profile = cloudProfile(node.profile, this.creationProfile);
-    node.x = Math.max(0, Math.round(position.x));
-    node.y = Math.max(0, Math.round(position.y));
+    Object.assign(node, freeStepPosition(this.graph, { x: Math.max(0, Math.round(position.x)), y: Math.max(0, Math.round(position.y)) }));
     this.commit({ ...this.graph, nodes: [...this.graph.nodes, node] });
     this.selectedId = node.id;
   }
@@ -245,20 +248,44 @@ export class PortableGraphDraft implements GraphCanvasController {
     this.commit({ ...this.graph, outputs: [...outputs, { name, kind: 'text', sourceStepId: source }] });
     return undefined;
   }
-  removeSelection(nodeIds: readonly string[], edgeKeys: readonly string[]): void {
-    const nodes = new Set(nodeIds), edges = new Set(edgeKeys);
-    this.commit({ ...this.graph, nodes: this.graph.nodes.filter(node => !nodes.has(node.id)), edges: this.graph.edges.filter(edge => !nodes.has(edge.from) && !nodes.has(edge.to) && !edges.has(edgeKey(edge))) });
+  removeSelection(nodeIds: readonly string[], edgeKeys: readonly string[], outputSources: readonly string[] = []): void {
+    if (!nodeIds.length && !edgeKeys.length && !outputSources.length) return;
+    const nodes = new Set(nodeIds), edges = new Set(edgeKeys), sources = new Set(outputSources);
+    const outputs = (this.graph.outputs ?? []).filter(output => !sources.has(output.sourceStepId));
+    this.commit({
+      ...this.graph,
+      nodes: this.graph.nodes.filter(node => !nodes.has(node.id)),
+      edges: this.graph.edges.filter(edge => !nodes.has(edge.from) && !nodes.has(edge.to) && !edges.has(edgeKey(edge))),
+      ...(sources.size ? { outputs: outputs.length ? outputs : undefined } : {}),
+    });
     if (nodes.has(this.selectedId)) this.selectedId = '';
     if (edges.has(this.selectedEdge)) this.selectedEdge = '';
   }
-  movedNodes(moves: readonly { id: string; x: number; y: number }[]): void {
-    const changed = new Map(moves.map(move => [move.id, move]));
-    this.commit({ ...this.graph, nodes: this.graph.nodes.map(node => {
-      const move = changed.get(node.id);
-      return move ? { ...node, x: Math.max(0, Math.round(move.x)), y: Math.max(0, Math.round(move.y)) } : node;
-    }) });
+  movedNodes(moves: readonly { id: string; x: number; y: number }[], blocks: Partial<GraphLayout> | undefined = undefined): void {
+    const byId = new Map(moves.map(move => [move.id, move]));
+    let changed = false;
+    const nodes = this.graph.nodes.map(node => {
+      const move = byId.get(node.id);
+      if (!move) return node;
+      const x = Math.max(0, Math.round(move.x)), y = Math.max(0, Math.round(move.y));
+      if (x === node.x && y === node.y) return node;
+      changed = true;
+      return { ...node, x, y };
+    });
+    const current = this.graph.layout;
+    let layout = current;
+    if (current && blocks) {
+      const round = (place: { x: number; y: number }) => ({ x: Math.round(place.x), y: Math.round(place.y) });
+      const start = blocks.start ? round(blocks.start) : current.start;
+      const output = blocks.output ? round(blocks.output) : current.output;
+      if (start.x !== current.start.x || start.y !== current.start.y || output.x !== current.output.x || output.y !== current.output.y) {
+        layout = { start, output };
+        changed = true;
+      }
+    }
+    if (changed) this.commit({ ...this.graph, nodes, layout });
   }
-  arrange(heights: ReadonlyMap<string, number>): void { this.commit(autoLayout(this.graph, heights)); }
+  arrange(heights: ReadonlyMap<string, number>): void { this.commit(resetBlockPositions(autoLayout(this.graph, heights))); }
   undo(): void {
     if (this.readOnly) return;
     const next = this.history.undo();

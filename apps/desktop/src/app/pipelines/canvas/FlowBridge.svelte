@@ -6,11 +6,13 @@
     center: (x: number, y: number) => void;
     toFlow: (screen: { x: number; y: number }) => { x: number; y: number };
     viewportCenter: () => { x: number; y: number };
+    /** Makes one card the whole selection, like clicking it: a marquee selection and the selection frame go away. */
+    select: (nodeId: string) => void;
   }
 </script>
 
 <script lang="ts">
-  import { useSvelteFlow } from '@xyflow/svelte';
+  import { useStore, useSvelteFlow } from '@xyflow/svelte';
   import { onMount } from 'svelte';
 
   interface Props {
@@ -19,6 +21,7 @@
   }
   let { container, onready }: Props = $props();
   const flow = useSvelteFlow();
+  const store = useStore();
 
   onMount(() => {
     onready({
@@ -30,6 +33,13 @@
       viewportCenter: () => {
         const box = container?.getBoundingClientRect();
         return box ? flow.screenToFlowPosition({ x: box.left + box.width / 2, y: box.top + box.height / 2 }) : { x: 0, y: 0 };
+      },
+      select: (nodeId) => {
+        // What Svelte Flow does for a click on a card, minus the click.
+        store.selectionRect = null;
+        store.selectionRectMode = null;
+        store.unselectNodesAndEdges();
+        store.addSelectedNodes([nodeId]);
       },
     });
   });

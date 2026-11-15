@@ -1,4 +1,4 @@
-import type { AgentGraph, ConnectionKind, GraphIssue } from '../../../features/orchestration/agentGraph';
+import type { AgentGraph, ConnectionKind, GraphIssue, GraphLayout } from '../../../features/orchestration/agentGraph';
 import type { SubpipelineInfo } from '../../../host-api/subpipelines';
 
 /** Presentation port shared by the desktop editor and the authenticated web island. */
@@ -20,8 +20,10 @@ export interface GraphCanvasController {
   nodeProblems(id: string): readonly unknown[];
   connect(source: string, target: string, sourceHandle: string | null | undefined): string | undefined;
   connectOutput(source: string): string | undefined;
-  removeSelection(nodeIds: readonly string[], edgeKeys: readonly string[]): void;
-  movedNodes(moves: readonly { id: string; x: number; y: number }[]): void;
+  /** `outputSources`: steps whose declared outputs are removed with the selection. */
+  removeSelection(nodeIds: readonly string[], edgeKeys: readonly string[], outputSources?: readonly string[]): void;
+  /** Steps and the Start/Output blocks moved by one gesture: one undo step. */
+  movedNodes(moves: readonly { id: string; x: number; y: number }[], blocks?: Partial<GraphLayout>): void;
   arrange(heights: ReadonlyMap<string, number>): void;
   undo(): void;
   redo(): void;

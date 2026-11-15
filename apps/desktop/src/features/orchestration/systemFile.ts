@@ -179,6 +179,9 @@ export function graphToSystemFile(graph: AgentGraph, commands: readonly Pipeline
     return { type: 'pipeline', pipeline: name, inputs: Object.fromEntries(Object.entries(executor.inputs).map(([input, source]) => [input, sourceToFile(source)])) };
   };
   const outputs = definition.pipeline.outputs ?? [];
+  // File positions are non-negative (schema); the canvas has no such limit. Move the whole picture, keeping its shape.
+  const left = Math.min(0, ...graph.nodes.map(node => node.x));
+  const top = Math.min(0, ...graph.nodes.map(node => node.y));
   return { format: 'piui-system', version: SYSTEM_FILE_VERSION, name: graph.name,
     orchestrator: definition.team.orchestratorMemberId,
     ...(graph.spawnedAgentsJoinTeam !== undefined ? { inheritTeamConnections: graph.spawnedAgentsJoinTeam } : {}),
@@ -187,7 +190,7 @@ export function graphToSystemFile(graph: AgentGraph, commands: readonly Pipeline
     agents: graph.nodes.map(node => {
       const { id: _id, allowedSpawnProfileIds: _spawn, ...profile } = node.profile;
       const executor = executorOf(node);
-      return { id: node.id, ...(node.kind && node.kind !== 'agent' ? { kind: node.kind } : {}), ...(executor ? { executor } : {}), profile, ...(node.router ? { router: node.router } : {}), task: node.task, ...(node.inputBindings?.length ? { inputBindings: node.inputBindings } : {}), ...(node.condition ? { condition: node.condition } : {}), ...(node.review ? { review: node.review } : {}), ...(node.requireApproval ? { requireApproval: true } : {}), ...(node.resultFields?.length ? { resultFields: node.resultFields } : {}), ...(node.executionMode ? { executionMode: node.executionMode } : {}), ...(node.input !== undefined ? { input: node.input } : {}), position: { x: node.x, y: node.y } };
+      return { id: node.id, ...(node.kind && node.kind !== 'agent' ? { kind: node.kind } : {}), ...(executor ? { executor } : {}), profile, ...(node.router ? { router: node.router } : {}), task: node.task, ...(node.inputBindings?.length ? { inputBindings: node.inputBindings } : {}), ...(node.condition ? { condition: node.condition } : {}), ...(node.review ? { review: node.review } : {}), ...(node.requireApproval ? { requireApproval: true } : {}), ...(node.resultFields?.length ? { resultFields: node.resultFields } : {}), ...(node.executionMode ? { executionMode: node.executionMode } : {}), ...(node.input !== undefined ? { input: node.input } : {}), position: { x: node.x - left, y: node.y - top } };
     }), connections: graph.edges.map(edge => ({ ...edge })),
   };
 }

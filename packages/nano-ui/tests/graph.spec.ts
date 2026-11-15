@@ -175,7 +175,7 @@ test('simultaneous English and Russian mounts isolate language and support reser
   await russian.getByRole('combobox', { name: 'Сохранённые пайплайны', exact: true }).selectOption(id);
   await expect(english.locator('.svelte-flow__node-agent')).toHaveCount(2);
   await expect(english.locator('.svelte-flow__node-start')).toHaveCount(1);
-  await expect(english.locator('.svelte-flow__node-output')).toHaveCount(1);
+  await expect(english.locator('.svelte-flow__node-end')).toHaveCount(1);
   const graphIds = await english.locator('.svelte-flow__node').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-id')));
   expect(new Set(graphIds).size).toBe(graphIds.length);
   await english.locator('.svelte-flow__node-agent[data-id="__start"]').press('Enter');

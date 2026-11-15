@@ -3,8 +3,10 @@ import type { HarnessModelsResult } from '../../../../../contracts/harness-model
 import { createOrchestrationClient, type OrchestrationClient, type OrchestrationCommandName } from '../../host-api/orchestrationClient';
 import { labHost } from '../../host-api/lab/labTestKit';
 import { nanoAccount } from '../nano/nanoAccount.svelte';
+import { defaultBlockPositions } from '../../features/orchestration/graphBlocks';
 import { PipelineEditorStore } from './editorStore.svelte';
 import { readLastPipeline } from './lastPipeline';
+import { buildTemplate } from './templates';
 
 const { cached, refreshed, settled } = vi.hoisted(() => ({
   cached: vi.fn(),
@@ -341,5 +343,106 @@ describe('the last open pipeline of a project', () => {
     expect(editor.pending).toBeDefined();
     await editor.resolvePending('keep');
     expect(readLastPipeline(workspaceId)).toBe(review?.id);
+  });
+});
+
+describe('Start and Output blocks', () => {
+  beforeEach(() => memory.clear());
+
+  const chain = () => buildTemplate('chain', 'codex', (value) => value);
+  const overlap = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.abs(a.x - b.x) < 248 && Math.abs(a.y - b.y) < 132;
+
+  it('places the blocks when a graph is loaded and keeps them where they are when a step moves', () => {
+    const editor = store();
+    editor.startFrom(chain());
+    const placed = editor.graph.layout;
+    expect(placed).toEqual(defaultBlockPositions(editor.graph));
+    editor.movedNodes([{ id: editor.graph.nodes[0].id, x: 900, y: 500 }]);
+    expect(editor.graph.nodes[0]).toMatchObject({ x: 900, y: 500 });
+    expect(editor.graph.layout).toBe(placed);
+  });
+
+  it('moves a block as one undoable edit, rounding its place', () => {
+    const editor = store();
+    editor.startFrom(chain());
+    const before = editor.graph.layout!;
+    editor.movedNodes([], { start: { x: 10.4, y: 20.6 } });
+    expect(editor.graph.layout).toEqual({ start: { x: 10, y: 21 }, output: before.output });
+    expect(editor.canUndo).toBe(true);
+    editor.undo();
+    expect(editor.graph.layout).toEqual(before);
+    expect(editor.canUndo).toBe(false);
+  });
+
+  it('moves a step and a block in one gesture as one undo step', () => {
+    const editor = store();
+    editor.startFrom(chain());
+    const before = editor.graph.layout!;
+    const step = editor.graph.nodes[0];
+    editor.movedNodes([{ id: step.id, x: step.x + 80, y: step.y + 80 }], { output: { x: 1000, y: 10 } });
+    expect(editor.graph.nodes[0]).toMatchObject({ x: step.x + 80, y: step.y + 80 });
+    expect(editor.graph.layout?.output).toEqual({ x: 1000, y: 10 });
+    editor.undo();
+    expect(editor.graph.nodes[0]).toMatchObject({ x: step.x, y: step.y });
+    expect(editor.graph.layout).toEqual(before);
+    expect(editor.canUndo).toBe(false);
+  });
+
+  it('records nothing when no card changed its place', () => {
+    const editor = store();
+    editor.startFrom(chain());
+    const graph = editor.graph;
+    const step = graph.nodes[0];
+    editor.movedNodes([{ id: step.id, x: step.x, y: step.y }], { start: { ...graph.layout!.start } });
+    expect(editor.graph).toBe(graph);
+    expect(editor.canUndo).toBe(false);
+  });
+
+  it('places the blocks around the steps again when the steps are arranged', () => {
+    const editor = store();
+    editor.startFrom(chain());
+    editor.movedNodes([], { start: { x: 5, y: 5 }, output: { x: 7, y: 7 } });
+    editor.arrange();
+    expect(editor.graph.layout).toEqual(defaultBlockPositions(editor.graph));
+  });
+
+  it('does not create new steps on top of each other', () => {
+    const editor = store();
+    for (let index = 0; index < 3; index += 1) editor.addNode('agent', { x: 0, y: 0 });
+    const [first, second, third] = editor.graph.nodes;
+    expect(overlap(first, second)).toBe(false);
+    expect(overlap(first, third)).toBe(false);
+    expect(overlap(second, third)).toBe(false);
+  });
+
+  it('removes only the outputs declared from the given steps, as one undo step', () => {
+    const editor = store();
+    editor.startFrom(chain());
+    const [first, second] = editor.graph.nodes;
+    expect(editor.connectOutput(first.id)).toBeUndefined();
+    expect(editor.connectOutput(second.id)).toBeUndefined();
+    editor.removeSelection([], [], [first.id]);
+    expect(editor.graph.outputs?.map((output) => output.sourceStepId)).toEqual([second.id]);
+    editor.removeSelection([], [], [second.id]);
+    expect(editor.graph.outputs).toBeUndefined();
+    editor.undo();
+    expect(editor.graph.outputs?.map((output) => output.sourceStepId)).toEqual([second.id]);
+  });
+
+  it('has no blocks once the last step is gone, and is not changed by adding and removing one', () => {
+    const editor = store();
+    const id = editor.addNode('agent', { x: 0, y: 0 });
+    expect(editor.graph.layout).toBeDefined();
+    editor.removeSelection([id], []);
+    expect(editor.graph.layout).toBeUndefined();
+    expect(editor.dirty).toBe(false);
+  });
+
+  it('places the blocks around a replaced draft instead of keeping the old places', () => {
+    const editor = store();
+    editor.startFrom(chain());
+    const next = { ...buildTemplate('parallel', 'codex', (value) => value), layout: { start: { x: 1, y: 1 }, output: { x: 2, y: 2 } } };
+    editor.replaceGraph(next);
+    expect(editor.graph.layout).toEqual(defaultBlockPositions(next));
   });
 });

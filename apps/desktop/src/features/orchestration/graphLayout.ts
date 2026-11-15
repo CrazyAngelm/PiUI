@@ -7,7 +7,7 @@ export const GRAPH_PORT_Y = 66;
 // Reuse Arrange's existing horizontal and vertical spacing for new cards.
 const COLUMN_DISTANCE = 320;
 const ROW_GAP = 176 - GRAPH_NODE_HEIGHT;
-export function unoccupiedPosition(nodes: readonly GraphNode[], point: {x:number;y:number}, height: number, heights: ReadonlyMap<string, number>): {x:number;y:number} {
+export function unoccupiedPosition(nodes: readonly Pick<GraphNode, 'id' | 'x' | 'y' | 'kind' | 'router'>[], point: {x:number;y:number}, height: number, heights: ReadonlyMap<string, number>): {x:number;y:number} {
   let x = point.x;
   const y = point.y;
   for (;;) {

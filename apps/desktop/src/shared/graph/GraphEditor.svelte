@@ -6,6 +6,7 @@
   import { Tooltip } from 'bits-ui';
   import FlowCanvas from '../../app/pipelines/canvas/FlowCanvas.svelte';
   import type { FlowApi } from '../../app/pipelines/canvas/FlowBridge.svelte';
+  import { presentationEdge } from '../../app/pipelines/canvas/graphRenderIdentity';
   import { useTranslation } from '../../features/locale/context';
   const t = useTranslation();
   import { Button, Toaster } from '../../lib/ui';
@@ -90,6 +91,13 @@
   function addAgent(screen: { x: number; y: number } | undefined = undefined): void {
     const position = screen ? flow?.toFlow(screen) : flow?.viewportCenter();
     editor.addAgent(position ?? { x: 60, y: 100 });
+  }
+
+  /** A selected declared-output wire is drawn for Output: deleting it removes the outputs declared from its step. */
+  function deleteSelection(): void {
+    const wire = presentationEdge(editor.selectedEdge);
+    editor.removeSelection(editor.selectedId ? [editor.selectedId] : [], editor.selectedEdge && !wire ? [editor.selectedEdge] : [], wire?.kind === 'output' ? [wire.nodeId] : []);
+    if (wire) editor.selectedEdge = '';
   }
 
   async function importFile(event: Event): Promise<void> {
@@ -193,7 +201,7 @@
       <label for={`${id}-name`}>{$t('Pipeline name')}</label>
       <input id={`${id}-name`} value={editor.graph.name} disabled={editor.readOnly} oninput={(event) => editor.rename(event.currentTarget.value)} />
       <Button disabled={editor.readOnly} onclick={() => addAgent()}>{$t('Add agent')}</Button>
-      <Button disabled={editor.readOnly || (!editor.selectedId && !editor.selectedEdge)} onclick={() => editor.removeSelection(editor.selectedId ? [editor.selectedId] : [], editor.selectedEdge ? [editor.selectedEdge] : [])}>{$t('Delete selection')}</Button>
+      <Button disabled={editor.readOnly || (!editor.selectedId && !editor.selectedEdge)} onclick={deleteSelection}>{$t('Delete selection')}</Button>
     </div>
 
     <div class="workspace">

@@ -11,7 +11,7 @@
     problems: number;
     readOnly: boolean;
   }
-  export type OutputFlowNode = Node<OutputNodeData, 'output'>;
+  export type OutputFlowNode = Node<OutputNodeData, 'end'>;
 </script>
 
 <script lang="ts">
@@ -61,7 +61,6 @@
     background: color-mix(in srgb, var(--piui-decoration-secondary) 6%, var(--piui-surface-1));
     box-shadow: var(--piui-shadow-1);
     color: var(--piui-text);
-    cursor: pointer;
   }
   .output--selected {
     border-color: var(--piui-accent);

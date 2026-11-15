@@ -848,6 +848,32 @@ four read-only GPT 6.1 Sol passes.
   mode sends no audio and changes no setting.
 - Verification: pending; evidence will be synthetic (loopback fakes, UI Lab). No
   real provider key was used.
+## Pipeline Start and Output blocks — 2026-11-15
+
+- Start and Output are ordinary movable blocks of the pipeline editor. Their
+  places live in `AgentGraph.layout` (editor state: undoable, "Unsaved"), are
+  kept in `piui.graph.blocks.<workspace>.<system>` next to the step positions
+  and are never compiled, saved to the host or exported. A block moves only
+  when the person moves it or presses Arrange; new graphs place them left and
+  right of every step.
+- Start's wires stay automatic: a wire dragged to or from Start explains why
+  that step does or does not start with the run and changes nothing. Clicking a
+  dashed wire selects its block, so Delete can no longer remove a step that was
+  selected before. Delete on a block says that Start and Output stay.
+- A declared Output wire is solid, selectable and deletable (it removes the
+  outputs declared from that step as one undo step); completion wires of final
+  steps stay beside declared outputs.
+- Arrow-key moves of steps and blocks persist; reopening no longer clamps
+  positions to 0; Export JSON and "Save as template" shift negative step
+  positions instead of failing.
+- New steps go to the nearest free row instead of on top of another card (the
+  web island too); Tab no longer swallows focus inside the canvas and opens Add
+  only after a click on the empty canvas; the Output node type is `end`, so
+  Svelte Flow's built-in `output` width, centring and shadows no longer apply.
+- No contract, IPC, schema or system-file version changed; the exchange
+  document stays v5 and has no block places (a later version could add them).
+- Verification: pending the end-of-task test run (synthetic UI Lab evidence
+  only).
 
 ## Next
 

@@ -54,6 +54,52 @@ describe('portable graph draft integration boundary', () => {
     expect(() => editor.setCreationProfile({ harness: 'hermes', permissionMode: 'native', model: 'smart', models: ['free'] })).toThrow();
     expect(editor.exportText()).toBe(before);
   });
+  it('moves Start and Output as part of the draft without changing the portable document', async () => {
+    const editor = new PortableGraphDraft(storage());
+    editor.setCreationProfile({ harness: 'hermes', permissionMode: 'native', model: 'smart', models: ['free', 'smart'] });
+    editor.addAgent({ x: 60, y: 100 });
+    editor.rename('Cloud draft');
+    editor.updateNode(editor.selectedId, { task: 'A synthetic task' });
+    expect(await editor.save()).toBe(true);
+    expect(editor.dirty).toBe(false);
+    const before = editor.exportText();
+    const start = editor.graph.layout!.start;
+    const output = editor.graph.layout!.output;
+    editor.movedNodes([], { output: { x: 900, y: 40 } });
+    expect(editor.graph.layout).toEqual({ start, output: { x: 900, y: 40 } });
+    expect(editor.dirty).toBe(true);
+    expect(editor.exportText()).toBe(before);
+    editor.undo();
+    expect(editor.graph.layout).toEqual({ start, output });
+    expect(editor.dirty).toBe(false);
+  });
+  it('places agents added at one point apart and records nothing for a move that changes nothing', () => {
+    const editor = new PortableGraphDraft(storage());
+    editor.addAgent({ x: 60, y: 100 });
+    editor.addAgent({ x: 60, y: 100 });
+    const [first, second] = editor.graph.nodes;
+    expect({ x: first.x, y: first.y }).not.toEqual({ x: second.x, y: second.y });
+    const graph = editor.graph;
+    const history = editor.canUndo;
+    editor.movedNodes([{ id: first.id, x: first.x, y: first.y }], { start: { ...graph.layout!.start } });
+    expect(editor.graph).toBe(graph);
+    expect(editor.canUndo).toBe(history);
+  });
+  it('removes the outputs declared from a step as one undoable edit', () => {
+    const editor = new PortableGraphDraft(storage());
+    editor.addAgent({ x: 60, y: 100 });
+    editor.addAgent({ x: 60, y: 100 });
+    const [first, second] = editor.graph.nodes;
+    expect(editor.connectOutput(first.id)).toBeUndefined();
+    expect(editor.connectOutput(second.id)).toBeUndefined();
+    expect(editor.graph.outputs).toHaveLength(2);
+    editor.removeSelection([], [], [first.id]);
+    expect(editor.graph.outputs?.map(output => output.sourceStepId)).toEqual([second.id]);
+    editor.removeSelection([], [], [second.id]);
+    expect(editor.graph.outputs).toBeUndefined();
+    editor.undo();
+    expect(editor.graph.outputs?.map(output => output.sourceStepId)).toEqual([second.id]);
+  });
   it('gives pending JSON exclusive editing authority until apply or discard', () => {
     const editor = new PortableGraphDraft(storage());
     editor.importText(fixture);
