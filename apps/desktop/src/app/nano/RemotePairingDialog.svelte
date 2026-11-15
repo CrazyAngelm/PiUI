@@ -29,6 +29,8 @@
     return () => cancelAnimationFrame(frame);
   });
 
+  // In the capture phase: the dialog's own Escape handler (which ignores it, as
+  // this dialog is not dismissible) runs later and marks the event as handled.
   function keydown(event: KeyboardEvent): void {
     if (event.key !== 'Escape' || event.defaultPrevented) return;
     event.preventDefault();
@@ -36,7 +38,7 @@
   }
 </script>
 
-<svelte:window onkeydown={keydown} />
+<svelte:window onkeydowncapture={keydown} />
 
 <Dialog open title={$t('Allow this browser to control Nano Desktop?')} size="sm" dismissible={false}>
   <div class="pairing">
