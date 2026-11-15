@@ -34,8 +34,10 @@
   import { WORKSPACE_CONTEXT } from './context';
   import { modelFavorites } from './modelFavorites.svelte';
   import { defaultTab, favoriteKey, visibleModels, type ModelTab } from './modelPickerView';
-  import ReasoningControl from './ReasoningControl.svelte';
   import { reasoningSteps } from './reasoningSteps';
+
+  // The control only shows once the picker opens, so first paint does not ship it.
+  const loadReasoning = () => import('./ReasoningControl.svelte');
 
   interface Props {
     models: readonly ModelOption[];
@@ -330,7 +332,9 @@
       </Command.Root>
 
       <div class="piui-models__tune">
-        <ReasoningControl {levels} {level} {levelDefault} {fastAvailable} {fast} {busy} {onLevel} {onFast} />
+        {#await loadReasoning() then { default: ReasoningControl }}
+          <ReasoningControl {levels} {level} {levelDefault} {fastAvailable} {fast} {busy} {onLevel} {onFast} />
+        {/await}
         {#if usesChatGpt && !remoteMode}
           <div class="piui-models__row">
             <span class="piui-models__label">{$t('Using ChatGPT plan')}</span>
