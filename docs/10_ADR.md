@@ -2171,3 +2171,13 @@ Stage 5A adds opt-in protocol 2, shared admission, frozen location bindings and
 typed host intents while preserving the default protocol 1. Actual cloud
 execution and its runtime authority remain the server integration stage.
 See [the decision](adr/059-graph-kernel-v2.md).
+
+## ADR-080 — Connected execution hosts: the security core
+
+The standalone crate `piui-remote-host` and the contracts `nano-host-v1` and `nano-hosts-v1` fix the
+security properties of running work on another Nano Desktop of the same account: pairing at both
+computers, a host identity, an end-to-end channel through an untrusted relay, a permission policy that
+can only narrow, and a durable journal with guarded custody and recovery. Nothing in the application
+uses it yet: no listener, no UI and no network call are added, and signed-out and safe-mode behavior is
+unchanged. Ported from the unified-shell branch, where it was ADR-064.
+See [the decision](adr/080-connected-execution-hosts.md).

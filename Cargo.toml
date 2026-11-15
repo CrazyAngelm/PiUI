@@ -10,6 +10,7 @@ members = [
   "crates/piui-graph-kernel",
   "crates/piui-plugins",
   "crates/piui-nano",
+  "crates/piui-remote-host",
 ]
 exclude = ["spikes/webview-baseline/src-tauri"]
 resolver = "2"

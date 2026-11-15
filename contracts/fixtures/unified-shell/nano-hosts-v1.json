@@ -1,0 +1,175 @@
+{
+  "schema": "nano-hosts-v1-examples",
+  "version": 1,
+  "note": "Synthetic examples of the relay wire of contracts/nano-hosts-v1.ts. No limit values are defined here.",
+  "putHostSelf": {
+    "request": {
+      "protocol": "nano-host/1",
+      "identitySpki": "MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE"
+    },
+    "response": {
+      "hostId": "hst_AAECAwQFBgcICQoLDA0ODw",
+      "accountId": "usr_synthetic01"
+    }
+  },
+  "putHostGrant": {
+    "grantId": "hgr_AAECAwQFBgcICQoLDA0ODw",
+    "request": {
+      "controllerDeviceId": "dev_EBESExQVFhcYGRobHB0eHw"
+    }
+  },
+  "listHosts": {
+    "response": {
+      "hosts": [
+        {
+          "hostId": "hst_AAECAwQFBgcICQoLDA0ODw",
+          "deviceId": "dev_ICEiIyQlJicoKSorLC0uLw",
+          "name": "Workstation",
+          "identitySpki": "MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE",
+          "online": true,
+          "grantId": "hgr_AAECAwQFBgcICQoLDA0ODw"
+        },
+        {
+          "hostId": "hst_MDEyMzQ1Njc4OTo7PD0-Pw",
+          "deviceId": "dev_QEFCQ0RFRkdISUpLTE1OTw",
+          "name": "Laptop",
+          "identitySpki": "MCowBQYDK2VwAyEA11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+          "online": false
+        }
+      ]
+    }
+  },
+  "openChannel": {
+    "pairing": {
+      "request": {
+        "hostId": "hst_AAECAwQFBgcICQoLDA0ODw",
+        "purpose": "pairing"
+      },
+      "response": {
+        "channelId": "chn_synthetic01"
+      }
+    },
+    "grant": {
+      "request": {
+        "hostId": "hst_AAECAwQFBgcICQoLDA0ODw",
+        "purpose": "grant",
+        "grantId": "hgr_AAECAwQFBgcICQoLDA0ODw"
+      },
+      "response": {
+        "channelId": "chn_synthetic02"
+      }
+    }
+  },
+  "postFrames": {
+    "request": {
+      "frames": [
+        {
+          "seq": 1,
+          "data": "FgMB"
+        },
+        {
+          "seq": 2,
+          "data": "FwMD"
+        }
+      ]
+    },
+    "response": {
+      "status": "delivered"
+    }
+  },
+  "streamEvents": [
+    {
+      "type": "ready",
+      "grants": [
+        {
+          "grantId": "hgr_AAECAwQFBgcICQoLDA0ODw",
+          "hostId": "hst_AAECAwQFBgcICQoLDA0ODw",
+          "controllerDeviceId": "dev_EBESExQVFhcYGRobHB0eHw"
+        }
+      ]
+    },
+    {
+      "type": "channel-open",
+      "channelId": "chn_synthetic01",
+      "purpose": "pairing",
+      "hostId": "hst_AAECAwQFBgcICQoLDA0ODw",
+      "controllerDeviceId": "dev_EBESExQVFhcYGRobHB0eHw"
+    },
+    {
+      "type": "channel-open",
+      "channelId": "chn_synthetic02",
+      "purpose": "grant",
+      "hostId": "hst_AAECAwQFBgcICQoLDA0ODw",
+      "controllerDeviceId": "dev_EBESExQVFhcYGRobHB0eHw",
+      "grantId": "hgr_AAECAwQFBgcICQoLDA0ODw"
+    },
+    {
+      "type": "frames",
+      "channelId": "chn_synthetic02",
+      "frames": [
+        {
+          "seq": 1,
+          "data": "FgMD"
+        }
+      ]
+    },
+    {
+      "type": "channel-closed",
+      "channelId": "chn_synthetic02"
+    },
+    {
+      "type": "grant-revoked",
+      "grantId": "hgr_AAECAwQFBgcICQoLDA0ODw",
+      "hostId": "hst_AAECAwQFBgcICQoLDA0ODw"
+    },
+    {
+      "type": "host-changed",
+      "hostId": "hst_AAECAwQFBgcICQoLDA0ODw"
+    }
+  ],
+  "refusedFrames": [
+    {
+      "frame": {
+        "seq": 0,
+        "data": "FgMB"
+      },
+      "why": "numbering starts at 1"
+    },
+    {
+      "frame": {
+        "seq": 1,
+        "data": "FgMB="
+      },
+      "why": "padded"
+    },
+    {
+      "frame": {
+        "seq": 1,
+        "data": "FgM+"
+      },
+      "why": "not base64url"
+    },
+    {
+      "frame": {
+        "seq": 1,
+        "data": ""
+      },
+      "why": "empty"
+    }
+  ],
+  "errorCodes": {
+    "reused": [
+      "scope_missing",
+      "device_revoked",
+      "payload_too_large",
+      "rate_limited",
+      "feature_not_in_plan"
+    ],
+    "new": [
+      "peer_offline",
+      "channel_closed",
+      "host_not_found",
+      "grant_not_found"
+    ]
+  }
+}

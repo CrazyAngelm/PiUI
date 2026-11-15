@@ -1,0 +1,43 @@
+[package]
+name = "piui-remote-host"
+version.workspace = true
+edition.workspace = true
+# Above the workspace's 1.88: vodozemac 0.11.2 declares rust-version 1.89 and
+# the command journal locks the lock file of each grant with
+# `std::fs::File::try_lock` (stable since 1.89). The pinned toolchain
+# (rust-toolchain.toml) is 1.94.1.
+rust-version = "1.89"
+publish = false
+license.workspace = true
+authors.workspace = true
+description = "Security core of connected execution hosts: TLS 1.3 raw-key channels, SAS pairing, framing and the command journal"
+
+[dependencies]
+base64 = "0.22"
+# Refuses small-order and undecodable Ed25519 identity keys before a pin
+# (already in the workspace lockfile through piui-runtime).
+ed25519-dalek.workspace = true
+ring = "0.17"
+# TLS 1.3 only, with the ring provider: no TLS 1.2 code is needed here.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+serde.workspace = true
+serde_json.workspace = true
+subtle = "2.6"
+thiserror.workspace = true
+uuid.workspace = true
+# The Matrix SAS building blocks (X25519 with the contributory check,
+# HKDF-SHA-256 and HMAC-SHA-256). Pinned exactly: the protocol was reviewed
+# against this published source, whose `src/sas.rs` and
+# `src/types/curve25519.rs` equal those of 0.11.0 and 0.11.1. 0.11.2 adds the
+# `zeroize` feature of its RustCrypto dependencies (hmac, sha2 among them);
+# the main branch already declares rust-version 1.96. Default features
+# (libolm compatibility, precomputed tables) are not used.
+vodozemac = { version = "=0.11.2", default-features = false }
+zeroize = "1"
+
+[dev-dependencies]
+tempfile = "3"
+piui-orchestration = { path = "../piui-orchestration" }
+
+[lints.rust]
+unsafe_code = "forbid"

@@ -1,0 +1,1939 @@
+{
+  "schema": "nano-host-v1-vectors",
+  "version": 1,
+  "generator": "gen_host_fixtures.py (Python standard library; independent of the Rust crate)",
+  "protocol": "nano-host/1",
+  "alpn": "nano-host/1",
+  "channelBinding": {
+    "source": "RFC 9266",
+    "label": "EXPORTER-Channel-Binding",
+    "context": "",
+    "length": 32
+  },
+  "maxMessageBytes": 2097152,
+  "maxMessageBytesSource": "MAX_API_BODY of crates/piui-nano/src/net.rs (the Desktop API document cap)",
+  "framing": [
+    {
+      "payload": "{}",
+      "framedHex": "000000027b7d"
+    },
+    {
+      "payload": "{\"a\":1}",
+      "framedHex": "000000077b2261223a317d"
+    }
+  ],
+  "spki": [
+    {
+      "source": "RFC 8410 section 10.1",
+      "text": "MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE",
+      "ed25519Hex": "19bf44096984cdfe8541bac167dc3b96c85086aa30b6b6cb0c5c38ad703166e1"
+    },
+    {
+      "source": "RFC 8032 section 7.1 TEST 1",
+      "text": "MCowBQYDK2VwAyEA11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+      "ed25519Hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+    }
+  ],
+  "x25519": {
+    "source": "RFC 7748 section 6.1",
+    "alicePrivateHex": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+    "alicePublicHex": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+    "bobPrivateHex": "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb",
+    "bobPublicHex": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+    "sharedHex": "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742"
+  },
+  "weakEphemerals": [
+    {
+      "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "why": "small order (0)",
+      "code": "invalid-key"
+    },
+    {
+      "hex": "0100000000000000000000000000000000000000000000000000000000000000",
+      "why": "small order (1)",
+      "code": "invalid-key"
+    },
+    {
+      "hex": "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+      "why": "small order 8",
+      "code": "invalid-key"
+    },
+    {
+      "hex": "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157",
+      "why": "small order 8",
+      "code": "invalid-key"
+    },
+    {
+      "hex": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "why": "p - 1",
+      "code": "invalid-key"
+    },
+    {
+      "hex": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "why": "p (non-canonical)",
+      "code": "invalid-key"
+    },
+    {
+      "hex": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "why": "p + 1 (non-canonical)",
+      "code": "invalid-key"
+    },
+    {
+      "hex": "efffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "why": "p + 2 (non-canonical)",
+      "code": "invalid-key"
+    },
+    {
+      "hex": "0000000000000000000000000000000000000000000000000000000000000080",
+      "why": "top bit set",
+      "code": "invalid-key"
+    }
+  ],
+  "pairing": {
+    "note": "Synthetic transcript. The X25519 keys and secret are RFC 7748 6.1 (target = Alice, controller = Bob); the TLS keys are RFC 8410 10.1 (target) and RFC 8032 TEST 1 (controller).",
+    "identity": {
+      "accountId": "usr_synthetic01",
+      "hostId": "hst_AAECAwQFBgcICQoLDA0ODw",
+      "controllerDeviceId": "dev_EBESExQVFhcYGRobHB0eHw"
+    },
+    "targetSpki": "MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE",
+    "controllerSpki": "MCowBQYDK2VwAyEA11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+    "channelBindingHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "targetEphemeral": "hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo",
+    "controllerEphemeral": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08",
+    "commitment": "MRkQ0NAwixYAswN63vqZhfDuTPXbz7neum4BxOelmIs",
+    "sasInfo": "NANO_HOST_PAIRING_SAS_V1|11:nano-host/1|22:curve25519-hkdf-sha256|6:sha256|19:hkdf-hmac-sha256.v2|7:decimal|15:usr_synthetic01|26:hst_AAECAwQFBgcICQoLDA0ODw|26:dev_EBESExQVFhcYGRobHB0eHw|59:MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE|59:MCowBQYDK2VwAyEA11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo|43:hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo|43:3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08|43:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+    "sasBytesHex": "a58084ffb98f",
+    "decimals": [
+      6296,
+      1531,
+      9156
+    ],
+    "macTarget": {
+      "info": "NANO_HOST_PAIRING_MAC_V1|11:nano-host/1|6:target|15:usr_synthetic01|26:hst_AAECAwQFBgcICQoLDA0ODw|26:dev_EBESExQVFhcYGRobHB0eHw|59:MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE|59:MCowBQYDK2VwAyEA11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo|43:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8|8:tls-spki",
+      "input": "MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE",
+      "keyHex": "de40a898d6695c6c463e060c235db5f1730dcd0e60bee678c17d66e84a01b6cf",
+      "mac": "cD32pO_bfdJVXsN2vU6BjcNXJV3nFkLEB7kiZYX5VwY"
+    },
+    "macController": {
+      "info": "NANO_HOST_PAIRING_MAC_V1|11:nano-host/1|10:controller|15:usr_synthetic01|26:hst_AAECAwQFBgcICQoLDA0ODw|26:dev_EBESExQVFhcYGRobHB0eHw|59:MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE|59:MCowBQYDK2VwAyEA11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo|43:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8|8:tls-spki",
+      "input": "MCowBQYDK2VwAyEA11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+      "keyHex": "7f153e34247e5ee6c80133046db3ef630e273e9c1d2b56b874a9b995cd6f9c58",
+      "mac": "5_uQPXTqdmjeIv5Z5KgPDutYG_jbAb7mMYJuNXC5lhA"
+    },
+    "messages": {
+      "start": "{\"type\":\"pairing.start\",\"keyAgreement\":\"curve25519-hkdf-sha256\",\"hash\":\"sha256\",\"mac\":\"hkdf-hmac-sha256.v2\",\"sas\":\"decimal\",\"accountId\":\"usr_synthetic01\",\"hostId\":\"hst_AAECAwQFBgcICQoLDA0ODw\",\"controllerDeviceId\":\"dev_EBESExQVFhcYGRobHB0eHw\"}",
+      "accept": "{\"type\":\"pairing.accept\",\"commitment\":\"MRkQ0NAwixYAswN63vqZhfDuTPXbz7neum4BxOelmIs\"}",
+      "targetKey": "{\"type\":\"pairing.key\",\"key\":\"hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo\"}",
+      "controllerKey": "{\"type\":\"pairing.key\",\"key\":\"3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08\"}",
+      "targetMac": "{\"type\":\"pairing.mac\",\"mac\":\"cD32pO_bfdJVXsN2vU6BjcNXJV3nFkLEB7kiZYX5VwY\"}",
+      "controllerMac": "{\"type\":\"pairing.mac\",\"mac\":\"5_uQPXTqdmjeIv5Z5KgPDutYG_jbAb7mMYJuNXC5lhA\"}",
+      "paired": "{\"type\":\"pairing.paired\",\"grantId\":\"hgr_AAECAwQFBgcICQoLDA0ODw\"}",
+      "cancel": "{\"type\":\"pairing.cancel\",\"code\":\"mismatched-sas\"}",
+      "windowClosed": "{\"type\":\"pairing.cancel\",\"code\":\"window-closed\"}"
+    },
+    "refusedMessages": [
+      {
+        "text": "{\"type\":\"pairing.start\", \"keyAgreement\":\"curve25519-hkdf-sha256\",\"hash\":\"sha256\",\"mac\":\"hkdf-hmac-sha256.v2\",\"sas\":\"decimal\",\"accountId\":\"usr_synthetic01\",\"hostId\":\"hst_AAECAwQFBgcICQoLDA0ODw\",\"controllerDeviceId\":\"dev_EBESExQVFhcYGRobHB0eHw\"}",
+        "code": "invalid-message"
+      },
+      {
+        "text": "{\"type\":\"pairing.start\",\"keyAgreement\":\"curve25519-hkdf-sha256\",\"hash\":\"sha256\",\"mac\":\"hkdf-hmac-sha256.v2\",\"sas\":\"decimal\",\"accountId\":\"usr_synthetic01\",\"hostId\":\"hst_AAECAwQFBgcICQoLDA0ODw\",\"controllerDeviceId\":\"dev_EBESExQVFhcYGRobHB0eHw\"} ",
+        "code": "invalid-message"
+      },
+      {
+        "text": "{\"type\":\"pairing.start\",\"keyAgreement\":\"curve25519-hkdf-sha256\",\"hash\":\"sha256\",\"mac\":\"hkdf-hmac-sha256\",\"sas\":\"decimal\",\"accountId\":\"usr_synthetic01\",\"hostId\":\"hst_AAECAwQFBgcICQoLDA0ODw\",\"controllerDeviceId\":\"dev_EBESExQVFhcYGRobHB0eHw\"}",
+        "code": "unknown-method"
+      },
+      {
+        "text": "{\"type\":\"pairing.start\",\"keyAgreement\":\"curve25519-hkdf-sha256\",\"hash\":\"sha256\",\"mac\":\"hkdf-hmac-sha256.v2\",\"sas\":\"emoji\",\"accountId\":\"usr_synthetic01\",\"hostId\":\"hst_AAECAwQFBgcICQoLDA0ODw\",\"controllerDeviceId\":\"dev_EBESExQVFhcYGRobHB0eHw\"}",
+        "code": "unknown-method"
+      },
+      {
+        "text": "{\"type\":\"pairing.key\",\"key\":\"hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo\",\"extra\":1}",
+        "code": "invalid-message"
+      }
+    ]
+  },
+  "decimal": [
+    {
+      "bytesHex": "000000000000",
+      "decimals": [
+        1000,
+        1000,
+        1000
+      ]
+    },
+    {
+      "bytesHex": "ffffffffffff",
+      "decimals": [
+        9191,
+        9191,
+        9191
+      ]
+    },
+    {
+      "bytesHex": "0123456789ab",
+      "decimals": [
+        1036,
+        4349,
+        6060
+      ]
+    },
+    {
+      "bytesHex": "8040201008ff",
+      "decimals": [
+        5104,
+        1128,
+        3052
+      ]
+    }
+  ],
+  "uuidV8": {
+    "source": "RFC 9562 appendix B.2",
+    "namespaceDns": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+    "name": "www.example.com",
+    "uuid": "5c146b14-3c52-8afd-938a-375d0df1fbf6"
+  },
+  "derivedIds": [
+    {
+      "domain": "session",
+      "grantId": "hgr_AAECAwQFBgcICQoLDA0ODw",
+      "commandId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "id": "7d79f3e2-ccbf-8e68-81d7-00a94a3a5b17"
+    },
+    {
+      "domain": "composer",
+      "grantId": "hgr_AAECAwQFBgcICQoLDA0ODw",
+      "commandId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "id": "2e06b2d4-8e6f-8bcb-b0db-e20cb8f72aec"
+    },
+    {
+      "domain": "run",
+      "grantId": "hgr_AAECAwQFBgcICQoLDA0ODw",
+      "commandId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "id": "df49c79c-b5c5-8094-9c5f-7acad297bad6"
+    }
+  ],
+  "commandBindings": [
+    {
+      "grantId": "hgr_AAECAwQFBgcICQoLDA0ODw",
+      "kind": "composer.send",
+      "commandId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "canonical": "{\"text\":\"hello\"}",
+      "digest": "wHJ7_9_eSPFPdT1zRgZ_WR5ZDOKWAsS5SSyF0lcCA04"
+    },
+    {
+      "grantId": "hgr_AAECAwQFBgcICQoLDA0ODw",
+      "kind": "interrupt",
+      "commandId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "canonical": "{}",
+      "digest": "tlKDhxDjHN2tcTKMZVxya2F5qPXx0oWyB3mDugKf9Uc"
+    },
+    {
+      "grantId": "hgr_AAECAwQFBgcICQoLDA0ODw",
+      "kind": "runs.cancelTask",
+      "commandId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "canonical": "{\"x\":1}",
+      "digest": "Y5lzGQCrJZAvGWz4IXevyzV-uOAQOje8439Cg7XW4M0"
+    }
+  ],
+  "outcomes": [
+    {
+      "type": "applied"
+    },
+    {
+      "type": "applied",
+      "revision": 7
+    },
+    {
+      "type": "not-applied",
+      "reason": "owner-refused"
+    },
+    {
+      "type": "not-applied",
+      "reason": "absent-after-restart"
+    },
+    {
+      "type": "outcome-unknown",
+      "reason": "host-restarted"
+    },
+    {
+      "type": "outcome-unknown",
+      "reason": "delivery-uncertain"
+    },
+    {
+      "type": "outcome-unknown",
+      "reason": "effect-uncertain"
+    },
+    {
+      "type": "cancelled-by-revocation"
+    }
+  ],
+  "ceilings": [
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": false
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "native",
+        "networkAccess": true
+      },
+      "result": "incomparable"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "read-only",
+        "networkAccess": true
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "workspace-write",
+        "networkAccess": true
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "result": "exceeded"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": false
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "harness": "codex",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "result": "ok"
+    },
+    {
+      "ceilingHarness": "codex",
+      "ceiling": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "harness": "pi",
+      "requested": {
+        "permissionMode": "full-access",
+        "networkAccess": true
+      },
+      "result": "ok"
+    }
+  ]
+}
