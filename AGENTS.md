@@ -209,7 +209,8 @@ Design and behaviour: `docs/NANO_DESKTOP.md`; server contract:
 `contracts/nano-account-v1.ts` and `contracts/nano-server-v1.ts`.
 
 - A signed-out application and any application in safe mode make **no** Nano
-  network call (no discovery, refresh, relay, dictation or cloud window). Sign-in
+  network call (no discovery, refresh, relay, remote link, dictation or cloud
+  window). Sign-in
   is optional; every harness, Fusion, pipeline and plugin feature that works
   without an account must keep working without one. Local sign-out works in safe
   mode without a network call.
@@ -295,5 +296,11 @@ Design and behaviour: `docs/NANO_DESKTOP.md`; server contract:
 - The cloud window (`nano-cloud`) has no IPC: no capability may list it and the
   command guard stays an allowlist (main window, app origin). Its navigation is
   limited to Nano origins; other links open in the system browser.
+- Remote access (ADR-062) is an outbound WebSocket opened only by the host, only
+  while the person's toggle is on, signed in and outside safe mode. A remote
+  viewer reaches only the allowlist of `contracts/nano-remote-v1.ts` through
+  `nano/remote_dispatch.rs`; no shell, filesystem, credential, settings, plugin
+  or `nano_remote_*` command. Grants are public keys stored on this computer; a
+  viewer without a valid signature is dropped. Never describe it as sandboxed.
 - Dictation audio is held in memory only and goes through the host; the WebView
   never makes a Nano request, so the CSP stays unchanged.

@@ -1916,3 +1916,11 @@ A macro is a saved prompt, a list of skills, or both. It is typed as `//name`
 in a message and replaced by its text when the message is sent. Macros are a
 local preference and nothing is executed. See
 [the decision](adr/060-composer-macros.md).
+
+## ADR-062 — Remote access from Nano Web
+
+A signed-in Nano Desktop may, only while the person's toggle is on, hold an
+outbound WebSocket to the Nano server so that a browser the person approved at
+the computer can continue chats from Nano Web. The browser proves a stored key,
+reaches a fixed allowlist of chat commands and is not sandboxed from the
+keyboard's powers in chats. See [the decision](adr/062-remote-access.md).
