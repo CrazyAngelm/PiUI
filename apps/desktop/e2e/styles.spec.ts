@@ -4,12 +4,19 @@ test.describe('built-in styles', () => {
   test('reasoning ramp geometry follows Nano, Chaos and plugin ornaments without changing input', async ({ lab, page }) => {
     await lab.open();
     const home = page.getByRole('region', { name: 'What should we work on?' });
+    // A harness and model picked for a new chat stay picked for the next one.
+    let picked = false;
     async function verifyRamp(slanted: boolean, radius: string, overhang: string): Promise<void> {
       await lab.nav('New chat').click();
-      await home.getByRole('button', { name: 'Pi', exact: true }).click();
-      await lab.option(/^Codex/).click();
-      await home.getByRole('button', { name: /^(Default model|Choose a model)$/ }).click();
-      await lab.option(/^GPT Lab 5 Codex/).click();
+      if (picked) {
+        await home.getByRole('button', { name: /^GPT Lab 5 Codex/ }).click();
+      } else {
+        await home.getByRole('button', { name: 'Pi', exact: true }).click();
+        await lab.option(/^Codex/).click();
+        await home.getByRole('button', { name: /^(Default model|Choose a model)$/ }).click();
+        await lab.option(/^GPT Lab 5 Codex/).click();
+        picked = true;
+      }
       const ramp = page.getByRole('radiogroup', { name: 'Reasoning', exact: true });
       await expect(ramp).toBeVisible();
       await expect(ramp.getByRole('radio').first()).toHaveCSS('border-top-left-radius', radius);
