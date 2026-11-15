@@ -966,6 +966,26 @@ impl Coordinator {
         Ok(requests)
     }
 
+    /// Releases the reservation of every task a transition cancelled while it
+    /// was leased, as `cancel_run` clears the leases it cancels. Only a ready
+    /// task may hold a lease in a stored run (`validate_run_data`), but the
+    /// fail-fast of a failed task (`complete_task_transition`),
+    /// `reject_ready_task`, `reconcile_uncertain_task` and a failed pinned
+    /// step cancel every ready task, including one leased by another executor.
+    /// The cancelling transition already advanced the task and run revisions,
+    /// so this changes nothing else.
+    ///
+    /// Opt-in for a host that holds several reservations of one run at once
+    /// (kernel protocol 2 calls it before it returns a state). Protocol 1 and
+    /// native Desktop do not call it, so their transitions are unchanged.
+    pub fn release_cancelled_leases(run: &mut Run) {
+        for task in &mut run.tasks {
+            if task.status == TaskStatus::Cancelled {
+                task.lease_id = None;
+            }
+        }
+    }
+
     /// Whether `restore` would change this run: it holds a lease or a
     /// running execution other than a dispatched sub-pipeline step.
     pub fn needs_restore(run: &Run) -> bool {

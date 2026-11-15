@@ -2163,3 +2163,11 @@ See [the decision](adr/075-feed-markdown.md).
 **Consequences:** a Pi branch shows the earlier messages and the person carries on, as on the other two agents. Pi keeps a full copy of the history per branch. Verified on Pi 1.4.0 with hand-built sessions and no model turn.
 
 See [the decision](adr/079-pi-native-branches.md).
+
+## ADR-059 — Shared graph compiler and kernel extension boundary
+
+Stage 0 defines the portable-document compiler and its compatibility vectors.
+Stage 5A adds opt-in protocol 2, shared admission, frozen location bindings and
+typed host intents while preserving the default protocol 1. Actual cloud
+execution and its runtime authority remain the server integration stage.
+See [the decision](adr/059-graph-kernel-v2.md).

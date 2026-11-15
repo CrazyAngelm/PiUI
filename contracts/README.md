@@ -495,3 +495,16 @@ is not part of the workspace event stream, so the chat lists again.
 # Chat links v1
 
 `chat-link-v1.ts` is the route `chat_open_link_v1` with arguments `{ request: { url, language? } }` and the result `{ opened }` (ADR-075). The WebView supplies the address, so the host never opens it on that say-so: it parses it again, accepts only `http` and `https` with a host, no user name or password, at most 2048 bytes and no whitespace or control character, refuses safe mode, and asks the person in a native dialog that shows the exact address. Only Yes opens it (`opened: true`); No answers `opened: false`. One dialog is open at a time. `language` (`en` or `ru`) only picks the wording of the dialog. Errors are `{ code }` with `INVALID_LINK`, `SAFE_MODE`, `BUSY` and `OPEN_FAILED`; unknown request fields are rejected. `OPEN_FAILED` also covers a launcher that exits with a failure (checked off the UI thread, on Linux `xdg-open`), so the page copies the address; `opened: false` only ever means the person answered No.
+
+# Graph compiler and kernel protocol 2 (ADR-059)
+
+`nano-graph-kernel-v2.ts` defines the pure portable-document compiler and the
+opt-in protocol 2 dispatcher over the existing coordinator. Versions 1-4
+continue through the editor importer into v5; the Rust compiler reads v5 only.
+Compilation grants no authority. `validate` and `create` share the definition
+refusal matrix; a trusted host freezes the owner/capability binding and persists
+typed intents before executing effects. The binary's default protocol 1 remains
+compatible; a protocol 2 host explicitly passes `--with-protocol-2`. Desktop
+delegates agent-request admission to the shared pure function with its existing
+error mapping. Server execution support is a separate integration stage. See
+ADR-059 and `fixtures/unified-shell/graph/kernel-v2/` for the boundary and proof.

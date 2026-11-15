@@ -1,0 +1,150 @@
+{
+  "request": {
+    "protocol": 2,
+    "requestId": "fixture-refusal-cloud",
+    "command": {
+      "type": "create",
+      "runId": "run",
+      "definition": {
+        "profiles": [
+          {
+            "id": "worker",
+            "name": "Worker",
+            "harness": "hermes",
+            "model": "native",
+            "permissionMode": "native",
+            "instructions": "Fixture instructions\u2028remain one JSON line",
+            "toolPolicy": {
+              "rules": []
+            },
+            "allowedSpawnProfileIds": []
+          }
+        ],
+        "team": {
+          "id": "team",
+          "name": "Team",
+          "members": [
+            {
+              "id": "member",
+              "profileId": "worker"
+            },
+            {
+              "id": "peer",
+              "profileId": "worker"
+            }
+          ],
+          "sendEdges": [
+            {
+              "fromMemberId": "member",
+              "toMemberId": "peer"
+            }
+          ],
+          "observeEdges": [],
+          "orchestratorMemberId": "member"
+        },
+        "pipeline": {
+          "id": "pipeline",
+          "name": "Two tasks",
+          "steps": [
+            {
+              "id": "a",
+              "name": "First",
+              "assignedMemberId": "host",
+              "instructions": "First task",
+              "dependencyStepIds": [],
+              "resultFields": [
+                {
+                  "name": "approved",
+                  "kind": "boolean"
+                }
+              ],
+              "executor": {
+                "type": "script",
+                "runtime": "node",
+                "source": "process.stdout.write(\"{}\")",
+                "timeoutSeconds": 1
+              }
+            },
+            {
+              "id": "b",
+              "name": "Second",
+              "assignedMemberId": "member",
+              "instructions": "Second task",
+              "dependencyStepIds": [
+                "a"
+              ],
+              "inputBindings": [
+                {
+                  "sourceStepId": "a",
+                  "field": "approved",
+                  "name": "verdict"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "binding": {
+        "owner": {
+          "location": {
+            "kind": "cloud",
+            "accountId": "account",
+            "workspaceId": "workspace",
+            "profileId": "profile"
+          },
+          "scopeId": "workspace"
+        },
+        "executors": {
+          "agent": true,
+          "llm": false,
+          "script": false,
+          "plugin": false,
+          "pipeline": false
+        },
+        "profileCapabilities": {
+          "worker": {
+            "permissionModes": [
+              "native"
+            ],
+            "nativeEnforcedTools": [],
+            "coordinatorEnforcedTools": [],
+            "agentOperations": {
+              "roster": false,
+              "send": false,
+              "observe": false,
+              "spawn": false
+            }
+          }
+        }
+      },
+      "inputs": {},
+      "usePinnedData": false
+    }
+  },
+  "response": {
+    "protocol": 2,
+    "requestId": "fixture-refusal-cloud",
+    "status": "error",
+    "error": {
+      "code": "admissionRefused",
+      "message": "The bound location or adapters cannot run every part of this graph.",
+      "refusals": [
+        {
+          "code": "unsupportedExecutor",
+          "subject": {
+            "kind": "step",
+            "id": "a"
+          }
+        },
+        {
+          "code": "unsupportedCapability",
+          "subject": {
+            "kind": "sendEdge",
+            "fromMemberId": "member",
+            "toMemberId": "peer"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -7,6 +7,13 @@
 
 #![forbid(unsafe_code)]
 
+mod admission;
+pub use admission::{
+    AdmissionRefusal, AdmissionRefusalCode, AdmissionSubject, AgentRequestAdmission,
+    AgentRequestDisposition, AgentRequestError, AgentToolOperation, AgentToolRequest,
+    ExecutorSupport, ReachableMember, admit_agent_request, agent_request_actor,
+    check_agent_request, definition_refusals,
+};
 mod compile;
 pub use compile::{
     COMPILED_SYSTEM_FILE_VERSION, CompileError, CompileIdentity, CompileRefusal,
@@ -67,6 +74,8 @@ pub use validation::{
     validate_history_reference, validate_profile_capabilities,
 };
 
+#[cfg(test)]
+mod admission_tests;
 #[cfg(test)]
 mod compile_tests;
 #[cfg(test)]

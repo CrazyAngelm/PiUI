@@ -26,6 +26,59 @@ fn cancelling_one_task_preserves_independent_work() {
     assert_eq!(run.status(), RunStatus::Running);
 }
 
+/// The opt-in release kernel protocol 2 applies after a transition that
+/// cancelled a task another executor had leased.
+#[test]
+fn a_cancelled_reservation_is_released_only_on_request() {
+    let mut definition = snapshot();
+    definition.pipeline.steps[1].dependency_step_ids.clear();
+    let mut run = Coordinator::new_run("parallel", definition).unwrap();
+    let launch = Coordinator::dispatch_next(
+        &mut run,
+        0,
+        NativeExecutionReference {
+            id: "build-native".into(),
+        },
+    )
+    .unwrap()
+    .unwrap();
+    let revision = run.revision();
+    Coordinator::lease_next_task(&mut run, revision, "review-lease".into())
+        .unwrap()
+        .unwrap();
+    // A ready task keeps its reservation.
+    let leased = run.clone();
+    Coordinator::release_cancelled_leases(&mut run);
+    assert_eq!(run, leased);
+    let revision = run.revision();
+    Coordinator::complete_task(
+        &mut run,
+        revision,
+        "build",
+        launch.task_revision,
+        "build-native",
+        CompletionOutcome::Failed {
+            failure: FailureRecord::new("build-failed"),
+        },
+    )
+    .unwrap();
+    // The unchanged fail-fast cancels the leased task with its lease, which a
+    // stored run cannot hold.
+    assert_eq!(
+        (run.tasks[1].status, run.tasks[1].lease_id.as_deref()),
+        (TaskStatus::Cancelled, Some("review-lease"))
+    );
+    assert!(deserialize_run(&serialize_run(&run).unwrap()).is_err());
+    let (revision, task_revision) = (run.revision(), run.tasks[1].revision);
+    Coordinator::release_cancelled_leases(&mut run);
+    assert_eq!(run.tasks[1].lease_id, None);
+    assert_eq!(
+        (run.revision(), run.tasks[1].revision, run.status()),
+        (revision, task_revision, RunStatus::Failed)
+    );
+    assert_eq!(deserialize_run(&serialize_run(&run).unwrap()).unwrap(), run);
+}
+
 fn finish_checked(run: &mut Run, text: &str, execution: &str) {
     let revision = run.revision();
     let launch = Coordinator::dispatch_next(

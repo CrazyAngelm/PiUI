@@ -4,9 +4,16 @@
 //! persist a transaction, dispatch a model turn, or stop a process. The trusted
 //! host owns those operations. In particular, an emitted effect is a proposal
 //! to persist atomically with the returned snapshot before any native action.
+//!
+//! Protocol 1 (this module and [`wire`]) is unchanged, and [`serve`] still
+//! speaks only protocol 1. Protocol 2 ([`v2`]) exists only for a host that
+//! asks for it: [`serve_with_protocol_2`] (the executable's
+//! `--with-protocol-2` argument) answers each frame by the protocol it names
+//! ([`handle_any_frame`]).
 
 #![forbid(unsafe_code)]
 
+pub mod v2;
 pub mod wire;
 
 use std::io::{self, BufRead, Write};
@@ -73,10 +80,87 @@ fn failure(request_id: Option<String>, code: ErrorCode) -> Response {
     }
 }
 
+/// A response encoded exactly as the protocol that handled the frame.
+pub enum AnyResponse {
+    V1(Response),
+    V2(v2::wire::Response),
+}
+
+impl serde::Serialize for AnyResponse {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::V1(response) => response.serialize(serializer),
+            Self::V2(response) => response.serialize(serializer),
+        }
+    }
+}
+
+/// Explicit dispatch: only one JSON object whose single `protocol` member is
+/// the integer 2 reaches protocol 2. Every other frame (another number, a
+/// repeated member, an array, a value that is not JSON) is handled by
+/// protocol 1 exactly as before, so a protocol 1 host sees no change.
+pub fn handle_any_frame(bytes: &[u8]) -> AnyResponse {
+    if object_protocol(bytes) == Some(u64::from(v2::wire::PROTOCOL)) {
+        AnyResponse::V2(v2::handle_frame(bytes))
+    } else {
+        AnyResponse::V1(handle_frame(bytes))
+    }
+}
+
+/// The `protocol` of a frame that is one JSON object with exactly one such
+/// member holding an unsigned integer; other members are skipped unread.
+fn object_protocol(bytes: &[u8]) -> Option<u64> {
+    use serde::de::{Deserializer as _, IgnoredAny, MapAccess, Visitor};
+
+    struct Protocol;
+
+    impl<'de> Visitor<'de> for Protocol {
+        type Value = Option<u64>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a JSON object")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            let mut protocol = None;
+            let mut members = 0_usize;
+            while let Some(key) = map.next_key::<String>()? {
+                if key == "protocol" {
+                    members += 1;
+                    protocol = map.next_value::<serde_json::Value>()?.as_u64();
+                } else {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+            Ok(protocol.filter(|_| members == 1))
+        }
+    }
+
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let protocol = deserializer.deserialize_map(Protocol).ok()?;
+    deserializer.end().ok()?;
+    protocol
+}
+
 /// LF-only framing. Unicode line separators inside JSON strings are data.
 /// No private-pipe budget is invented here: the host enforces its own admission
 /// and transport bounds. EOF without a final LF is an invalid complete frame.
+/// Every frame is protocol 1, exactly as before protocol 2 existed.
 pub fn serve(input: &mut impl BufRead, output: &mut impl Write) -> io::Result<()> {
+    serve_frames(input, output, |frame| AnyResponse::V1(handle_frame(frame)))
+}
+
+/// [`serve`] for a host that also speaks protocol 2: each frame is answered by
+/// the protocol it names ([`handle_any_frame`]), with the same framing.
+pub fn serve_with_protocol_2(input: &mut impl BufRead, output: &mut impl Write) -> io::Result<()> {
+    serve_frames(input, output, handle_any_frame)
+}
+
+fn serve_frames(
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+    handle: impl Fn(&[u8]) -> AnyResponse,
+) -> io::Result<()> {
     let mut frame = Vec::new();
     loop {
         frame.clear();
@@ -84,9 +168,9 @@ pub fn serve(input: &mut impl BufRead, output: &mut impl Write) -> io::Result<()
             return Ok(());
         }
         let response = if frame.last() == Some(&b'\n') {
-            handle_frame(&frame)
+            handle(&frame)
         } else {
-            failure(None, ErrorCode::InvalidRequest)
+            AnyResponse::V1(failure(None, ErrorCode::InvalidRequest))
         };
         serde_json::to_writer(&mut *output, &response).map_err(io::Error::other)?;
         output.write_all(b"\n")?;

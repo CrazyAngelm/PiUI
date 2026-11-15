@@ -1,6 +1,6 @@
 # ADR-059 — Graph kernel v2: the portable document compiler boundary
 
-Status: Proposed by Stage 0 of the unified-shell plan, 2026-11-15; accepted when the operator commits the stage.
+Status: Compiler accepted in Stage 0, 2026-11-15. The Stage 5A extension below is accepted with its reviewed milestone commit.
 
 A system graph is written once, as a portable system document
 (`piui-system`), and runs on different hosts: Desktop's native host and the
@@ -117,8 +117,8 @@ compiler of the document existed to anchor them.
    - workspace checks and revisions of the save;
    - the run snapshot's profiles;
    - run inputs.
-7. **Protocol 1 is unchanged.** No protocol 2 command, location binding or
-   admission matrix is defined here.
+7. **Protocol 1 is unchanged.** Stage 0 defined no protocol 2 command, location
+   binding or admission matrix; the Stage 5A extension below adds them.
 
 ## Evidence
 
@@ -261,21 +261,42 @@ support checks, `validate_profile_capabilities` and `validate_definition`.
     children, approvals delivered to people, and files;
   - persistence and the outbox;
   - workspace checks and revisions;
-  - capability admission per location and adapter;
+  - proof of actual capabilities and current authority per location and adapter;
   - the list of pipelines that names resolve against;
   - run inputs from the request;
   - provider credentials.
 - The editor keeps `compileGraph` until Stage 5A decides whether Desktop
   import and save call the compiler. The vectors then check both.
 
-## Unresolved
+## Stage 5A extension
 
-- Protocol 2 commands and dispatch. Does the kernel accept documents or
-  definitions? Which commands replace `create`, and how are effects leased?
-- Admission and the refusal matrix per location. Which capabilities each
-  location admits, and which refusal codes the matrix exposes.
-- Location bindings (ADR-057). How a run or a step names the location that
-  executes it, and what a definition may carry about it.
+The compiler remains unchanged. Protocol 2 now wraps it and the existing
+deterministic coordinator; Desktop delegates its agent-request admission to
+the shared pure function with the same public error dispositions. A host opts
+in using `--with-protocol-2`; default protocol 1 remains byte-compatible.
+
+`validate` and `create` use the same pure definition refusal matrix over
+host-proven capabilities and executor support. `create` freezes a location/
+owner binding with the run. Subsequent commands recheck the stored binding,
+definition admission and revisions, returning typed effects for atomic host
+persistence. The host retains authentication, current authority checks,
+history verification, runtime effects and the outbox. The private binding is
+trusted persisted host data, not a MAC or a credential supplied by a browser.
+
+Protocol 2 adds host executors, coordinator tool admission and nested-run
+transitions without a second scheduler or model loop. Its explicit refusals
+and differences from the native caller are recorded in
+[KERNEL_V2_RESULT.md](../nano-unified-shell/KERNEL_V2_RESULT.md). Source and
+Windows/Linux process artifacts are available; importing and proving the
+binary in the pinned server image remains Stage 5B. The original Stage 0
+evidence above remains historical and is not relabelled as process evidence.
+
+## Remaining integration
+
+- Each real host must prove which capabilities/executors it offers before
+  binding the shared matrix; schema validity is not runtime support.
+- The shared editor/import/save integration remains Stage 5C. Native Desktop
+  does not yet adopt protocol 2's stricter preflight for unused authority.
 - Sub-pipelines on the server: which launch commands a cloud name resolves
   against, and with which identity.
 - Kernel rollout: the protocol 2 binary, its provenance manifest and the

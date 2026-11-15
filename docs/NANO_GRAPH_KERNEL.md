@@ -1,4 +1,4 @@
-# Nano graph kernel protocol v1
+# Nano graph kernel protocols
 
 The `piui-graph-kernel` executable is a private, stateless adapter around
 `piui-orchestration`. It is not an HTTP service, native agent bridge, provider
@@ -8,6 +8,11 @@ Wire types: [nano-graph-kernel-v1.ts](../contracts/nano-graph-kernel-v1.ts).
 Rust decoder: `crates/piui-graph-kernel/src/wire.rs`.
 The executable request fixture is
 [nano-graph-kernel-v1.json](../contracts/fixtures/nano-graph-kernel-v1.json).
+
+Protocol 1 remains the default. A host that supports protocol 2 starts the
+executable with `--with-protocol-2`; it can then use both protocols. The sections
+below describe protocol 1, followed by the protocol 2 extension. Installing a
+new binary alone does not opt a server into the new execution surface.
 
 ## Transport and persistence
 
@@ -98,8 +103,9 @@ acknowledgement must keep that pending external outcome durable and visible.
 | Credentials, model inference, tools, files, runtime processes, tenant authorization | Never implemented here |
 
 Unsupported graphs remain valid portable drafts. The host displays the refusal;
-it must not remove unsupported nodes or flatten them into team work items. A
-future protocol may add the missing admission/commands with its own evidence.
+it must not remove unsupported nodes or flatten them into team work items.
+Protocol 2 adds these commands behind explicit host admission; protocol 1
+retains the refusals above.
 
 Program routers are pure coordinator calculations. Human approval still gates
 their selected branches; their declared `selectedBranchIds` text-list can be
@@ -165,3 +171,46 @@ an existing build cache; it is never the artifact destination. The stage's norma
 unit tests and independent reviews remain required in addition to this probe.
 
 Host result selection uses the pure `projectResult` command (state, verified text, fields) and `projected` effect. It calls core `project_result`, leaves the snapshot unchanged, and rejects missing/duplicate selections as invalidRequest. It never reads history or turns browser text into a verified reference.
+
+## Protocol 2: shared admission and host intents
+
+The typed wire is [nano-graph-kernel-v2.ts](../contracts/nano-graph-kernel-v2.ts)
+and the decoder/dispatcher is `crates/piui-graph-kernel/src/v2/`. Only an object
+with exactly one `protocol` member equal to 2 selects this dispatcher in the
+opt-in launch mode. Other frames retain the protocol 1 response. Both modes
+use the same LF framing and fixed, non-echoing errors.
+
+`compile` maps the portable v5 document without starting work. `validate`
+returns the same definition refusal list that `create` applies, without
+allocating a run. The shared `definition_refusals` matrix compares the definition
+with host-proven adapter capabilities and the executors available at that
+location. Unsupported executors, required capabilities and delegation are
+explicit refusals; unsupported graph content remains in the saved draft.
+
+`create` freezes a binding containing the authenticated owner, execution
+location, supported executors, per-profile capabilities and ancestry. Commands
+then carry `state: {snapshot, binding, expectedRunRevision, owner}`. The kernel
+rechecks the stored pair, owner, admission and revision before a transition.
+The binding is trusted host state, not a signed credential or a browser-supplied
+permission grant. The host must authenticate the owner independently, preserve
+the snapshot/binding pair and pause work when its real authority is revoked.
+Editing that trusted pair to add permissions is outside the kernel's threat
+boundary; kernel validation is not a substitute for host access control.
+
+The extension covers host-step leases/completion, coordinator roster/send/
+observe/spawn admission and child-pipeline creation/completion alongside native
+task transitions. Every output is a typed intent. A parent dispatch and its child
+state must be persisted in one host transaction before starting the child.
+Native results still come from verified native history. Unknown effects remain
+uncertain until reconciliation or an explicit retry; a protocol downgrade must
+pause an incompatible run rather than reinterpret its state as protocol 1.
+
+The host owns runtime processes, scripts/plugins, approvals, history reads,
+transactional persistence, effect execution and current authorization. Merely
+offering a kernel command does not prove that a host implements its executor.
+
+Source/native manifests retain `protocol: 1` for old importers and also name
+`protocols: [1, 2]`. `uncommittedFiles`, when present, makes candidate provenance
+explicit. `package.mjs build --out <existing-absolute-directory>` can preserve
+the package outside the checkout. Process probes exercise both launch modes,
+protocol 1 replay, protocol 2 creation/admission and persisted-owner round trips.

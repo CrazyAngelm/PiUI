@@ -25,14 +25,16 @@ use crate::state::HostState;
 use chrono::{DateTime, Utc};
 use piui_orchestration::HostStepLease;
 use piui_orchestration::{
-    AgentProfile, AgentRequestKind, AuthenticatedSender, CompletionOutcome, ControlledSpawnLease,
-    Coordinator, CoordinatorError, FailureRecord, Harness, LaunchCommandReference, LaunchRequest,
-    MAX_TRIGGER_CHAIN_DEPTH, MessageIntent, NativeBridgeCapabilities, NativeExecutionReference,
-    NativeHistoryReference, PipelineDefinition, Run, RunDefinitionSnapshot, RunStatus, RunTrigger,
-    RunTriggerEvent, ScriptCompletion, ScriptLease, TaskRecord, TaskStatus, TeamDefinition,
-    UncertainResolution, UncertaintyIdentity, authorize_coordinator_tool, authorize_observe,
-    authorize_send, validate_profile_capabilities,
+    AgentProfile, AgentRequestDisposition, AgentRequestError, CompletionOutcome,
+    ControlledSpawnLease, Coordinator, CoordinatorError, FailureRecord, LaunchCommandReference,
+    LaunchRequest, MAX_TRIGGER_CHAIN_DEPTH, NativeBridgeCapabilities, NativeExecutionReference,
+    PipelineDefinition, Run, RunDefinitionSnapshot, RunStatus, RunTrigger, RunTriggerEvent,
+    ScriptCompletion, ScriptLease, TaskRecord, TaskStatus, TeamDefinition, UncertainResolution,
+    UncertaintyIdentity, admit_agent_request, check_agent_request, validate_profile_capabilities,
 };
+/// Coordinator tool calls are admitted by the shared pure boundary; these
+/// names stay the host's API for the scheduler and the managed agent bridge.
+pub use piui_orchestration::{AgentRequestAdmission, AgentToolOperation, AgentToolRequest};
 use piui_orchestration::{RunInputError, resolve_run_inputs, validate_pipeline_declarations};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -1089,313 +1091,38 @@ impl OrchestrationApiState {
             .map_err(Into::into)
     }
 
+    /// Admits one coordinator tool call of a running managed agent with the
+    /// shared pure admission (`piui_orchestration::admit_agent_request`):
+    /// identity, adapter offer, tool policy, routes, same-or-less spawn grants
+    /// and the durable request record are decided from the frozen run.
+    ///
+    /// `capabilities` are the calling agent's adapter capabilities. Desktop
+    /// (orchestration v6) also admits a controlled spawn only when that
+    /// adapter supports the spawned profile; the scheduler validates the
+    /// spawned profile's own adapter again at launch.
     pub fn handle_agent_request(
         &self,
         context: ManagedAgentContext,
         request: AgentToolRequest,
         capabilities: &NativeBridgeCapabilities,
     ) -> Result<AgentRequestAdmission, OrchestrationApiError> {
-        if request.request_id.trim().is_empty() {
-            return Err(OrchestrationApiError::invalid());
-        }
-        match request.operation {
-            AgentToolOperation::Roster => {
-                if !capabilities.agent_operations.roster {
-                    return Err(OrchestrationApiError::denied());
+        check_agent_request(&request, capabilities)
+            .map_err(|error| OrchestrationApiError::from(agent_request_store_error(&error)))?;
+        let controlled_spawn = matches!(request.operation, AgentToolOperation::Spawn { .. });
+        self.store
+            .transact(|workspaces| {
+                let run = mutable_run(workspaces, &context.workspace_id, &context.run_id)?;
+                let admission =
+                    admit_agent_request(run, &context.workspace_session_id, request, capabilities)
+                        .map_err(|error| agent_request_store_error(&error))?;
+                if controlled_spawn && let AgentRequestAdmission::Spawn { lease } = &admission {
+                    // A refusal discards the staged admission and its record.
+                    validate_profile_capabilities(&lease.profile, capabilities)
+                        .map_err(|_| StoreError::Invalid)?;
                 }
-                self.store
-                    .transact(|workspaces| {
-                        let run = mutable_run(workspaces, &context.workspace_id, &context.run_id)?;
-                        let actor_member_id =
-                            derive_actor_member_id(run, &context.workspace_session_id)
-                                .map_err(|_| StoreError::Denied)?;
-                        authorize_coordinator_tool(
-                            run.definition(),
-                            &actor_member_id,
-                            "orchestration.roster",
-                        )
-                        .map_err(|_| StoreError::Denied)?;
-                        record_agent_request(
-                            run,
-                            &request.request_id,
-                            &context.workspace_session_id,
-                            &actor_member_id,
-                            AgentRequestKind::Roster,
-                        )?;
-                        Ok(AgentRequestAdmission::Roster {
-                            members: reachable_members(run, &actor_member_id),
-                            spawn_profiles: run
-                                .definition()
-                                .team
-                                .members
-                                .iter()
-                                .find(|m| m.id == actor_member_id)
-                                .and_then(|m| {
-                                    run.definition()
-                                        .profiles
-                                        .iter()
-                                        .find(|p| p.id == m.profile_id)
-                                })
-                                .map(|actor| {
-                                    run.definition()
-                                        .profiles
-                                        .iter()
-                                        .filter(|p| actor.allowed_spawn_profile_ids.contains(&p.id))
-                                        .map(|profile| {
-                                            let mut profile = profile.clone();
-                                            if let Some(input) =
-                                                run.definition().pipeline.steps.iter().find_map(
-                                                    |step| {
-                                                        run.definition()
-                                                            .team
-                                                            .members
-                                                            .iter()
-                                                            .find(|member| {
-                                                                member.id == step.assigned_member_id
-                                                                    && member.profile_id
-                                                                        == profile.id
-                                                            })
-                                                            .and(step.input_instructions.clone())
-                                                    },
-                                                )
-                                            {
-                                                profile.input_instructions = Some(input);
-                                            }
-                                            profile
-                                        })
-                                        .collect()
-                                })
-                                .unwrap_or_default(),
-                        })
-                    })
-                    .map_err(Into::into)
-            }
-            AgentToolOperation::Observe { target_member_id } => {
-                if !capabilities.agent_operations.observe {
-                    return Err(OrchestrationApiError::denied());
-                }
-                self.store
-                    .transact(|workspaces| {
-                        let run = mutable_run(workspaces, &context.workspace_id, &context.run_id)?;
-                        let actor_member_id =
-                            derive_actor_member_id(run, &context.workspace_session_id)
-                                .map_err(|_| StoreError::Denied)?;
-                        authorize_coordinator_tool(
-                            run.definition(),
-                            &actor_member_id,
-                            "orchestration.observe",
-                        )
-                        .map_err(|_| StoreError::Denied)?;
-                        authorize_observe(
-                            &run.definition().team,
-                            &actor_member_id,
-                            &target_member_id,
-                        )
-                        .map_err(|_| StoreError::Denied)?;
-                        record_agent_request(
-                            run,
-                            &request.request_id,
-                            &context.workspace_session_id,
-                            &actor_member_id,
-                            AgentRequestKind::Observe {
-                                target_member_id: target_member_id.clone(),
-                            },
-                        )?;
-                        Ok(AgentRequestAdmission::Observe {
-                            member_id: target_member_id.clone(),
-                            history_references: history_references_for_member(
-                                run,
-                                &target_member_id,
-                            ),
-                        })
-                    })
-                    .map_err(Into::into)
-            }
-            AgentToolOperation::Send {
-                recipient_member_id,
-                body,
-            } => {
-                if !capabilities.agent_operations.send {
-                    return Err(OrchestrationApiError::denied());
-                }
-                self.store
-                    .transact(|workspaces| {
-                        let run = mutable_run(workspaces, &context.workspace_id, &context.run_id)?;
-                        let actor_member_id =
-                            derive_actor_member_id(run, &context.workspace_session_id)
-                                .map_err(|_| StoreError::Denied)?;
-                        authorize_coordinator_tool(
-                            run.definition(),
-                            &actor_member_id,
-                            "orchestration.send",
-                        )
-                        .map_err(|_| StoreError::Denied)?;
-                        authorize_send(
-                            &run.definition().team,
-                            &actor_member_id,
-                            &recipient_member_id,
-                        )
-                        .map_err(|_| StoreError::Denied)?;
-                        record_agent_request(
-                            run,
-                            &request.request_id,
-                            &context.workspace_session_id,
-                            &actor_member_id,
-                            AgentRequestKind::Send {
-                                recipient_member_id: recipient_member_id.clone(),
-                            },
-                        )?;
-                        if let Some(existing) = run
-                            .messages()
-                            .iter()
-                            .find(|message| message.id() == request.request_id)
-                        {
-                            if existing.sender_member_id() == actor_member_id
-                                && existing.recipient_member_id() == recipient_member_id
-                                && existing.body() == body
-                            {
-                                return Ok(AgentRequestAdmission::Send {
-                                    message_id: request.request_id,
-                                    recipient_member_id,
-                                    body,
-                                    already_delivered: existing.status()
-                                        == piui_orchestration::MessageStatus::Delivered,
-                                });
-                            }
-                            return Err(StoreError::Conflict);
-                        }
-                        let revision = run.revision();
-                        Coordinator::accept_message(
-                            run,
-                            revision,
-                            &AuthenticatedSender {
-                                member_id: actor_member_id,
-                            },
-                            MessageIntent {
-                                id: request.request_id.clone(),
-                                recipient_member_id: recipient_member_id.clone(),
-                                body: body.clone(),
-                            },
-                        )
-                        .map_err(|error| match error {
-                            CoordinatorError::Authorization(_) => StoreError::Denied,
-                            CoordinatorError::RevisionConflict { .. } => StoreError::Conflict,
-                            _ => StoreError::Invalid,
-                        })?;
-                        Ok(AgentRequestAdmission::Send {
-                            message_id: request.request_id,
-                            recipient_member_id,
-                            body,
-                            already_delivered: false,
-                        })
-                    })
-                    .map_err(Into::into)
-            }
-            AgentToolOperation::SpawnAgent {
-                profile_id,
-                name,
-                instructions,
-            } => {
-                if !capabilities.agent_operations.spawn {
-                    return Err(OrchestrationApiError::denied());
-                }
-                self.store
-                    .transact(|workspaces| {
-                        let run = mutable_run(workspaces, &context.workspace_id, &context.run_id)?;
-                        let actor = derive_actor_member_id(run, &context.workspace_session_id)
-                            .map_err(|_| StoreError::Denied)?;
-                        authorize_coordinator_tool(run.definition(), &actor, "orchestration.spawn")
-                            .map_err(|_| StoreError::Denied)?;
-                        let first_admission = record_agent_request(
-                            run,
-                            &request.request_id,
-                            &context.workspace_session_id,
-                            &actor,
-                            AgentRequestKind::SpawnAgent {
-                                profile_id: profile_id.clone(),
-                                name: name.clone(),
-                                instructions: instructions.clone(),
-                            },
-                        )?;
-                        let step_id = if first_admission {
-                            Coordinator::add_spawned_agent(
-                                run,
-                                &actor,
-                                &request.request_id,
-                                &profile_id,
-                                &name,
-                                &instructions,
-                            )
-                            .map_err(|_| StoreError::Denied)?
-                        } else {
-                            format!("agent-{}", request.request_id)
-                        };
-                        if let Some(committed) = committed_spawn(run, &step_id) {
-                            return Ok(committed);
-                        }
-                        let lease = Coordinator::lease_controlled_spawn(
-                            run,
-                            run.revision(),
-                            &actor,
-                            &step_id,
-                            request.request_id,
-                        )
-                        .map_err(|_| StoreError::Conflict)?;
-                        Ok(AgentRequestAdmission::Spawn { lease })
-                    })
-                    .map_err(Into::into)
-            }
-            AgentToolOperation::Spawn { step_id } => {
-                if !capabilities.agent_operations.spawn {
-                    return Err(OrchestrationApiError::denied());
-                }
-                self.store
-                    .transact(|workspaces| {
-                        let run = mutable_run(workspaces, &context.workspace_id, &context.run_id)?;
-                        let actor_member_id =
-                            derive_actor_member_id(run, &context.workspace_session_id)
-                                .map_err(|_| StoreError::Denied)?;
-                        authorize_coordinator_tool(
-                            run.definition(),
-                            &actor_member_id,
-                            "orchestration.spawn",
-                        )
-                        .map_err(|_| StoreError::Denied)?;
-                        let first_admission = record_agent_request(
-                            run,
-                            &request.request_id,
-                            &context.workspace_session_id,
-                            &actor_member_id,
-                            AgentRequestKind::Spawn {
-                                step_id: step_id.clone(),
-                            },
-                        )?;
-                        if !first_admission && let Some(committed) = committed_spawn(run, &step_id)
-                        {
-                            return Ok(committed);
-                        }
-                        let revision = run.revision();
-                        let lease = Coordinator::lease_controlled_spawn(
-                            run,
-                            revision,
-                            &actor_member_id,
-                            &step_id,
-                            request.request_id,
-                        )
-                        .map_err(|error| match error {
-                            CoordinatorError::Authorization(_) => StoreError::Denied,
-                            CoordinatorError::RevisionConflict { .. }
-                            | CoordinatorError::LeaseConflict { .. } => StoreError::Conflict,
-                            CoordinatorError::UnknownTask { .. } => StoreError::NotFound,
-                            _ => StoreError::Invalid,
-                        })?;
-                        validate_profile_capabilities(&lease.profile, capabilities)
-                            .map_err(|_| StoreError::Invalid)?;
-                        Ok(AgentRequestAdmission::Spawn { lease })
-                    })
-                    .map_err(Into::into)
-            }
-        }
+                Ok(admission)
+            })
+            .map_err(Into::into)
     }
 
     pub fn commit_launch_lease(
@@ -1644,75 +1371,6 @@ pub struct ManagedAgentContext {
     pub workspace_id: String,
     pub run_id: String,
     pub workspace_session_id: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AgentToolRequest {
-    pub request_id: String,
-    pub operation: AgentToolOperation,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-pub enum AgentToolOperation {
-    Roster,
-    Send {
-        recipient_member_id: String,
-        body: String,
-    },
-    Observe {
-        target_member_id: String,
-    },
-    Spawn {
-        step_id: String,
-    },
-    SpawnAgent {
-        profile_id: String,
-        name: String,
-        instructions: String,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReachableMember {
-    pub member_id: String,
-    pub profile_id: String,
-    pub harness: Harness,
-    pub can_send: bool,
-    pub can_observe: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(clippy::large_enum_variant)]
-pub enum AgentRequestAdmission {
-    Roster {
-        members: Vec<ReachableMember>,
-        spawn_profiles: Vec<AgentProfile>,
-    },
-    Send {
-        message_id: String,
-        recipient_member_id: String,
-        body: String,
-        already_delivered: bool,
-    },
-    Observe {
-        member_id: String,
-        history_references: Vec<NativeHistoryReference>,
-    },
-    Spawn {
-        lease: ControlledSpawnLease,
-    },
-    SpawnCommitted {
-        step_id: String,
-        member_id: String,
-        workspace_session_id: String,
-    },
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -3288,43 +2946,14 @@ pub async fn orchestration_retry_uncertain_task_v6(
     Ok(run)
 }
 
-fn record_agent_request(
-    run: &mut Run,
-    request_id: &str,
-    actor_workspace_session_id: &str,
-    actor_member_id: &str,
-    operation: AgentRequestKind,
-) -> Result<bool, StoreError> {
-    let revision = run.revision();
-    Coordinator::record_agent_request(
-        run,
-        revision,
-        request_id.to_owned(),
-        actor_workspace_session_id.to_owned(),
-        actor_member_id.to_owned(),
-        operation,
-    )
-    .map_err(|error| match error {
-        CoordinatorError::AgentRequestConflict { .. }
-        | CoordinatorError::RevisionConflict { .. } => StoreError::Conflict,
-        _ => StoreError::Invalid,
-    })
-}
-
-fn committed_spawn(run: &Run, step_id: &str) -> Option<AgentRequestAdmission> {
-    let step = run
-        .definition()
-        .pipeline
-        .steps
-        .iter()
-        .find(|step| step.id == step_id)?;
-    let task = run.tasks().iter().find(|task| task.step_id() == step_id)?;
-    let execution = task.execution()?;
-    Some(AgentRequestAdmission::SpawnCommitted {
-        step_id: step_id.to_owned(),
-        member_id: step.assigned_member_id.clone(),
-        workspace_session_id: execution.id.clone(),
-    })
+/// Desktop's command contract for a refused coordinator tool call.
+fn agent_request_store_error(error: &AgentRequestError) -> StoreError {
+    match error.disposition() {
+        AgentRequestDisposition::Invalid => StoreError::Invalid,
+        AgentRequestDisposition::Denied => StoreError::Denied,
+        AgentRequestDisposition::Conflict => StoreError::Conflict,
+        AgentRequestDisposition::NotFound => StoreError::NotFound,
+    }
 }
 
 fn create_run_in(
@@ -3621,98 +3250,6 @@ fn retry_uncertain_in(
     Ok(run.clone())
 }
 
-fn derive_actor_member_id(
-    run: &Run,
-    workspace_session_id: &str,
-) -> Result<String, OrchestrationApiError> {
-    let task = run
-        .tasks()
-        .iter()
-        .find(|task| {
-            task.status() == TaskStatus::Running
-                && task
-                    .execution()
-                    .is_some_and(|execution| execution.id == workspace_session_id)
-        })
-        .ok_or_else(OrchestrationApiError::denied)?;
-    let step = run
-        .definition()
-        .pipeline
-        .steps
-        .iter()
-        .find(|step| step.id == task.step_id())
-        .ok_or_else(OrchestrationApiError::denied)?;
-    Ok(step.assigned_member_id.clone())
-}
-
-fn reachable_members(run: &Run, actor_member_id: &str) -> Vec<ReachableMember> {
-    let mut members: Vec<_> = run
-        .definition()
-        .team
-        .members
-        .iter()
-        .filter_map(|member| {
-            let can_send =
-                authorize_send(&run.definition().team, actor_member_id, &member.id).is_ok();
-            let can_observe =
-                authorize_observe(&run.definition().team, actor_member_id, &member.id).is_ok();
-            if !can_send && !can_observe {
-                return None;
-            }
-            let profile = run
-                .definition()
-                .profiles
-                .iter()
-                .find(|profile| profile.id == member.profile_id)?;
-            Some(ReachableMember {
-                member_id: member.id.clone(),
-                profile_id: profile.id.clone(),
-                harness: profile.harness,
-                can_send,
-                can_observe,
-            })
-        })
-        .collect();
-    members.sort_by(|left, right| left.member_id.cmp(&right.member_id));
-    members
-}
-
-fn history_references_for_member(run: &Run, member_id: &str) -> Vec<NativeHistoryReference> {
-    let step_ids: Vec<&str> = run
-        .definition()
-        .pipeline
-        .steps
-        .iter()
-        .filter(|step| step.assigned_member_id == member_id)
-        .map(|step| step.id.as_str())
-        .collect();
-    let mut references = Vec::new();
-    for task in run
-        .tasks()
-        .iter()
-        .filter(|task| step_ids.contains(&task.step_id()))
-    {
-        if let Some(reference) = task.result_reference() {
-            references.push(reference.clone());
-        } else if let Some(execution) = task.execution() {
-            references.push(NativeHistoryReference {
-                fields: Vec::new(),
-
-                session_id: execution.id.clone(),
-                block_id: None,
-                content_hash: None,
-            });
-        }
-    }
-    references.sort_by(|left, right| {
-        left.session_id
-            .cmp(&right.session_id)
-            .then(left.block_id.cmp(&right.block_id))
-    });
-    references.dedup();
-    references
-}
-
 /// A running run with unleased ready work and nothing that crossed the native
 /// boundary (no running, uncertain or leased task). A running sub-pipeline
 /// step (v6.7) waits for its durable child run and does not hold back the
@@ -3882,6 +3419,98 @@ mod tests {
                 .len(),
             2
         );
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Desktop keeps its orchestration v6 admission of a controlled spawn: the
+    /// calling agent's adapter must support the spawned profile, and a refusal
+    /// records nothing. Kernel protocol 2 checks the spawned profile's own
+    /// frozen capabilities instead.
+    #[test]
+    fn controlled_spawn_target_must_be_launchable_by_the_calling_adapter() {
+        use super::*;
+        let root = std::env::temp_dir().join(format!("piui-spawn-target-{}", uuid::Uuid::new_v4()));
+        let state = OrchestrationApiState::open(&root).unwrap();
+        let profile = |id: &str, mode: &str, spawns: &[&str]| {
+            serde_json::json!({"id":id,"name":id,"harness":"codex","model":"native",
+                "permissionMode":mode,"instructions":"","toolPolicy":{"rules":[]},
+                "allowedSpawnProfileIds":spawns})
+        };
+        let definition: RunDefinitionSnapshot = serde_json::from_value(serde_json::json!({
+            "profiles":[profile("lead","full-access",&["reviewer"]), profile("reviewer","read-only",&[])],
+            "team":{"id":"team","name":"Team","members":[{"id":"lead","profileId":"lead"},
+                {"id":"reviewer","profileId":"reviewer"}],"sendEdges":[],"observeEdges":[],
+                "orchestratorMemberId":"lead"},
+            "pipeline":{"id":"pipeline","name":"Pipeline","steps":[
+                {"id":"work","name":"Work","assignedMemberId":"lead","instructions":"Work","dependencyStepIds":[]},
+                {"id":"review","name":"Review","assignedMemberId":"reviewer","instructions":"Review",
+                 "executionMode":"callable","dependencyStepIds":[]}]}
+        }))
+        .unwrap();
+        let mut run = Coordinator::new_run("run", definition).unwrap();
+        Coordinator::dispatch_next(
+            &mut run,
+            0,
+            NativeExecutionReference {
+                id: "lead-session".into(),
+            },
+        )
+        .unwrap();
+        state
+            .store
+            .transact(|workspaces| {
+                let mut workspace = WorkspaceOrchestration::empty("project".into());
+                workspace.runs.push(run);
+                workspaces.push(workspace);
+                Ok(())
+            })
+            .unwrap();
+        let capabilities = |modes: &[&str]| -> NativeBridgeCapabilities {
+            serde_json::from_value(serde_json::json!({
+                "permissionModes":modes,"nativeEnforcedTools":[],"coordinatorEnforcedTools":[],
+                "agentOperations":{"roster":true,"send":true,"observe":true,"spawn":true}
+            }))
+            .unwrap()
+        };
+        let context = ManagedAgentContext {
+            workspace_id: "project".into(),
+            run_id: "run".into(),
+            workspace_session_id: "lead-session".into(),
+        };
+        let spawn = AgentToolRequest {
+            request_id: "spawn-review".into(),
+            operation: AgentToolOperation::Spawn {
+                step_id: "review".into(),
+            },
+        };
+        let before = state.get_run("project", "run").unwrap().unwrap();
+        // The lead's full-access adapter does not support the read-only reviewer.
+        let refusal = state
+            .handle_agent_request(
+                context.clone(),
+                spawn.clone(),
+                &capabilities(&["full-access"]),
+            )
+            .unwrap_err();
+        assert_eq!(refusal.code, "invalid");
+        assert_eq!(state.get_run("project", "run").unwrap().unwrap(), before);
+        let both = capabilities(&["full-access", "read-only"]);
+        let AgentRequestAdmission::Spawn { lease } = state
+            .handle_agent_request(context.clone(), spawn.clone(), &both)
+            .unwrap()
+        else {
+            panic!("expected lease");
+        };
+        assert_eq!(
+            (lease.step_id.as_str(), lease.lease_id.as_str()),
+            ("review", "spawn-review")
+        );
+        // The same request identity replays the same durable lease.
+        assert!(matches!(
+            state.handle_agent_request(context, spawn, &both).unwrap(),
+            AgentRequestAdmission::Spawn { lease: replayed } if replayed == lease
+        ));
         drop(state);
         std::fs::remove_dir_all(root).unwrap();
     }
