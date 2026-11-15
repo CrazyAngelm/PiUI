@@ -124,8 +124,9 @@ export function gateText(view: GateView, language: GateLanguage): GateText {
       return { title: words.versions, detail: words.versionsDetail, reconnect: true };
     case 'unsupported':
       return { title: words.unsupported, detail: words.unsupportedDetail, reconnect: false };
-    case 'disconnected':
-      switch (view.reason) {
+    case 'disconnected': {
+      const reason = view.reason;
+      switch (reason) {
         case 'kicked':
           return { title: words.kicked, detail: undefined, reconnect: true };
         case 'disabled':
@@ -147,10 +148,11 @@ export function gateText(view: GateView, language: GateLanguage): GateText {
         case 'replaced':
           return { title: words.lost, detail: undefined, reconnect: true };
         default: {
-          const unreachable: never = view.reason;
+          const unreachable: never = reason;
           return unreachable;
         }
       }
+    }
     default: {
       const unreachable: never = view;
       return unreachable;
