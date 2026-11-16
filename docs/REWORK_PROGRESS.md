@@ -912,6 +912,17 @@ Branch `feat/workbench-1116`. Decisions: ADR-064 to ADR-071.
   and the template helpers in one chunk right after mount, with a plain chip
   in the picker's place until then. The first screen is 549988 raw and 153839
   gzip bytes. If that chunk cannot load, new chats talk directly.
+- **Browser suite after the merge.** The first full UI Lab run found three
+  defects, all fixed. `/btw` left its command in the source composer: the
+  pane beside mounted that composer again from the saved draft. Link chat
+  threw after a successful link, because it read the chosen chat after that
+  chat had left the candidates. The tab strip failed the tablist rule of
+  axe on every chat screen: the menu trigger was a tab stop and the close
+  button a child of the tablist. The chat area also mounted every chat again
+  whenever a pane opened or closed; it now draws the panes as one flat list
+  keyed by pane (ADR-068). Six tests were wrong rather than the code: a
+  number format, the new Hide sidebar tab stop, a locator that also matched
+  a row's Options button, and three workbench assertions.
 - **Test infrastructure.** The full `vitest run` hung on
   `remoteMode.test.ts`: a mock factory waited for a module that imported the
   mocked transport. The avatar contract checks moved to

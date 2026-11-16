@@ -125,7 +125,7 @@ test.describe('split panes', () => {
     await lab.open();
     await openChats(lab, [LISBON, CACHE, LIFETIMES]);
     await openFromTab(lab, LISBON, 'Open to the right');
-    await openFromTab(lab, LIFETIMES, 'Open below');
+    await openFromTab(lab, CACHE, 'Open below');
     for (const title of [LISBON, CACHE, LIFETIMES]) await expect(pane(lab, title)).toBeVisible();
     await expect(lab.page.getByRole('button', { name: 'Close pane' })).toHaveCount(3);
   });
@@ -155,10 +155,11 @@ test.describe('split panes', () => {
     await openFromTab(lab, LISBON, 'Open to the right');
     await expect(tab(lab, LISBON)).toHaveAttribute('aria-selected', 'true');
 
-    await pane(lab, CACHE).getByRole('heading', { name: CACHE }).click();
+    await pane(lab, CACHE).getByRole('heading', { level: 1, name: CACHE }).click();
     await expect(tab(lab, CACHE)).toHaveAttribute('aria-selected', 'true');
     await expect(tab(lab, LISBON)).toHaveAttribute('aria-selected', 'false');
-    await expect(tab(lab, LISBON)).toHaveAttribute('data-shown', '');
+    // The mark of a chat that is on screen but not selected is drawn on the tab's wrapper.
+    await expect(tab(lab, LISBON).locator('..')).toHaveAttribute('data-shown', '');
   });
 
   test('F6 moves to the next pane', async ({ lab, page }) => {
