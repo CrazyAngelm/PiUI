@@ -142,9 +142,13 @@ pub(crate) enum SidekickOperation {
         #[serde(default)]
         wait_seconds: Option<u64>,
     },
+    // `wait`, `steer`, `stop` and `report` name their round by `roundId` or
+    // by the `briefId` that owns it (never both); the broker resolves it.
     Wait {
         #[serde(default)]
         round_id: Option<String>,
+        #[serde(default)]
+        brief_id: Option<String>,
         #[serde(default)]
         wait_seconds: Option<u64>,
     },
@@ -158,11 +162,17 @@ pub(crate) enum SidekickOperation {
         wait_seconds: Option<u64>,
     },
     Steer {
-        round_id: String,
+        #[serde(default)]
+        round_id: Option<String>,
+        #[serde(default)]
+        brief_id: Option<String>,
         text: String,
     },
     Stop {
-        round_id: String,
+        #[serde(default)]
+        round_id: Option<String>,
+        #[serde(default)]
+        brief_id: Option<String>,
         #[serde(default)]
         take_over: Option<bool>,
     },
@@ -175,7 +185,10 @@ pub(crate) enum SidekickOperation {
         fingerprint: Option<String>,
     },
     Report {
-        round_id: String,
+        #[serde(default)]
+        round_id: Option<String>,
+        #[serde(default)]
+        brief_id: Option<String>,
         #[serde(default)]
         page: Option<u32>,
     },
@@ -341,6 +354,9 @@ pub(crate) struct FactCommand {
 pub(crate) struct FactCommands {
     pub source: FactSource,
     pub items: Vec<FactCommand>,
+    /// Commands the cap left out (additive within v1; absent when none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omitted: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

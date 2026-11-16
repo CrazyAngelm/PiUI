@@ -305,7 +305,7 @@ export async function createPiAdapter(config, emit) {
     const input = args && typeof args === "object" && !Array.isArray(args) ? args : {};
     const text = (value) => (typeof value === "string" && value.trim() ? value : "");
     let detail;
-    if (toolName === "bash") detail = text(input.command);
+    if (["bash", "powershell", "nano_powershell"].includes(toolName)) detail = text(input.command);
     else if (["read", "edit", "write", "ls"].includes(toolName)) detail = text(input.path);
     else if (toolName === "grep" || toolName === "find") {
       detail = [text(input.pattern), text(input.path)].filter(Boolean).join(" in ");

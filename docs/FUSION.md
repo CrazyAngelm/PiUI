@@ -65,6 +65,23 @@ The sidekick session is created on the first brief and reopened through the
 ordinary open path (which applies the same policy again). Reset retires it;
 the next brief starts a fresh one.
 
+### Lead behaviour (2026-11-16)
+
+Real sessions showed leads that rarely delegated: they guessed tool fields,
+polled `wait` dozens of times and ran builds and tests themselves. The lead
+instructions now make the sidekick the **default executor** (not a subagent):
+implementation, multi-file or mechanical edits, builds, test runs,
+reproductions, log digging, fixes and verification go to it; the lead keeps
+understanding, exploration that shapes the plan, design, review, commits and
+releases. A report is closed or corrected and the next brief sent in the same
+turn, so the sidekick does not sit idle. When the option allows the lead's
+native subagents, they are for work outside the sidekick's scope or read-only
+research and review, and only while the sidekick is busy. Waiting is done once;
+a result that says the report will be delivered ends the turn. The text still
+names no harness or model, so the lead's cached prefix does not depend on the
+sidekick. The idle nudges and the `wait` selectors above support this at the
+point of use.
+
 ## The `sidekick` tool
 
 Operations (`SidekickToolOperationV1`; the bridge validates key sets and
@@ -73,15 +90,31 @@ limits before the host sees them):
 | op | Does |
 |---|---|
 | `brief` | Starts a new brief and its first round. Needs `title`, `goal`, at least one `doneWhen`; optional `context`, `scope`, `leaveAlone`, `constraints`, `verify`, `stopIf`. Waits a portion unless `wait:false`. |
-| `wait` | Collects a round's report, or returns progress when the portion ends. Without `roundId`: the open round, else the newest uncollected report. |
+| `wait` | Collects a round's report, or returns progress when the portion ends. Optional `roundId` or `briefId` (not both), optional `waitSeconds`. `briefId`: that brief's open round, else its newest round. Neither: the open round, else the newest uncollected report. |
 | `status` | The sidekick's state, the active round, recent briefs and the briefing policy. |
 | `message` | A correction round for a brief (same sidekick session only). |
-| `steer` | Text into the running round (native steer). |
-| `stop` | Stop barrier for a round; `takeOver:true` marks the brief stopped and counts a take-over. |
+| `steer` | Text into the running round (native steer). Needs `text`; optional `roundId` or `briefId` (not both). `briefId`: that brief's open round only (`round-finished` naming the brief when it has none). Neither: the open round, else `unknown-round` ("No sidekick round is running."). |
+| `stop` | Stop barrier for a round; `takeOver:true` marks the brief stopped and counts a take-over. Optional `roundId` or `briefId` (not both), resolved like `steer`. |
 | `diff` | Working-tree diff of the chat folder in pages of about 16 KiB, with a fingerprint of the file list and each shown file's content; a changed tree answers `diff-stale`. A file larger than a page continues on the next pages (cut at line ends, always on character boundaries); a file list or file diff cut upstream is named in the page header. |
-| `report` | The full report body in 8 KiB pages (while PiUI holds it). |
+| `report` | The full report body in 8 KiB pages (while PiUI holds it). Optional `roundId` or `briefId` (not both), optional `page`. `briefId`: that brief's newest finished round (a running correction does not hide the report before it), else its open or newest round. Neither: the newest round that has a report, else `unknown-round`. |
 | `close` | Closes a brief as accepted, rejected or superseded. |
 | `reset` | Stops any open round and retires the sidekick session. |
+
+`roundId` and `briefId` are additive optional fields of Fusion v1 (no version
+bump; a call with only `roundId` behaves as before). Both together are refused
+with `unknown-round` ("Give roundId or briefId, not both."), the code the host
+also uses for any other invalid non-`brief` call; an unknown `briefId` is
+`unknown-brief`. The host resolves the selector under the journal lock with
+the same helpers as a plain `roundId`, so call identity and replay (the
+operation hash is computed by the bridge over the operation as sent) are
+unchanged.
+
+A wait portion (`waitSeconds`, default 240, at most 540) counts from the
+moment the call reaches the host, not from the end of the sidekick's start:
+`brief` and `message` start the round first and wait only for what is left of
+the portion, so a slow start cannot push the call past the lead's tool
+transport limit. A portion that is already used up answers with progress at
+once, like `waitSeconds: 0`.
 
 Refusals are ordinary results (`ok:false`, a kebab-case code, a message and
 the text the model reads). Codes: `invalid-brief`, `brief-active`,
@@ -123,11 +156,41 @@ body (sidekick text, untrusted):
   | …
 facts (PiUI, not from the sidekick):
   files: src/a.rs +3 -1 (against HEAD; may include earlier uncommitted edits)
-  commands: unknown (no typed receipts from this harness)
+  command: cargo test -p app -> ok
+  command: pnpm check -> failed
   approvals requested: 0
   tokens: unknown
 [/PiUI sidekick report b1 r1]
 ```
+
+- `command:` lines are the shell commands the sidekick ran in this round, read
+  by the host from the sidekick's own session (Codex `commandExecution`,
+  Claude Code `Bash`/`PowerShell`, Pi `bash`, Nano `bash` or Windows
+  `nano_powershell`). The round is bounded by its own prompt header, not by
+  an answer: it runs from after the last user block that starts with
+  `[PiUI brief <id> · round <id>]` (or the `[PiUI feedback on brief …]`
+  header of a correction) up to the next round's header. A steer has no
+  header and stays inside its round, so a round that was stopped without an
+  answer is never attributed to the next one. The result is the block's
+  status only (`ok` settled, `failed`, `unknown` for an interrupted or still
+  running one); blocks carry no exit code, so none is shown, and a command's
+  output never enters a fact. A command is sidekick-authored text under the
+  PiUI heading, so envelope markers in it are broken the same way as in the
+  body (`[PiUI` becomes `[ PiUI`, `[/PiUI` becomes `[/ PiUI`) and obvious
+  inline secrets are replaced by `***` before the cut: the value after
+  `api_key`, `token`, `secret`, `password`, `passwd` or `authorization` (as
+  `name=value`, `name: value` or `--name value`, also in a query string) and
+  the token after `Bearer`. This is conservative, not a guarantee. Each
+  command is one line of at most 200 characters. At most 30 are listed:
+  every failed command stays, the newest successful ones fill the rest, in
+  execution order, and `commands: N more not shown` counts the others.
+  `commands: none run` means the transcript holds no shell block for the
+  round. When the transcript does not hold the round's header (a reloaded
+  history that dropped it, an unreadable transcript, a read that takes more
+  than 3 s) or the harness has no shell blocks, the line is `commands:
+  unknown (no typed receipts from this harness)`. In the wire contract the
+  fact is `source: native` with an optional `omitted` count (additive within
+  `fusion/1`).
 
 - `STATUS` is the strict first non-empty line `STATUS: done|partial|blocked|needs-decision`;
   anything else is `unknown`. `OPEN` and `DEVIATIONS` are kept outside the
@@ -137,6 +200,21 @@ facts (PiUI, not from the sidekick):
 - The body is cut at 8 KiB; `report` pages the full text.
 - After two rounds of one brief that did not end `done`, the result adds a
   hint to dictate the change or take over.
+- Idle nudges (texts the lead reads, outside the envelope): a report handed to
+  the lead as a tool result of `brief`, `message`, `wait` or `stop` is
+  followed by "The sidekick is idle now. Close or correct this brief, then
+  send the next brief before doing the work yourself." It is not added to
+  `report` pages, to an "already delivered" repeat, to a `stop` with
+  `takeOver` or to a result that carries the take-over hint. The follow-up of
+  an idle lead ends with "The sidekick finished and is idle. Review the report,
+  close or correct the brief, and send the next brief before doing the work
+  yourself."
+- The progress text of a still-running round depends on the pair's
+  auto-delivery: on, it says the lead may end its turn because the report is
+  delivered when it is ready; off, it says to plan or review meanwhile and
+  call `wait` again to collect the report. The `brief-active` / `round-active`
+  refusal gives the matching advice (on: wait once, steer, stop or end the
+  turn; off: wait to collect it, or steer or stop it).
 
 ### Delivery
 
@@ -274,6 +352,10 @@ reset holds admission, a withdrawal survives reconcile, a repeated stop of an
 uncertain round, no write-back after deletion, pending records on start and
 without auto-delivery, cancelled lead stop, folding keeps pending reports,
 evicted call identities, large-file diff pages, reloaded block ids for
-reconcile and queued reports, ambiguous tool handoff). Bridge: `runner.test.mjs`,
+reconcile and queued reports, ambiguous tool handoff; lead behaviour
+2026-11-16: `wait`/`steer`/`stop`/`report` by `briefId` or without an id and
+both ids refused, the wait portion counted from call entry, idle nudges and
+the auto-delivery-dependent texts, lead instructions name no harness).
+Bridge: `runner.test.mjs`,
 `claude.test.mjs`, `codex.test.mjs`. UI Lab: `host-api/lab/fusionFake.test.ts`.
 Real paid pairs (phase Ф1.5) are started by the person; none ran here.

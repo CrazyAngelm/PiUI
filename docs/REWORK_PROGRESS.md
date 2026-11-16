@@ -962,6 +962,60 @@ Branch `feat/workbench-1116`. Decisions: ADR-064 to ADR-071.
   with master; no Rust or bridge file changed since. The native WebView2
   harness was not run for this section.
 
+## Fusion lead delegation and large Claude histories — 2026-11-16
+
+- **Finding.** The real Fusion lead sessions (6 pairs, mostly a Fable 5.2
+  lead with a Codex GPT-6.1-Sol sidekick) delegated little. In the largest
+  one the lead briefed 7 tasks (10 rounds, about 2 h 17 min of sidekick
+  work) but also ran 17 native Sonnet subagents and 651 shell commands, about
+  135 of them builds and tests, and sent no brief for the last 25 hours.
+  Causes:
+  - Claude Code defers MCP tools, so the lead often called `sidekick` with
+    guessed fields (`verdict`, `briefId` on `wait`, `steer` or `report`).
+  - Those calls were refused with a generic `invalid-sidekick-operation`
+    that did not say which field was wrong.
+  - Long waits died at Claude Code's 300 s MCP idle abort.
+  - The lead instructions did not say how the sidekick relates to the
+    lead's own subagents, nor that ending the turn while a round runs is
+    correct.
+  - Reports carried no command facts, so a careful lead reran the suites
+    itself.
+  - The person's `leadNativeSubagents` option was on in every pair.
+- **Changes.**
+  - Bridge:
+    - The `sidekick` and `sessions` tools are always loaded
+      (`_meta["anthropic/alwaysLoad"]`).
+    - The session's MCP server has a 600 s per-server idle `timeout`.
+    - Refusals name the offending field and the op's fields.
+    - Claude and Codex leads share one tool description, which lists every
+      op's fields.
+  - Contract: `wait`, `steer`, `stop` and `report` take `roundId` or
+    `briefId` (additive within fusion v1).
+  - Host:
+    - A wait portion counts from the call's entry.
+    - New lead instructions make the sidekick the default executor and say
+      it is not a subagent (text drafted with Fable 5.2).
+    - Idle nudges are added to report results and follow-ups.
+    - The progress text matches auto-delivery.
+    - Reports list the sidekick's shell commands from its own transcript
+      (status only, at most 30, failed ones kept).
+  - Brief queue: deferred. The observed failure was an idle sidekick, not a
+    busy one.
+- **Too-large Claude history.** The bridge refused any Claude Code
+  transcript over 32 MB ("This Claude Code conversation is too large to
+  display here."). It now reads in two passes: an LF-framed skeleton scan,
+  then the newest 32 MiB of the active chain by offset. The 38.5 MB lead
+  history opens in 457 ms with +64 MB RSS, from its first message. Closed
+  chats still use the host projection, which keeps the index's 128 MiB file
+  bound.
+- **Evidence.**
+  - Real provider: one Claude Code 2.1.325 probe
+    (`evidence/fusion-lead-delegation-20261116/`). A silent 330 s MCP call
+    completed with the per-server timeout, and a tool listed with
+    `alwaysLoad` was called without `ToolSearch`.
+  - Synthetic: bridge, Rust Fusion and contract tests.
+  - Not run: a real Fusion pair after the change.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

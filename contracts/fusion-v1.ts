@@ -8,7 +8,8 @@
  *   persistent SIDEKICK session under a frozen membership policy: no board,
  *   no plugin MCP servers, no native subagents, broker-owned turns.
  * - A round is one admitted sidekick turn (a brief, a correction or an
- *   answer). Every round-scoped operation names its `roundId`.
+ *   answer). A round-scoped operation names its round by `roundId` or by the
+ *   `briefId` that owns it (see `SidekickToolOperationV1`).
  * - A report is the sidekick's untrusted final answer plus host facts; the
  *   two are separate fields and the body can never close the envelope.
  * - State is PiUI application data under `fusion-v1/`; nothing is written
@@ -105,15 +106,32 @@ export interface BriefFieldsV1 {
   stopIf?: string[];
 }
 
+/**
+ * `wait`, `steer`, `stop` and `report` name their round with `roundId` or with
+ * the `briefId` that owns it, never both (a call with both is refused:
+ * `unknown-round`, "Give roundId or briefId, not both."). Both are optional.
+ * Both fields are additive in v1; a call with only `roundId` keeps working.
+ *
+ * - `briefId` on `wait` and `report`: the brief's open round, else its newest
+ *   round (`report` prefers the newest finished round, so a running correction
+ *   does not hide the report before it); on `steer` and `stop`: the brief's
+ *   open round only (`round-finished` when it has none).
+ * - Neither id: `wait` takes the open round, else the newest uncollected
+ *   report; `steer` and `stop` take the open round; `report` takes the newest
+ *   round that has a report (`unknown-round` when there is none).
+ *
+ * A wait portion (`waitSeconds`) counts from the moment the call reaches the
+ * host, so a slow sidekick start shortens it instead of adding to it.
+ */
 export type SidekickToolOperationV1 =
   | ({ op: 'brief'; wait?: boolean; waitSeconds?: number } & BriefFieldsV1)
-  | { op: 'wait'; roundId?: string; waitSeconds?: number }
+  | { op: 'wait'; roundId?: string; briefId?: string; waitSeconds?: number }
   | { op: 'status' }
   | { op: 'message'; briefId: string; text: string; wait?: boolean; waitSeconds?: number }
-  | { op: 'steer'; roundId: string; text: string }
-  | { op: 'stop'; roundId: string; takeOver?: boolean }
+  | { op: 'steer'; roundId?: string; briefId?: string; text: string }
+  | { op: 'stop'; roundId?: string; briefId?: string; takeOver?: boolean }
   | { op: 'diff'; paths?: string[]; page?: number; fingerprint?: string }
-  | { op: 'report'; roundId: string; page?: number }
+  | { op: 'report'; roundId?: string; briefId?: string; page?: number }
   | { op: 'close'; briefId: string; outcome: BriefOutcomeV1; note?: string }
   | { op: 'reset'; reason?: string };
 
@@ -177,8 +195,18 @@ export interface SidekickFactsV1 {
   durationMs: number;
   /** Working-tree changes against `HEAD` (may include earlier uncommitted edits). */
   files: { source: FactSourceV1; items: FactFileV1[]; truncated: boolean };
-  /** Native command receipts; `unknown` until an adapter reports typed receipts. */
-  commands: { source: FactSourceV1; items: { command: string; exitCode: number | null; ok: boolean | null }[] };
+  /**
+   * Shell commands the sidekick ran in this round, from its own transcript
+   * (`native`): one line each, status only (`ok` null when unsettled,
+   * `exitCode` null: blocks carry none). At most 30 are kept (every failed
+   * one, then the newest); `omitted` counts the rest. `unknown` for a harness
+   * without shell blocks or when the round cannot be bounded.
+   */
+  commands: {
+    source: FactSourceV1;
+    items: { command: string; exitCode: number | null; ok: boolean | null }[];
+    omitted?: number;
+  };
   approvals: { source: FactSourceV1; requested: number };
   tokens: { source: FactSourceV1; input?: number; output?: number; cacheRead?: number };
 }

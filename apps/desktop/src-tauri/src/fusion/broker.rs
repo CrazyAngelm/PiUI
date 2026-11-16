@@ -9,16 +9,17 @@
 //! without native processes.
 
 use super::logic::{
-    brief_prompt, build_report, check_brief, diff_pages, file_facts, message_prompt, policy_text,
-    preview, progress_text, report_envelope, report_page, truncate_utf8,
+    FOLLOW_UP_NUDGE, IDLE_NUDGE, brief_prompt, build_report, check_brief, command_facts,
+    diff_pages, file_facts, message_prompt, policy_text, preview, progress_text, report_envelope,
+    report_page, shell_blocks_supported, truncate_utf8,
 };
 use super::model::{
     BriefFields, BriefOutcome, BriefState, CORRECTION_HINT_ROUNDS, CallRecord,
-    DEFAULT_WAIT_SECONDS, DeliveryState, DeliveryVia, FUSION_PROTOCOL, FactApprovals, FactSource,
-    FusionBrief, FusionDelivery, FusionDocument, FusionPair, FusionRoleName, FusionRound,
-    FusionSidekickSession, FusionStateV1, FusionStats, MAX_LIVE_BRIEFS, MAX_WAIT_SECONDS,
-    RoundKind, RoundOutcome, RoundState, SidekickErrorCode, SidekickOperation, SidekickProgress,
-    SidekickState,
+    DEFAULT_WAIT_SECONDS, DeliveryState, DeliveryVia, FUSION_PROTOCOL, FactApprovals, FactCommand,
+    FactCommands, FactSource, FusionBrief, FusionDelivery, FusionDocument, FusionPair,
+    FusionRoleName, FusionRound, FusionSidekickSession, FusionStateV1, FusionStats,
+    MAX_LIVE_BRIEFS, MAX_WAIT_SECONDS, RoundKind, RoundOutcome, RoundState, SidekickErrorCode,
+    SidekickOperation, SidekickProgress, SidekickState,
 };
 use super::store::FusionStore;
 use crate::review_api::{ReviewArea, ReviewContentV1, ReviewFileV1};
@@ -109,6 +110,19 @@ pub(crate) trait FusionHost: Send + Sync + 'static {
     fn activity(&self, session_id: String) -> HostFuture<SessionActivity>;
     /// Working-tree changes of the chat's folder (`None`: not a repository).
     fn changes(&self, lead_session_id: String) -> HostFuture<Option<(Vec<ReviewFileV1>, bool)>>;
+    /// The shell commands the sidekick ran in a round, from its own
+    /// transcript: status only, in execution order (`None`: unknown). The
+    /// round is bounded by its own prompt header (`brief_id`, `round_id`); a
+    /// transcript without that header leaves the fact unknown. A host that
+    /// cannot read the transcript keeps the default and the fact stays unknown.
+    fn round_commands(
+        &self,
+        _session_id: String,
+        _brief_id: String,
+        _round_id: String,
+    ) -> HostFuture<Option<Vec<FactCommand>>> {
+        Box::pin(async { None })
+    }
     fn file_view(
         &self,
         lead_session_id: String,
@@ -122,6 +136,9 @@ type Notifier = Arc<dyn Fn(&str, u64) + Send + Sync>;
 /// Time a stop waits for the native turn to end before the round is
 /// `uncertain` (and no second writer may start).
 const STOP_PROOF: Duration = Duration::from_secs(30);
+/// Time a round's finish gives the host to read the sidekick's commands. It
+/// stays well below [`STOP_PROOF`]: the receipt must not eat the stop budget.
+const COMMANDS_READ_LIMIT: Duration = Duration::from_secs(3);
 const POLL: Duration = Duration::from_secs(1);
 const MAX_CACHED_ANSWERS: usize = 256;
 const MAX_CALL_RECORDS: usize = 4000;
@@ -394,6 +411,19 @@ fn error(code: SidekickErrorCode, message: &str) -> ToolError {
     (code, message.to_owned())
 }
 
+/// Puts [`IDLE_NUDGE`] after the report envelope of a tool result that hands
+/// a report over (not inside the envelope, whose format is fixed). A result
+/// without a report is left alone.
+fn append_idle_nudge(value: &mut Value) {
+    if value.get("report").is_none() {
+        return;
+    }
+    if let Some(text) = value.get("text").and_then(Value::as_str) {
+        let nudged = format!("{text}\n{IDLE_NUDGE}");
+        value["text"] = json!(nudged);
+    }
+}
+
 fn find_round<'a>(
     document: &'a mut FusionDocument,
     round_id: &str,
@@ -415,6 +445,116 @@ fn open_round(document: &FusionDocument) -> Option<(&FusionBrief, &FusionRound)>
             .find(|round| round.state.open())
             .map(|round| (brief, round))
     })
+}
+
+/// What a `roundId`/`briefId` selector is resolved for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RoundUse {
+    Wait,
+    Steer,
+    Stop,
+    Report,
+}
+
+fn round_number(round: &FusionRound) -> u64 {
+    round
+        .round_id
+        .strip_prefix('r')
+        .and_then(|number| number.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Resolves the selector of `wait`, `steer`, `stop` and `report` to a round
+/// id: the `roundId` as given, or the round of the `briefId`, or (neither)
+/// the round the operation most plausibly means. Called under the document
+/// lock. Both selectors together are refused. `wait` without a selector keeps
+/// its own default (the open round, else the newest uncollected report) and is
+/// not resolved here.
+fn resolve_round(
+    document: &FusionDocument,
+    usage: RoundUse,
+    round_id: Option<&str>,
+    brief_id: Option<&str>,
+) -> Result<String, ToolError> {
+    match (round_id, brief_id) {
+        (Some(_), Some(_)) => Err(error(
+            SidekickErrorCode::UnknownRound,
+            "Give roundId or briefId, not both.",
+        )),
+        (Some(round_id), None) => Ok(round_id.to_owned()),
+        (None, Some(brief_id)) => {
+            let Some(brief) = document
+                .briefs
+                .iter()
+                .find(|brief| brief.brief_id == brief_id)
+            else {
+                return Err(error(
+                    SidekickErrorCode::UnknownBrief,
+                    "There is no such brief.",
+                ));
+            };
+            let open = brief.rounds.iter().find(|round| round.state.open());
+            let chosen = match usage {
+                RoundUse::Wait => open.or_else(|| brief.rounds.last()),
+                // A running correction does not hide the report before it.
+                RoundUse::Report => brief
+                    .rounds
+                    .iter()
+                    .rev()
+                    .find(|round| round.state == RoundState::Finished && !withdrawn(round))
+                    .or(open)
+                    .or_else(|| brief.rounds.last()),
+                RoundUse::Steer | RoundUse::Stop => {
+                    let Some(round) = open else {
+                        return Err((
+                            SidekickErrorCode::RoundFinished,
+                            format!(
+                                "Brief {brief_id} has no running round: its last round already finished. Use message for a new round."
+                            ),
+                        ));
+                    };
+                    Some(round)
+                }
+            };
+            chosen.map(|round| round.round_id.clone()).ok_or_else(|| {
+                (
+                    SidekickErrorCode::UnknownRound,
+                    format!("Brief {brief_id} has no round."),
+                )
+            })
+        }
+        (None, None) => {
+            let round = match usage {
+                RoundUse::Wait => None,
+                RoundUse::Steer | RoundUse::Stop => open_round(document).map(|(_, round)| round),
+                RoundUse::Report => document
+                    .briefs
+                    .iter()
+                    .flat_map(|brief| &brief.rounds)
+                    .filter(|round| round.state == RoundState::Finished && !withdrawn(round))
+                    .max_by_key(|round| round_number(round)),
+            };
+            round.map(|round| round.round_id.clone()).ok_or_else(|| {
+                error(
+                    SidekickErrorCode::UnknownRound,
+                    match usage {
+                        RoundUse::Report => "No sidekick round has a report yet.",
+                        _ => "No sidekick round is running.",
+                    },
+                )
+            })
+        }
+    }
+}
+
+async fn resolve(
+    slot: &LeadSlot,
+    usage: RoundUse,
+    round_id: Option<String>,
+    brief_id: Option<String>,
+) -> Result<String, ToolError> {
+    let document = slot.document.lock().await;
+    resolve_round(&document, usage, round_id.as_deref(), brief_id.as_deref())
 }
 
 fn current_session(document: &FusionDocument) -> Option<&FusionSidekickSession> {
@@ -967,6 +1107,11 @@ impl FusionBroker {
         slot: &Arc<LeadSlot>,
         operation: SidekickOperation,
     ) -> Result<(Value, Option<String>), ToolError> {
+        // A wait portion counts from the moment the call arrived, so a slow
+        // sidekick start-up shortens the wait instead of adding to it (the
+        // lead's tool transport has an idle limit of its own).
+        let entered = tokio::time::Instant::now();
+        let deadline = |seconds: Option<u64>| entered + Duration::from_secs(wait_seconds(seconds));
         match operation {
             SidekickOperation::Brief {
                 title,
@@ -992,13 +1137,22 @@ impl FusionBroker {
                     verify,
                     stop_if,
                 };
-                self.brief(slot, fields, wait.unwrap_or(true), seconds)
+                self.brief(slot, fields, wait.unwrap_or(true), deadline(seconds))
                     .await
             }
             SidekickOperation::Wait {
                 round_id,
+                brief_id,
                 wait_seconds: seconds,
-            } => self.wait(slot, round_id, wait_seconds(seconds)).await,
+            } => {
+                // Without a selector `wait` picks its own default round.
+                let round_id = if round_id.is_some() || brief_id.is_some() {
+                    Some(resolve(slot, RoundUse::Wait, round_id, brief_id).await?)
+                } else {
+                    None
+                };
+                self.wait(slot, round_id, deadline(seconds)).await
+            }
             SidekickOperation::Status {} => Ok((self.status(slot).await, None)),
             SidekickOperation::Message {
                 brief_id,
@@ -1006,17 +1160,31 @@ impl FusionBroker {
                 wait,
                 wait_seconds: seconds,
             } => {
-                self.message(slot, &brief_id, &text, wait.unwrap_or(true), seconds)
-                    .await
-            }
-            SidekickOperation::Steer { round_id, text } => self
-                .steer(slot, &round_id, text)
+                self.message(
+                    slot,
+                    &brief_id,
+                    &text,
+                    wait.unwrap_or(true),
+                    deadline(seconds),
+                )
                 .await
-                .map(|value| (value, None)),
+            }
+            SidekickOperation::Steer {
+                round_id,
+                brief_id,
+                text,
+            } => {
+                let round_id = resolve(slot, RoundUse::Steer, round_id, brief_id).await?;
+                self.steer(slot, &round_id, text)
+                    .await
+                    .map(|value| (value, None))
+            }
             SidekickOperation::Stop {
                 round_id,
+                brief_id,
                 take_over,
             } => {
+                let round_id = resolve(slot, RoundUse::Stop, round_id, brief_id).await?;
                 self.stop(slot, &round_id, take_over.unwrap_or(false), false)
                     .await
             }
@@ -1028,10 +1196,16 @@ impl FusionBroker {
                 .diff(slot, paths, page.unwrap_or(1), fingerprint)
                 .await
                 .map(|value| (value, None)),
-            SidekickOperation::Report { round_id, page } => self
-                .report(slot, &round_id, page.unwrap_or(1))
-                .await
-                .map(|value| (value, None)),
+            SidekickOperation::Report {
+                round_id,
+                brief_id,
+                page,
+            } => {
+                let round_id = resolve(slot, RoundUse::Report, round_id, brief_id).await?;
+                self.report(slot, &round_id, page.unwrap_or(1))
+                    .await
+                    .map(|value| (value, None))
+            }
             SidekickOperation::Close {
                 brief_id,
                 outcome,
@@ -1052,7 +1226,7 @@ impl FusionBroker {
         slot: &Arc<LeadSlot>,
         fields: BriefFields,
         wait: bool,
-        seconds: Option<u64>,
+        deadline: tokio::time::Instant,
     ) -> Result<(Value, Option<String>), ToolError> {
         let warnings = check_brief(&fields)
             .map_err(|message| error(SidekickErrorCode::InvalidBrief, &message))?;
@@ -1109,7 +1283,7 @@ impl FusionBroker {
             (brief_id, round_id)
         };
         let mut result = if wait {
-            self.collect(slot, &round_id, wait_seconds(seconds)).await?
+            self.collect(slot, &round_id, deadline).await?
         } else {
             (self.progress_result(slot, "brief", &round_id).await, None)
         };
@@ -1187,10 +1361,15 @@ impl FusionBroker {
                     "The sidekick is stopping; wait for it to finish.",
                 )
             } else {
+                let advice = if document.pair.options.auto_deliver {
+                    "Call wait once, steer or stop it, or end your turn: its report is delivered to you when it is ready."
+                } else {
+                    "Call wait to collect it, or steer or stop it."
+                };
                 (
                     SidekickErrorCode::BriefActive,
                     format!(
-                        "The sidekick is still working on brief {} round {}. Use wait, steer or stop.",
+                        "The sidekick is still working on brief {} round {}. {advice}",
                         brief.brief_id, round.round_id
                     ),
                 )
@@ -1335,6 +1514,7 @@ impl FusionBroker {
                         RoundOutcome::Interrupted,
                         0,
                         file_facts(None),
+                        command_facts(None),
                         FactApprovals {
                             source: FactSource::Host,
                             requested: 0,
@@ -1544,6 +1724,39 @@ impl FusionBroker {
         });
     }
 
+    /// The commands fact of a round: the shell commands in the sidekick's own
+    /// transcript between the round's prompt header and the next round's
+    /// (`native`), else `unknown` (a harness without shell blocks, a round
+    /// whose header is not in the transcript, an unreadable or slow
+    /// transcript).
+    async fn round_command_facts(
+        &self,
+        slot: &LeadSlot,
+        round_id: &str,
+        session_id: &str,
+    ) -> FactCommands {
+        let (harness, brief_id) = {
+            let mut document = slot.document.lock().await;
+            let harness = document.pair.sidekick.harness;
+            let brief_id =
+                find_round(&mut document, round_id).map(|(brief, _)| brief.brief_id.clone());
+            (harness, brief_id)
+        };
+        let Some(brief_id) = brief_id.filter(|_| shell_blocks_supported(harness)) else {
+            return command_facts(None);
+        };
+        let read =
+            self.inner
+                .host
+                .round_commands(session_id.to_owned(), brief_id, round_id.to_owned());
+        command_facts(
+            tokio::time::timeout(COMMANDS_READ_LIMIT, read)
+                .await
+                .ok()
+                .flatten(),
+        )
+    }
+
     /// Finishes an open round from the sidekick's last answer. `recovered`:
     /// the round is settled after a restart (reconcile), where block ids may
     /// have changed, so the baseline is also compared by its text hash.
@@ -1557,7 +1770,10 @@ impl FusionBroker {
         recovered: bool,
     ) {
         let answer = self.inner.host.last_answer(session_id.to_owned()).await;
-        let changes = self.inner.host.changes(slot.lead_session_id.clone()).await;
+        let (changes, commands) = tokio::join!(
+            self.inner.host.changes(slot.lead_session_id.clone()),
+            self.round_command_facts(slot, round_id, session_id),
+        );
         let mut document = slot.document.lock().await;
         let auto_deliver = document.pair.options.auto_deliver;
         let Some((brief, index)) = find_round(&mut document, round_id) else {
@@ -1589,6 +1805,7 @@ impl FusionBroker {
             round_outcome,
             elapsed,
             file_facts(changes),
+            commands,
             FactApprovals {
                 source: FactSource::Host,
                 requested: approvals as u64,
@@ -1620,16 +1837,17 @@ impl FusionBroker {
         }
     }
 
-    /// Waits up to `seconds` for a round and hands its report over. The
-    /// waiter registration ends on every path, cancellation included.
+    /// Waits until `deadline` for a round and hands its report over (a
+    /// deadline that has passed answers with the state as it is). The waiter
+    /// registration ends on every path, cancellation included.
     async fn collect(
         &self,
         slot: &Arc<LeadSlot>,
         round_id: &str,
-        seconds: u64,
+        deadline: tokio::time::Instant,
     ) -> Result<(Value, Option<String>), ToolError> {
         let _waiter = Waiter::new(self, slot, round_id);
-        self.collect_inner(slot, round_id, seconds).await
+        self.collect_inner(slot, round_id, deadline).await
     }
 
     /// A report that finished while a waiter was present but that no tool
@@ -1681,9 +1899,8 @@ impl FusionBroker {
         &self,
         slot: &Arc<LeadSlot>,
         round_id: &str,
-        seconds: u64,
+        deadline: tokio::time::Instant,
     ) -> Result<(Value, Option<String>), ToolError> {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
         let mut revisions = slot.revision.subscribe();
         let mut expired = false;
         loop {
@@ -1731,6 +1948,9 @@ impl FusionBroker {
                             "{text}\nhint: {rejected} rounds of this brief did not finish as done. Dictate the exact change, or stop with takeOver and do it yourself."
                         );
                         value["text"] = json!(hint);
+                    } else if claimed {
+                        // The hint above points the other way: it wins.
+                        append_idle_nudge(&mut value);
                     }
                     self.persist(slot, &mut document).await;
                     return Ok((value, claimed.then(|| round_id.to_owned())));
@@ -1847,6 +2067,7 @@ impl FusionBroker {
                 outcome,
                 duration,
                 file_facts(None),
+                command_facts(None),
                 FactApprovals {
                     source: FactSource::Unknown,
                     requested: 0,
@@ -1914,7 +2135,7 @@ impl FusionBroker {
             "ok": true,
             "op": op,
             "roundId": round_id,
-            "text": progress_text(&progress),
+            "text": progress_text(&progress, document.pair.options.auto_deliver),
             "progress": progress,
         })
     }
@@ -1923,7 +2144,7 @@ impl FusionBroker {
         &self,
         slot: &Arc<LeadSlot>,
         round_id: Option<String>,
-        seconds: u64,
+        deadline: tokio::time::Instant,
     ) -> Result<(Value, Option<String>), ToolError> {
         let round_id = match round_id {
             Some(round_id) => round_id,
@@ -1958,7 +2179,7 @@ impl FusionBroker {
                 }
             }
         };
-        self.collect(slot, &round_id, seconds).await
+        self.collect(slot, &round_id, deadline).await
     }
 
     async fn status(&self, slot: &LeadSlot) -> Value {
@@ -2014,7 +2235,7 @@ impl FusionBroker {
         brief_id: &str,
         text: &str,
         wait: bool,
-        seconds: Option<u64>,
+        deadline: tokio::time::Instant,
     ) -> Result<(Value, Option<String>), ToolError> {
         let (round_id, session_id, prompt) = {
             let mut document = slot.document.lock().await;
@@ -2076,7 +2297,7 @@ impl FusionBroker {
         self.start_round(slot, brief_id, &round_id, &session_id, prompt)
             .await?;
         let mut result = if wait {
-            self.collect(slot, &round_id, wait_seconds(seconds)).await?
+            self.collect(slot, &round_id, deadline).await?
         } else {
             (self.progress_result(slot, "message", &round_id).await, None)
         };
@@ -2217,7 +2438,11 @@ impl FusionBroker {
             return Err(stopped_error());
         }
         let claimed = !withdraw_delivery && Self::claim(round);
-        let value = Self::report_result("stop", round, !claimed);
+        let mut value = Self::report_result("stop", round, !claimed);
+        if claimed && !take_over {
+            // After a take-over the lead does the work itself.
+            append_idle_nudge(&mut value);
+        }
         self.persist(slot, &mut document).await;
         Ok((value, claimed.then(|| round_id.to_owned())))
     }
@@ -2611,10 +2836,7 @@ impl FusionBroker {
                     let Some(report) = round.report.as_ref() else {
                         return;
                     };
-                    let text = format!(
-                        "{}\nThe sidekick finished while you were idle. Review the report and continue.",
-                        report_envelope(report, false)
-                    );
+                    let text = format!("{}\n{FOLLOW_UP_NUDGE}", report_envelope(report, false));
                     let previous = round.delivery.clone();
                     put_delivery(
                         round,

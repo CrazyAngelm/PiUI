@@ -108,8 +108,27 @@ export function validateSessionsOperation(operation) {
 
 // Strict `SidekickToolOperationV1` check (contracts/fusion-v1.ts): exact key
 // sets, types, enum values and size caps. The host parses it again.
-export function validateSidekickOperation(operation) {
-  if (!operation || typeof operation !== "object" || Array.isArray(operation) || typeof operation.op !== "string") return false;
+// `wait`, `steer`, `stop` and `report` select a round by `roundId` or by
+// `briefId` (that brief's open round, else its newest), never both.
+const SIDEKICK_USAGE = Object.freeze({
+  brief: "brief needs title (up to 200 characters), goal and doneWhen (a non-empty list); optional: context, scope, leaveAlone, constraints, verify, stopIf (lists of strings), wait, waitSeconds.",
+  wait: "wait takes an optional roundId or briefId (not both) and waitSeconds.",
+  status: "status takes no other fields.",
+  message: "message needs briefId and text; optional: wait, waitSeconds.",
+  steer: "steer needs text; optional: roundId or briefId (not both), else the open round.",
+  stop: "stop takes an optional roundId or briefId (not both), else the open round, and takeOver.",
+  diff: "diff takes optional paths, page and fingerprint.",
+  report: "report takes an optional roundId or briefId (not both), else the newest report, and page.",
+  close: "close needs briefId and outcome (accepted, rejected or superseded); optional: note.",
+  reset: "reset takes an optional reason.",
+});
+
+// Why an operation is invalid, in words the model can act on; `undefined`
+// when it is valid. Only field names from the schema are echoed back.
+export function sidekickOperationProblem(operation) {
+  if (!operation || typeof operation !== "object" || Array.isArray(operation)) return "The input must be an object with `op`.";
+  const ops = Object.keys(SIDEKICK_USAGE);
+  if (typeof operation.op !== "string" || !Object.hasOwn(SIDEKICK_USAGE, operation.op)) return `\`op\` must be one of: ${ops.join(", ")}.`;
   const bytes = (value) => Buffer.byteLength(value, "utf8");
   const filled = (value, maxBytes) => typeof value === "string" && value.trim().length > 0 && bytes(value) <= maxBytes;
   const id = (value) => typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value);
@@ -119,16 +138,17 @@ export function validateSidekickOperation(operation) {
   const flag = (value) => typeof value === "boolean";
   const waitSeconds = (value) => Number.isSafeInteger(value) && value >= 0 && value <= SIDEKICK_LIMITS.waitSeconds;
   const page = (value) => Number.isSafeInteger(value) && value >= 1 && value <= SIDEKICK_LIMITS.page;
+  const text = (value) => filled(value, SIDEKICK_LIMITS.messageBytes);
   const shapes = {
     brief: {
       required: { title: (value) => filled(value, SIDEKICK_LIMITS.title * 4) && value.length <= SIDEKICK_LIMITS.title, goal: field, doneWhen: (value) => list(value, 1) },
       optional: { context: field, scope: list, leaveAlone: list, constraints: list, verify: list, stopIf: list, wait: flag, waitSeconds },
     },
-    wait: { optional: { roundId: id, waitSeconds } },
+    wait: { optional: { roundId: id, briefId: id, waitSeconds } },
     status: {},
-    message: { required: { briefId: id, text: (value) => filled(value, SIDEKICK_LIMITS.messageBytes) }, optional: { wait: flag, waitSeconds } },
-    steer: { required: { roundId: id, text: (value) => filled(value, SIDEKICK_LIMITS.messageBytes) } },
-    stop: { required: { roundId: id }, optional: { takeOver: flag } },
+    message: { required: { briefId: id, text }, optional: { wait: flag, waitSeconds } },
+    steer: { required: { text }, optional: { roundId: id, briefId: id } },
+    stop: { optional: { roundId: id, briefId: id, takeOver: flag } },
     diff: {
       optional: {
         paths: (value) => Array.isArray(value) && value.length <= SIDEKICK_LIMITS.items && value.every((item) => filled(item, SIDEKICK_LIMITS.path)),
@@ -136,19 +156,35 @@ export function validateSidekickOperation(operation) {
         fingerprint: (value) => typeof value === "string" && /^[A-Za-z0-9]{1,128}$/.test(value),
       },
     },
-    report: { required: { roundId: id }, optional: { page } },
+    report: { optional: { roundId: id, briefId: id, page } },
     close: { required: { briefId: id, outcome: (value) => BRIEF_OUTCOMES.has(value) }, optional: { note: (value) => typeof value === "string" && bytes(value) <= SIDEKICK_LIMITS.noteBytes } },
     reset: { optional: { reason: (value) => typeof value === "string" && value.length <= SIDEKICK_LIMITS.reason } },
   };
-  if (!Object.hasOwn(shapes, operation.op)) return false;
+  const usage = SIDEKICK_USAGE[operation.op];
   const required = shapes[operation.op].required ?? {};
   const optional = shapes[operation.op].optional ?? {};
   for (const key of Object.keys(operation)) {
     if (key === "op") continue;
     const check = Object.hasOwn(required, key) ? required[key] : Object.hasOwn(optional, key) ? optional[key] : undefined;
-    if (!check || !check(operation[key])) return false;
+    const plainKey = /^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(key);
+    const name = plainKey ? `\`${key}\`` : "A field";
+    if (!check) return plainKey ? `${name} is not a field of ${operation.op}. ${usage}` : `An unknown field is present. ${usage}`;
+    if (!check(operation[key])) {
+      const hint = key === "waitSeconds" ? ` It is a whole number from 0 to ${SIDEKICK_LIMITS.waitSeconds}.`
+        : key === "page" ? " It is a whole number from 1."
+        : key === "roundId" || key === "briefId" ? " Ids look like r3 or b2."
+        : "";
+      return `${name} has an invalid value.${hint} ${usage}`;
+    }
   }
-  return Object.keys(required).every((key) => Object.hasOwn(operation, key));
+  const missing = Object.keys(required).filter((key) => !Object.hasOwn(operation, key));
+  if (missing.length) return `${operation.op} is missing ${missing.map((key) => `\`${key}\``).join(" and ")}. ${usage}`;
+  if (Object.hasOwn(operation, "roundId") && Object.hasOwn(operation, "briefId")) return `Give roundId or briefId, not both. ${usage}`;
+  return undefined;
+}
+
+export function validateSidekickOperation(operation) {
+  return sidekickOperationProblem(operation) === undefined;
 }
 
 // Canonical JSON (sorted keys) so equal operations hash equally.
@@ -325,7 +361,8 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
   const sidekickRequest = (operation, metadata = {}) => {
     const enabled = Array.isArray(initializeConfig?.hostTools) && initializeConfig.hostTools.includes("sidekick");
     if (!enabled) return Promise.reject(Object.assign(new Error("unsupported"), { bridgeCode: "sidekick-disabled", safeMessage: "The sidekick tool is not enabled for this chat." }));
-    if (!validateSidekickOperation(operation)) return Promise.reject(Object.assign(new Error("invalid"), { bridgeCode: "invalid-sidekick-operation", safeMessage: "The sidekick operation is invalid. Check `op` and its fields." }));
+    const problem = sidekickOperationProblem(operation);
+    if (problem !== undefined) return Promise.reject(Object.assign(new Error("invalid"), { bridgeCode: "invalid-sidekick-operation", safeMessage: `The sidekick operation is invalid. ${problem}` }));
     const seq = ++sidekickSequence;
     const requestId = `piui-sidekick-${epoch}-${seq}`;
     const callRef = typeof metadata?.toolCallId === "string" && metadata.toolCallId.length > 0 && metadata.toolCallId.length <= 128
