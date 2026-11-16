@@ -12,6 +12,7 @@ import {
   runBridge,
   sidekickOperationHash,
   validateBoardOperation,
+  sidekickOperationProblem,
   validateSidekickOperation,
   validateSessionsOperation,
 } from "./runner.mjs";
@@ -488,6 +489,14 @@ test("sidekick operations need exact keys, types, enum values and bounded fields
     { op: "diff", paths: [], page: 1000 },
     { op: "report", roundId: "round-1" },
     { op: "report", roundId: "round-1", page: 3 },
+    // A round is selected by roundId or briefId; without either, the open round.
+    { op: "wait", briefId: "b7", waitSeconds: 200 },
+    { op: "steer", text: "Use the existing helper" },
+    { op: "steer", briefId: "b4", text: "Use the existing helper" },
+    { op: "stop" },
+    { op: "stop", briefId: "b4", takeOver: true },
+    { op: "report" },
+    { op: "report", briefId: "b1", page: 2 },
     { op: "close", briefId: "brief-1", outcome: "accepted" },
     { op: "close", briefId: "brief-1", outcome: "rejected", note: "Wrong approach" },
     { op: "close", briefId: "brief-1", outcome: "superseded", note: "" },
@@ -533,8 +542,10 @@ test("sidekick operations need exact keys, types, enum values and bounded fields
     { op: "message", text: "t" },
     { op: "message", briefId: "b", text: "   " },
     { op: "steer", roundId: "r" },
-    { op: "stop" },
     { op: "stop", roundId: "r", takeOver: "yes" },
+    { op: "wait", roundId: "r1", briefId: "b1" },
+    { op: "steer", roundId: "r1", briefId: "b1", text: "t" },
+    { op: "report", briefId: "has space" },
     { op: "diff", page: 0 },
     { op: "diff", page: 1.5 },
     { op: "diff", page: 1001 },
@@ -545,7 +556,6 @@ test("sidekick operations need exact keys, types, enum values and bounded fields
     { op: "diff", paths: [""] },
     { op: "diff", paths: "src/a.ts" },
     { op: "diff", paths: ["x".repeat(1025)] },
-    { op: "report" },
     { op: "report", roundId: "r", page: 0 },
     // Close outcome and note.
     { op: "close", briefId: "b" },
@@ -556,6 +566,20 @@ test("sidekick operations need exact keys, types, enum values and bounded fields
     { op: "reset", reason: "x".repeat(2001) },
   ];
   for (const operation of invalid) assert.equal(validateSidekickOperation(operation), false, JSON.stringify(operation)?.slice(0, 80));
+});
+
+test("a refused sidekick operation names the field and the op's fields, never a value", () => {
+  assert.equal(sidekickOperationProblem({ op: "close", verdict: "accepted" }),
+    "`verdict` is not a field of close. close needs briefId and outcome (accepted, rejected or superseded); optional: note.");
+  assert.equal(sidekickOperationProblem({ op: "close", briefId: "b1" }),
+    "close is missing `outcome`. close needs briefId and outcome (accepted, rejected or superseded); optional: note.");
+  assert.match(sidekickOperationProblem({ op: "wait", waitSeconds: 600 }), /^`waitSeconds` has an invalid value\. It is a whole number from 0 to 540\./);
+  assert.match(sidekickOperationProblem({ op: "stop", roundId: "r1", briefId: "b1" }), /^Give roundId or briefId, not both\./);
+  assert.match(sidekickOperationProblem({ op: "launch" }), /^`op` must be one of: brief, wait, status/);
+  const secret = sidekickOperationProblem({ op: "steer", text: "t", "token sk-live-123": 1 });
+  assert.match(secret, /^An unknown field is present\. steer needs text/);
+  assert.ok(!secret.includes("sk-live"), "an odd key is not echoed back");
+  assert.equal(sidekickOperationProblem({ op: "steer", briefId: "b4", text: "t" }), undefined);
 });
 
 test("sidekick operation hash is canonical and distinguishes operations", async () => {

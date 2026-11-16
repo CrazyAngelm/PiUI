@@ -20,7 +20,7 @@ use crate::workspace_api::{
 };
 use broker::{FusionBroker, FusionHost, HostFailure, HostFuture, SessionActivity, SidekickLaunch};
 use model::{
-    FUSION_CHANGED_EVENT_V1, FUSION_PROTOCOL, FusionChangedEventV1, FusionCommandV1,
+    FUSION_CHANGED_EVENT_V1, FUSION_PROTOCOL, FactCommand, FusionChangedEventV1, FusionCommandV1,
     FusionResultV1, FusionRoleName,
 };
 use piui_runtime::workspace_runtime::{
@@ -446,6 +446,20 @@ impl FusionHost for TauriFusionHost {
                 approval_ids: host.workspace.pending_approval_ids(&session_id),
                 latest: None,
             }
+        })
+    }
+
+    fn round_commands(
+        &self,
+        session_id: String,
+        brief_id: String,
+        round_id: String,
+    ) -> HostFuture<Option<Vec<FactCommand>>> {
+        let app = self.app.clone();
+        Box::pin(async move {
+            let host = app.state::<HostState>();
+            let snapshot = host.workspace.snapshot(&session_id).await.ok()?;
+            logic::round_command_facts(&snapshot.blocks, &brief_id, &round_id)
         })
     }
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -1026,6 +1026,99 @@ test("one Claude message with several text blocks gets one distinct stable id pe
   } finally { await adapter.dispose(); }
 });
 
+// Long transcripts are streamed, never read whole. The fixtures below are real
+// files of 40 to 52 MB in the temporary Claude config directory, removed by
+// each test as soon as it ends.
+const MEBIBYTE = 1024 * 1024;
+const OMITTED_HISTORY = "Earlier Claude Code history is not shown.";
+const transcriptLines = (nativeId) => {
+  const line = (value) => `${JSON.stringify({ sessionId: nativeId, timestamp: "2026-11-16T10:00:00.000Z", ...value })}\n`;
+  return {
+    user: (uuid, parentUuid, content, extra = {}) => line({ type: "user", uuid, parentUuid, message: { role: "user", content }, ...extra }),
+    answer: (uuid, parentUuid, id, text) => line({ type: "assistant", uuid, parentUuid, message: { id, role: "assistant", content: [{ type: "text", text }] } }),
+    call: (uuid, parentUuid, id, toolUseId) => line({ type: "assistant", uuid, parentUuid, message: { id, role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "Read", input: { file_path: "big.txt" } }] } }),
+    result: (uuid, parentUuid, toolUseId, content) => line({ type: "user", uuid, parentUuid, message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content }] } }),
+  };
+};
+
+test("a Claude transcript over 32 MiB opens with its whole history instead of a too-large notice", async () => {
+  const nativeId = "44444444-2222-4333-8444-555555555555";
+  mkdirSync(projectDir, { recursive: true });
+  const path = join(projectDir, `${nativeId}.jsonl`);
+  const entry = transcriptLines(nativeId);
+  const bulk = "x".repeat(MEBIBYTE);
+  try {
+    // 12 MiB of side-chain entries are off the active chain; 24 MiB of tool
+    // results on it stay inside the 32 MiB raw tail budget.
+    writeFileSync(path, "");
+    for (let index = 1; index <= 12; index += 1) appendFileSync(path, entry.user(`s${index}`, null, bulk, { isSidechain: true }));
+    appendFileSync(path, entry.user("u0", null, "first question"));
+    let parent = "u0";
+    for (let index = 1; index <= 24; index += 1) {
+      appendFileSync(path, entry.call(`a${index}`, parent, `m${index}`, `toolu_bulk${index}`) + entry.result(`r${index}`, `a${index}`, `toolu_bulk${index}`, bulk));
+      parent = `r${index}`;
+    }
+    appendFileSync(path, entry.user("u-last", parent, "last question") + entry.answer("a-last", "u-last", "m-last", "last answer"));
+    assert.ok(statSync(path).size > 32 * MEBIBYTE, "the fixture is over the old 32 MiB limit");
+    const adapter = await createClaudeAdapter(setup({ nativeId, nativePath: path }).config, () => {});
+    try {
+      const snapshot = await adapter.snapshot();
+      const { blocks } = snapshot;
+      assert.deepEqual(snapshotProblems(snapshot), []);
+      assert.deepEqual(blocks.filter((block) => block.kind === "custom"), [], "neither a too-large nor an omitted notice");
+      assert.deepEqual([blocks[0].text, blocks.at(-2).text, blocks.at(-1).text], ["first question", "last question", "last answer"]);
+      const tools = blocks.filter((block) => block.kind === "tool");
+      assert.equal(tools.length, 24);
+      assert.ok(tools.every((block) => block.status === "complete" && block.truncated === true), "each result is bound to its call and bounded");
+    } finally { await adapter.dispose(); }
+  } finally { rmSync(path, { force: true }); }
+});
+
+test("a long Claude chain past the raw tail budget notes the omission once, and still branches from an older message", async () => {
+  const nativeId = "55555555-2222-4333-8444-555555555555";
+  mkdirSync(projectDir, { recursive: true });
+  const path = join(projectDir, `${nativeId}.jsonl`);
+  const entry = transcriptLines(nativeId);
+  try {
+    writeFileSync(path, entry.user("u0", null, "OLDEST question") + entry.answer("a0", "u0", "m0", "old answer")
+      + entry.user("u1", "a0", "MIDDLE question") + entry.answer("a1", "u1", "m1", "middle answer"));
+    const first = await createClaudeAdapter(setup({ nativeId, nativePath: path }).config, () => {});
+    let middle;
+    try { middle = (await first.snapshot()).blocks.find((block) => block.text === "MIDDLE question").id; } finally { await first.dispose(); }
+    // 18 hidden 2 MiB entries (about 38 MB) push the older exchanges past the
+    // 32 MiB raw budget of the displayed tail.
+    const bulk = "y".repeat(2 * MEBIBYTE);
+    let parent = "a1";
+    for (let index = 1; index <= 18; index += 1) {
+      appendFileSync(path, entry.user(`f${index}`, parent, bulk, { isMeta: true }));
+      parent = `f${index}`;
+    }
+    appendFileSync(path, entry.user("u2", parent, "NEWEST question") + entry.answer("a2", "u2", "m2", "newest answer"));
+
+    const adapter = await createClaudeAdapter(setup({ nativeId, nativePath: path }).config, () => {});
+    try {
+      const snapshot = await adapter.snapshot();
+      assert.deepEqual(snapshotProblems(snapshot), []);
+      assert.deepEqual(snapshot.blocks.map((block) => [block.kind, block.text ?? block.safeSummary]), [
+        ["custom", OMITTED_HISTORY], ["user", "NEWEST question"], ["assistant", "newest answer"],
+      ]);
+      assert.equal(snapshot.blocks.filter((block) => block.safeSummary === OMITTED_HISTORY).length, 1);
+    } finally { await adapter.dispose(); }
+
+    // MIDDLE question is older than the displayed tail; its branch point is
+    // found from the skeleton of the whole chain.
+    const prepared = forkSetup({ fork: { nativeId, nativePath: path, beforeBlockId: middle } });
+    const fork = await createClaudeAdapter(prepared.config, () => {});
+    try {
+      const snapshot = await fork.snapshot();
+      const [args] = prepared.starts();
+      assert.deepEqual(snapshot.blocks.map((block) => block.text), ["OLDEST question", "old answer"]);
+      assert.equal(argValue(args, "--resume"), nativeId);
+      assert.equal(argValue(args, "--resume-session-at"), "a0");
+    } finally { await fork.dispose(); }
+  } finally { rmSync(path, { force: true }); }
+});
+
 test("a plugin MCP server joins only this chat's --mcp-config, under Claude Code's own prompts (plugins v2)", async () => {
   const server = { name: "example-tool-cards-issues", command: process.execPath, args: ["--permission", "server.mjs", "--stdio"] };
   const { config, records } = setup({ pluginMcpServers: [server] });
@@ -1369,6 +1462,14 @@ test("an ordinary chat gets the sidekick tool with its own MCP timeout and a dur
     assert.deepEqual(listed.map((tool) => tool.name), ["sidekick"]);
     assert.deepEqual(listed[0].inputSchema.required, ["op"]);
     assert.equal(listed[0].inputSchema.properties.waitSeconds.maximum, 540);
+    assert.deepEqual(listed[0]._meta, { "anthropic/alwaysLoad": true }, "the schema is never deferred behind tool search");
+    assert.equal(server.timeout, 600000, "the per-server idle limit outlasts a wait portion");
+    // Claude and Codex leads read one tool description (the adapters are
+    // concatenated with the runner, so they cannot import a shared module).
+    const codexSource = readFileSync(new URL("./codex.mjs", import.meta.url), "utf8");
+    const codexDescription = /name: "sidekick",\s*description: ("(?:[^"\\]|\\.)*")/.exec(codexSource)?.[1];
+    assert.equal(listed[0].description, codexDescription && JSON.parse(codexDescription));
+    assert.match(listed[0].description, /default executor/);
 
     const status = await rpc({ method: "tools/call", params: { name: "sidekick", arguments: { op: "status" }, _meta: { "claudecode/toolUseId": "toolu_native_1" } } });
     assert.equal(status.result.content[0].text, "Round r1 is working on the login fix.", "the reply is the host's text, not JSON");
