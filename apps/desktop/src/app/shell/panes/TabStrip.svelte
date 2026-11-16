@@ -45,6 +45,13 @@
 
   const tabButtons = (): HTMLElement[] => [...(strip?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])];
 
+  /** The menu asks for a tab stop on its trigger; inside a tablist only the tabs may take focus. */
+  function withoutTabStop(props: Record<string, unknown>): Record<string, unknown> {
+    const rest = { ...props };
+    delete rest.tabindex;
+    return rest;
+  }
+
   function attentionLabel(kind: string | undefined): string {
     return kind === 'decision' ? $t('Needs your decision') : kind === 'failed' ? $t('Failed') : $t('New result');
   }
@@ -194,10 +201,14 @@
           {@const kind = attention.kind(id)}
           <ContextMenu items={menuItems(id)}>
             {#snippet target(props)}
-              <!-- The wrapper only carries the drag and the menu; the tab and its close button are the controls. -->
+              <!--
+                The wrapper only carries the drag and the menu. A tablist may hold tabs only, so the
+                wrapper drops the tab stop the menu asks for and the close button stays a pointer
+                shortcut: a tab is closed from the keyboard with Delete, Ctrl+W or its menu.
+              -->
               <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_static_element_interactions -->
               <div
-                {...props}
+                {...withoutTabStop(props)}
                 class="tab"
                 class:tab--selected={isSelected}
                 class:tab--before={dropIndex === index && draggingTab !== undefined}
@@ -215,6 +226,7 @@
                   class="tab__main"
                   data-tab={id}
                   aria-selected={isSelected}
+                  aria-keyshortcuts="Delete"
                   tabindex={id === tabStop ? 0 : -1}
                   title={session.title}
                   onclick={() => select(id)}
@@ -238,7 +250,7 @@
                     <span class="tab__attention" role="img" aria-label={attentionLabel(kind)}></span>
                   {/if}
                 </button>
-                <button type="button" class="tab__close" tabindex="-1" aria-label={$t('Close tab {0}', [session.title])} onclick={() => closeTab(id)}>
+                <button type="button" class="tab__close" tabindex="-1" aria-hidden="true" aria-label={$t('Close tab {0}', [session.title])} onclick={() => closeTab(id)}>
                   <X size={12} />
                 </button>
               </div>

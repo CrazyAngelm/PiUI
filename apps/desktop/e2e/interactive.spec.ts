@@ -19,7 +19,7 @@ test.describe('interactive answers', () => {
     await page.keyboard.press('End');
     await expect(warning).toBeVisible();
     await widget.getByRole('button', { name: 'Plan for this load', exact: true }).click();
-    await expect(page.locator('.user').filter({ hasText: 'Plan the cache for 5000 requests per second at a 80 % hit rate' })).toBeVisible();
+    await expect(page.locator('.user').filter({ hasText: 'Plan the cache for 5,000 requests per second at a 80 % hit rate' })).toBeVisible();
   });
 
   test('a user fence remains readable code', async ({ lab, page }) => {

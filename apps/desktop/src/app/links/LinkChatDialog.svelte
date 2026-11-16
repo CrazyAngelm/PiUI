@@ -33,10 +33,12 @@
     if (busy || !target || store.safeMode) return;
     busy = true;
     error = '';
-    const result = await sessionLinks.link(sessionId, target.id);
+    // Once linked, the chat leaves the candidates, and `target` with it.
+    const chosen = target;
+    const result = await sessionLinks.link(sessionId, chosen.id);
     busy = false;
     if (result.ok) {
-      toasts.success($t('Linked to {0}', [target.title]));
+      toasts.success($t('Linked to {0}', [chosen.title]));
       onClose();
     } else {
       error = result.error;

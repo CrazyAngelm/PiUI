@@ -409,7 +409,8 @@
     busy = true;
     error = '';
     try {
-      const result = await startBranch(store, snapshot, { at: 'end' }, { ...(question ? { prompt: question } : {}), open: 'beside', translate: $t });
+      // The pane beside mounts this composer again from the saved draft: the command leaves it before that.
+      const result = await startBranch(store, snapshot, { at: 'end' }, { ...(question ? { prompt: question } : {}), open: 'beside', translate: $t, created: () => setText('') });
       if (!result.ok) {
         error = result.error;
         return false;
@@ -434,7 +435,8 @@
       runLauncher.open(snapshot.session.workspaceId, sessionId);
       setText('');
     } else if (name === 'btw') {
-      if (await branchBeside(argument ?? '')) setText('');
+      // `branchBeside` empties the text itself, as soon as the branch exists.
+      await branchBeside(argument ?? '');
     } else if (name === 'stop') {
       if (await interrupt()) setText('');
     } else if (await action({ type: 'compact', sessionId })) {

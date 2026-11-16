@@ -26,6 +26,8 @@ export interface BranchOptions {
   draft?: string | undefined;
   /** `beside` opens in place where panes are not drawn, and leaves the branch unopened when four panes leave no room. */
   open: 'here' | 'beside' | 'none';
+  /** Called once the branch exists, before it is opened: opening beside mounts the source's composer again. */
+  created?: (() => void) | undefined;
   /** Translates the title suffix. */
   translate?: ((value: string) => string) | undefined;
 }
@@ -179,6 +181,7 @@ async function create(
   const sessionId = outcome.sessionId;
   // A first message that was refused is already kept as the chat's draft.
   if (draft !== '' && outcome.error === undefined) store.updateDraft(sessionId, draft);
+  options.created?.();
   let noRoom = false;
   if (options.open === 'beside') noRoom = (await deps.openBeside(sessionId)) === 'full';
   // With no room the screen is left as it is: opening the branch would replace a chat the person is using.

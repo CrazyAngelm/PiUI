@@ -5,6 +5,7 @@ import {
   paneOf,
   panes,
   parseLayout,
+  placePanes,
   resizeSplit,
   splitPane,
   withSession,
@@ -108,6 +109,33 @@ describe('resizeSplit', () => {
     expect(resizeSplit(tree, [], Number.NaN)).toBe(tree);
     const single = leaf('a', 'A');
     expect(resizeSplit(single, [], 0.3)).toBe(single);
+  });
+});
+
+describe('placePanes', () => {
+  it('gives a single pane the whole area and no split', () => {
+    expect(placePanes(leaf('p1', 'a'))).toEqual({ panes: [{ leaf: leaf('p1', 'a'), left: 0, top: 0, width: 1, height: 1 }], splits: [] });
+    expect(placePanes(undefined)).toEqual({ panes: [], splits: [] });
+  });
+
+  it('places nested panes in reading order by the ratios, and each split at the box of its two halves', () => {
+    const placed = placePanes(split('row', leaf('p1', 'a'), split('column', leaf('p2', 'b'), leaf('p3', 'c'), 0.25), 0.5));
+    expect(placed.panes).toEqual([
+      { leaf: leaf('p1', 'a'), left: 0, top: 0, width: 0.5, height: 1 },
+      { leaf: leaf('p2', 'b'), left: 0.5, top: 0, width: 0.5, height: 0.25 },
+      { leaf: leaf('p3', 'c'), left: 0.5, top: 0.25, width: 0.5, height: 0.75 },
+    ]);
+    expect(placed.splits).toEqual([
+      { path: [], direction: 'row', ratio: 0.5, left: 0, top: 0, width: 1, height: 1 },
+      { path: ['second'], direction: 'column', ratio: 0.25, left: 0.5, top: 0, width: 0.5, height: 1 },
+    ]);
+  });
+
+  it('keeps a pane in the list under the same id when a neighbour opens or closes', () => {
+    const two = split('row', leaf('p1', 'a'), leaf('p2', 'b'));
+    const three = splitPane(two, 'p1', 'bottom', 'c', 'p3');
+    expect(placePanes(three).panes.map((place) => place.leaf.id)).toEqual(['p1', 'p3', 'p2']);
+    expect(placePanes(closePane(three!, 'p2')).panes.map((place) => place.leaf.id)).toEqual(['p1', 'p3']);
   });
 });
 

@@ -4,7 +4,7 @@
   import ChatView from '../ChatView.svelte';
   import { useWorkspace } from '../context';
   import PaneSplitter from './PaneSplitter.svelte';
-  import type { PaneEdge, PaneLeaf, PaneNode, SplitPath } from './paneLayout';
+  import { placePanes, type PaneEdge, type PaneLeaf } from './paneLayout';
   import { workbench } from './workbench.svelte';
   import { CHAT_DRAG_TYPE } from './dragType';
 
@@ -17,6 +17,7 @@
   const store = useWorkspace();
 
   const count = $derived(workbench.shown.length);
+  const placed = $derived(placePanes(workbench.layout));
   /** The chat being dragged from the sidebar or a tab, while a drag lasts. */
   let dragged = $state<string | undefined>();
   let hover = $state<{ paneId: string; zone: Zone } | undefined>();
@@ -143,54 +144,62 @@
   </section>
 {/snippet}
 
-{#snippet node(item: PaneNode, path: SplitPath)}
-  {#if item.kind === 'pane'}
-    {@render leafPane(item)}
-  {:else}
-    <div class="split split--{item.direction}">
-      <div class="cell" style:flex="{item.ratio} 1 0">{@render node(item.first, [...path, 'first'])}</div>
-      <PaneSplitter direction={item.direction} ratio={item.ratio} label={splitLabel(item.direction)} onResize={(ratio) => workbench.resize(path, ratio)} />
-      <div class="cell" style:flex="{1 - item.ratio} 1 0">{@render node(item.second, [...path, 'second'])}</div>
-    </div>
-  {/if}
-{/snippet}
-
+<!--
+  One flat list keyed by pane, placed by the layout's fractions: a chat stays mounted, with its
+  scroll position and composer, when a pane opens, closes or moves beside it.
+-->
 <div class="grid">
-  {#if workbench.layout}
-    {#if workbench.layout.kind === 'pane'}
-      <div class="cell cell--root">{@render node(workbench.layout, [])}</div>
-    {:else}
-      {@render node(workbench.layout, [])}
-    {/if}
-  {/if}
+  {#each placed.panes as place (place.leaf.id)}
+    <div class="cell" style:left="{place.left * 100}%" style:top="{place.top * 100}%" style:width="{place.width * 100}%" style:height="{place.height * 100}%">
+      {@render leafPane(place.leaf)}
+    </div>
+  {/each}
+  {#each placed.splits as split (split.path.join('/'))}
+    <!-- The box of one split. Its separator sits at the ratio and measures this box while it is dragged. -->
+    <div
+      class="divider"
+      class:divider--column={split.direction === 'column'}
+      style:left="{split.left * 100}%"
+      style:top="{split.top * 100}%"
+      style:width="{split.width * 100}%"
+      style:height="{split.height * 100}%"
+    >
+      <span style:flex="{split.ratio} 1 0"></span>
+      <PaneSplitter direction={split.direction} ratio={split.ratio} label={splitLabel(split.direction)} onResize={(ratio) => workbench.resize(split.path, ratio)} />
+      <span style:flex="{1 - split.ratio} 1 0"></span>
+    </div>
+  {/each}
 </div>
 
 <style>
   .grid {
-    display: flex;
+    position: relative;
     width: 100%;
     height: 100%;
     min-width: 0;
     min-height: 0;
-  }
-  .split {
-    display: flex;
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-  }
-  .split--column {
-    flex-direction: column;
+    overflow: hidden;
   }
   .cell {
+    position: absolute;
     display: grid;
     grid-template: minmax(0, 1fr) / minmax(0, 1fr);
     min-width: 0;
     min-height: 0;
     overflow: hidden;
   }
-  .cell--root {
-    flex: 1;
+  /* Drawn over the seam of its two halves; only the separator takes the pointer. */
+  .divider {
+    position: absolute;
+    z-index: 3;
+    display: flex;
+    pointer-events: none;
+  }
+  .divider--column {
+    flex-direction: column;
+  }
+  .divider :global(.splitter) {
+    pointer-events: auto;
   }
   .pane {
     position: relative;

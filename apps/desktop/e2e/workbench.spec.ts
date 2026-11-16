@@ -40,7 +40,8 @@ test.describe('chat tabs', () => {
   test('closing a tab removes it and the chat that was shown gives way to its neighbour', async ({ lab }) => {
     await lab.open();
     await openChats(lab, [LISBON, CACHE]);
-    await lab.page.getByRole('button', { name: `Close tab ${CACHE}` }).click();
+    // The close button is a pointer shortcut outside the accessibility tree: a tablist holds tabs only.
+    await lab.page.getByRole('button', { name: `Close tab ${CACHE}`, includeHidden: true }).click();
     await expect(tab(lab, CACHE)).toHaveCount(0);
     await expect(tab(lab, LISBON)).toHaveAttribute('aria-selected', 'true');
     await expect(lab.chat(CACHE)).toBeVisible();
@@ -95,6 +96,28 @@ test.describe('split panes', () => {
     await expect(pane(lab, LISBON)).toBeVisible();
     await expect(pane(lab, CACHE)).toBeVisible();
     await expect(lab.page.getByRole('button', { name: 'Close pane' })).toHaveCount(2);
+    lab.expectNoErrors();
+  });
+
+  test('a chat stays mounted when panes open and close beside it', async ({ lab }) => {
+    await lab.open();
+    await openChats(lab, [LISBON, LIFETIMES, TRANSPORT]);
+    // A mark on the live element: it is gone if the chat is mounted again.
+    await lab.page.getByRole('region', { name: 'Conversation messages' }).evaluate((element) => element.setAttribute('data-kept', 'yes'));
+    const kept = pane(lab, TRANSPORT).locator('[data-kept="yes"]');
+
+    await openFromTab(lab, LISBON, 'Open to the right');
+    await expect(lab.page.getByRole('button', { name: 'Close pane' })).toHaveCount(2);
+    await expect(kept).toHaveCount(1);
+    // Splitting the first chat's own pane moves it deeper into the layout.
+    await tab(lab, TRANSPORT).click();
+    await openFromTab(lab, LIFETIMES, 'Open below');
+    await expect(lab.page.getByRole('button', { name: 'Close pane' })).toHaveCount(3);
+    await expect(kept).toHaveCount(1);
+
+    await pane(lab, LISBON).getByRole('button', { name: 'Close pane' }).click();
+    await expect(lab.page.getByRole('button', { name: 'Close pane' })).toHaveCount(2);
+    await expect(kept).toHaveCount(1);
     lab.expectNoErrors();
   });
 

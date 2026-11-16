@@ -1,6 +1,7 @@
 /** Russian UI copy for chat pipelines and pipeline templates (ADR-040). Keys are the English source strings. */
 export const chatPipelinesRu: Readonly<Record<string, string>> = {
   // Who answers: composer executor picker
+  'Pipelines could not be loaded. Try again.': 'Не удалось загрузить конвейеры. Повторить.',
   'Who answers': 'Кто отвечает',
   'Talk directly': 'Напрямую',
   'Pipelines of this project': 'Конвейеры проекта',

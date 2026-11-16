@@ -27,6 +27,12 @@ host call, no contract, no native history format changes.
   (`id`, `sessionId`), a split has a direction (`row` or `column`), a ratio
   (clamped to 0.2 to 0.8) and two children. Closing a pane makes its sibling
   take the parent's place. A chat is in at most one pane.
+- The chat area **draws the tree as one flat list keyed by pane**, each pane
+  placed by the fractions the tree gives it (`placePanes`), with the splitters
+  drawn over the seams. A chat therefore stays mounted, with its scroll
+  position, composer and open details, when a pane opens, closes or moves
+  beside it. Drawing the tree as nested elements mounted every chat again on
+  each such change.
 - A pane that is not the selected chat loads through `store.showSession`
   (the same host calls as `openSession`, own loading and error state, the
   route unchanged). Selecting a chat that is already loaded and on screen is
@@ -62,6 +68,15 @@ Show button and the attention dot. All pane and tab logic is in
 `lib/ui/ContextMenu.svelte` is a new primitive (bits-ui ContextMenu with the
 `MenuEntry` items and `piui-menu` look of `Menu`).
 
+The merge with master then put the first screen over its budget, so the
+new-chat composer no longer ships its pipeline code with it: the executor
+picker, the chat-pipeline store and the template helpers are one chunk loaded
+right after mount (`chatPipelines/lazyPipelines.svelte.ts`). A plain chip with
+the current agent stands in the picker's place until then, and a new chat
+waits for the chunk as it already waited for the project's library. If the
+chunk cannot load, new chats talk directly, as in safe mode, and the chip
+offers to load it again.
+
 ### Keyboard
 
 - Mod+B hides or shows the sidebar (not in a narrow window, which keeps its
@@ -70,8 +85,11 @@ Show button and the attention dot. All pane and tab logic is in
   previous pane and focus its composer.
 - Tabs are a `tablist` with a roving tabindex: arrows, Home and End move
   focus, Enter or Space select, Delete closes, Shift+F10 or the Menu key opens
-  the tab menu. A pane splitter is a focusable `separator`: arrows move it by
-  2% (10% with Shift), Home resets it to the middle.
+  the tab menu. A tablist may hold tabs only, so a tab's close button is a
+  pointer shortcut outside the tab order and the accessibility tree. A pane
+  splitter is a focusable `separator`: arrows move it by 2% (10% with Shift),
+  Home resets it to the middle. Panes come before the splitters in the tab
+  order.
 - Only the active pane handles chat shortcuts (Mod+F, Mod+Alt+B, Mod+Shift+G),
   keeps the page landmark and takes focus when it opens. Other panes are named
   by the chat title.

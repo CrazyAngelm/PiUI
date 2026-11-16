@@ -1,3 +1,4 @@
+import type { Locator } from '@playwright/test';
 import { expect, test, type Lab } from './fixtures';
 
 // The first demo chat has one seeded child started by an agent, with a report (UI Lab).
@@ -8,6 +9,9 @@ const REPORT = 'The linked review is complete.';
 
 /** A chat row of the sidebar; the name starts with the title (the time follows it). */
 const row = (lab: Lab, title: string) => lab.sidebar.getByRole('listitem').getByRole('button', { name: new RegExp(`^${title}`) });
+
+/** A linked chat's own button in the details panel, not its "Options for ..." menu. */
+const linkedChat = (section: Locator, title: string) => section.getByRole('button', { name: new RegExp(`^(?!Options for ).*${title}`) });
 
 async function openDetails(lab: Lab) {
   await lab.page.getByRole('button', { name: 'Details' }).click();
@@ -53,16 +57,16 @@ test.describe('linked chats', () => {
     const details = await openDetails(lab);
     const section = details.getByRole('region', { name: 'Linked chats' });
     await expect(section).toBeVisible();
-    await expect(section.getByRole('button', { name: new RegExp(CHILD) })).toBeVisible();
+    await expect(linkedChat(section, CHILD)).toBeVisible();
     await expect(section).toContainText(REPORT);
     await expect(section).toContainText('The agent in this chat cannot use linked chats.');
     // Idle chats carry no state badge and nothing waits for delivery.
     await expect(section.getByRole('button', { name: 'Deliver' })).toHaveCount(0);
 
-    await section.getByRole('button', { name: new RegExp(CHILD) }).click();
+    await linkedChat(section, CHILD).click();
     await expect(page.getByRole('heading', { level: 1, name: CHILD })).toBeVisible();
     // The child's panel lists its parent.
-    await expect(details.getByRole('region', { name: 'Linked chats' }).getByRole('button', { name: new RegExp(LEAD) })).toBeVisible();
+    await expect(linkedChat(details.getByRole('region', { name: 'Linked chats' }), LEAD)).toBeVisible();
   });
 
   test('a row menu opens the linked chat to the side, and offers no unlink for a child of an agent', async ({ lab, page }) => {
@@ -98,15 +102,15 @@ test.describe('linked chats', () => {
     await expect(dialog).toHaveCount(0);
     await expect(lab.toast(`Linked to ${OTHER}`)).toBeVisible();
     const section = details.getByRole('region', { name: 'Linked chats' });
-    await expect(section.getByRole('button', { name: new RegExp(OTHER) })).toBeVisible();
-    await expect(section.getByRole('button', { name: new RegExp(CHILD) })).toBeVisible();
+    await expect(linkedChat(section, OTHER)).toBeVisible();
+    await expect(linkedChat(section, CHILD)).toBeVisible();
     // A peer stays a top-level chat in the sidebar.
     await expect(row(lab, OTHER)).toBeVisible();
 
     await details.getByRole('button', { name: `Options for ${OTHER}` }).click();
     await page.getByRole('menuitem', { name: 'Unlink' }).click();
-    await expect(section.getByRole('button', { name: new RegExp(OTHER) })).toHaveCount(0);
-    await expect(section.getByRole('button', { name: new RegExp(CHILD) })).toBeVisible();
+    await expect(linkedChat(section, OTHER)).toHaveCount(0);
+    await expect(linkedChat(section, CHILD)).toBeVisible();
     lab.expectNoErrors();
   });
 

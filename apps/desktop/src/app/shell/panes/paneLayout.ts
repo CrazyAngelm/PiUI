@@ -80,6 +80,47 @@ export function resizeSplit(node: PaneNode, path: SplitPath, ratio: number): Pan
   return child === node[head] ? node : { ...node, [head]: child };
 }
 
+/** A box as fractions of the whole chat area. */
+export interface PaneBox {
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+  readonly height: number;
+}
+export interface PanePlace extends PaneBox {
+  readonly leaf: PaneLeaf;
+}
+export interface SplitPlace extends PaneBox {
+  readonly path: SplitPath;
+  readonly direction: SplitDirection;
+  readonly ratio: number;
+}
+
+/**
+ * Where every pane and every split sits. The chat area draws the panes from this as one flat
+ * list keyed by pane, so a chat stays mounted whatever opens, closes or moves beside it.
+ * Panes come in reading order; a split's box is the area its two halves share.
+ */
+export function placePanes(node: PaneNode | undefined): { panes: PanePlace[]; splits: SplitPlace[] } {
+  const placed: { panes: PanePlace[]; splits: SplitPlace[] } = { panes: [], splits: [] };
+  const visit = (current: PaneNode, box: PaneBox, path: SplitPath): void => {
+    if (current.kind === 'pane') {
+      placed.panes.push({ leaf: current, ...box });
+      return;
+    }
+    placed.splits.push({ path, direction: current.direction, ratio: current.ratio, ...box });
+    const row = current.direction === 'row';
+    const first: PaneBox = row ? { ...box, width: box.width * current.ratio } : { ...box, height: box.height * current.ratio };
+    const second: PaneBox = row
+      ? { ...box, left: box.left + first.width, width: box.width - first.width }
+      : { ...box, top: box.top + first.height, height: box.height - first.height };
+    visit(current.first, first, [...path, 'first']);
+    visit(current.second, second, [...path, 'second']);
+  };
+  if (node) visit(node, { left: 0, top: 0, width: 1, height: 1 }, []);
+  return placed;
+}
+
 function parseNode(value: unknown, ids: Set<string>, chats: Set<string>, depth: number): PaneNode | undefined {
   if (typeof value !== 'object' || value === null || depth > MAX_PANES) return undefined;
   const record = value as Record<string, unknown>;

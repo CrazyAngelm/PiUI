@@ -210,6 +210,28 @@ describe('startBranch', () => {
     expect(untouched.openBeside).not.toHaveBeenCalled();
   });
 
+  it('tells the caller that the branch exists before it opens it', async () => {
+    const order: string[] = [];
+    const { store } = fakeStore(async () => {
+      order.push('create');
+      return { sessionId: 'child' };
+    });
+    const openBeside = vi.fn(async () => {
+      order.push('open');
+      return 'opened' as const;
+    });
+    await startBranch(store, snapshot(), { at: 'end' }, { open: 'beside', created: () => void order.push('created') }, deps({ openBeside }));
+    expect(order).toEqual(['create', 'created', 'open']);
+
+    // A branch that could not be created is never announced.
+    const created = vi.fn();
+    const failed = fakeStore(async () => {
+      throw new Error('offline');
+    });
+    expect((await startBranch(failed.store, snapshot(), { at: 'end' }, { open: 'beside', created }, deps())).ok).toBe(false);
+    expect(created).not.toHaveBeenCalled();
+  });
+
   it('opens nothing and replaces no pane when four panes leave no room, but keeps the draft and says so', async () => {
     const { store, updateDraft, openSession } = fakeStore(async () => ({ sessionId: 'child' }));
     const result = await startBranch(store, snapshot(), { at: 'end' }, { draft: 'kept', open: 'beside' }, deps({ openBeside: vi.fn(async () => 'full' as const) }));

@@ -906,6 +906,12 @@ Branch `feat/workbench-1116`. Decisions: ADR-064 to ADR-071.
   group that names its current action, and one control that folds a finished
   turn. Codex agent and image items are ordinary tool rows instead of
   "Unsupported Codex item".
+- **First-screen size.** The merge with master put the first screen over its
+  budget (592201 raw and 166564 gzip bytes against 573440 and 163840). The
+  new-chat composer now loads the executor picker, the chat-pipeline store
+  and the template helpers in one chunk right after mount, with a plain chip
+  in the picker's place until then. The first screen is 549988 raw and 153839
+  gzip bytes. If that chunk cannot load, new chats talk directly.
 - **Test infrastructure.** The full `vitest run` hung on
   `remoteMode.test.ts`: a mock factory waited for a module that imported the
   mocked transport. The avatar contract checks moved to

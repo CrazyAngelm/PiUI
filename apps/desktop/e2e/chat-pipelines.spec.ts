@@ -259,3 +259,21 @@ test.describe('the executor of a new chat', () => {
     await expect(composer.getByRole('group', { name: 'Pipeline for this message' })).toHaveCount(0);
   });
 });
+
+test.describe('pipeline code that cannot load', () => {
+  // The refused module request is logged by the browser.
+  test.use({ allowConsoleErrors: true });
+
+  test('a new chat still talks directly, and the chip offers to load again', async ({ lab, page }) => {
+    await page.route('**/src/app/chatPipelines/pipelineCode.ts*', (route) => route.abort());
+    await lab.open();
+    const composer = home(page);
+    const chip = composer.getByRole('button', { name: 'Pi', exact: true });
+    await expect(chip).toHaveAttribute('title', 'Pipelines could not be loaded. Try again.');
+    await expect(chip).toBeEnabled();
+
+    await composer.getByRole('textbox', { name: 'Message' }).fill('Say hello without a pipeline');
+    await composer.getByRole('button', { name: 'Start chat' }).click();
+    await expect(page.getByRole('region', { name: 'Conversation messages' })).toContainText('Say hello without a pipeline');
+  });
+});

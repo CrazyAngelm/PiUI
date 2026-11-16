@@ -32,10 +32,12 @@
   import type { SkillSyntax } from '../macros/expand';
   import { findMacroTokens, macroSummary, macroTokenAt, type Macro } from '../macros/macro';
   import ContextChip from './ContextChip.svelte';
-  import ExecutorPicker, { type Executor } from '../chatPipelines/ExecutorPicker.svelte';
+  import ExecutorChip from '../chatPipelines/ExecutorChip.svelte';
+  import type { Executor } from '../chatPipelines/ExecutorPicker.svelte';
   import type PipelineInputsBarComponent from '../chatPipelines/PipelineInputsBar.svelte';
-  import { chatPipelines, type ChatPipelineDetail } from '../chatPipelines/chatPipelines.svelte';
-  import { choiceFromKey, draftFromTemplate, readyToSave, rememberPipeline, type TemplateChoice, type TemplateDraft } from '../chatPipelines/templateRun';
+  import type { ChatPipelineDetail } from '../chatPipelines/chatPipelines.svelte';
+  import { lazyPipelines, type PipelineCode } from '../chatPipelines/lazyPipelines.svelte';
+  import type { TemplateChoice, TemplateDraft } from '../chatPipelines/templateRun';
   import type { AgentProfile, RunInputValue } from '../../host-api/orchestrationClient';
   import { useWorkspace } from './context';
   import { modelSelectionKey, resolveModelSelection } from '../../host-api/modelSelection';
@@ -361,9 +363,12 @@
   // A new chat starts like the project's last one (a saved pipeline or the harness), else through
   // the project's default chat pipeline, else directly (`startingExecutor`). Choosing in the picker
   // wins for that project until the project changes.
-  const library = $derived(chatPipelines.libraries[workspaceId]);
+  // The pipeline store, the template helpers and the picker arrive after first paint (`lazyPipelines`).
+  const pipelines = $derived(lazyPipelines.code?.chatPipelines);
+  const library = $derived(pipelines?.libraries[workspaceId]);
   // Pipelines and templates are the desktop's screen: a remote browser starts direct chats only.
-  const pipelinesAllowed = $derived(!remoteMode && trusted && !store.safeMode);
+  // Code that could not load leaves direct chats, as safe mode does.
+  const pipelinesAllowed = $derived(!remoteMode && trusted && !store.safeMode && !lazyPipelines.failed);
   /** Projects whose library was asked for, answered or not: a refused library no longer holds the start back. */
   const librariesAsked = new SvelteSet<string>();
   /** What a remembered pipeline is now, read once per project and pipeline in this composer (null: gone). Key `${workspaceId}:${commandId}`. */
@@ -375,9 +380,10 @@
   let executorPending = $state(true);
   $effect(() => {
     const id = workspaceId;
-    if (!id || !pipelinesAllowed) return;
+    const code = pipelines;
+    if (!id || !pipelinesAllowed || !code) return;
     untrack(() => {
-      if (!chatPipelines.libraries[id]) void chatPipelines.loadLibrary(id).finally(() => librariesAsked.add(id));
+      if (!code.libraries[id]) void code.loadLibrary(id).finally(() => librariesAsked.add(id));
     });
   });
   $effect(() => {
@@ -388,10 +394,11 @@
     const id = workspaceId;
     if (!id) return;
     const allowed = pipelinesAllowed;
+    const code = pipelines;
     const remembered = untrack(() => executorOf(choices.projects[id]));
-    const check = allowed && remembered?.pipeline ? `${id}:${remembered.pipeline}` : undefined;
+    const check = allowed && code && remembered?.pipeline ? `${id}:${remembered.pipeline}` : undefined;
     const candidate = check === undefined ? undefined : pipelineChecks.get(check);
-    if (check !== undefined && candidate === undefined) untrack(() => verifyPipeline(id, remembered?.pipeline ?? '', check));
+    if (code && check !== undefined && candidate === undefined) untrack(() => verifyPipeline(code, id, remembered?.pipeline ?? '', check));
     // The picker's own rules, read live: a teammate turned off or an agent installed later changes the answer.
     const usable = rememberedPipelineUsable({
       candidate,
@@ -418,10 +425,10 @@
    * teammate may have been turned off since: it is read again, with the project's teammates, before
    * it is selected for the person.
    */
-  function verifyPipeline(id: string, commandId: string, key: string): void {
+  function verifyPipeline(code: PipelineCode['chatPipelines'], id: string, commandId: string, key: string): void {
     if (!commandId || checkingPipelines.has(key)) return;
     checkingPipelines.add(key);
-    const read = chatPipelines.detail(id, commandId, true).then(
+    const read = code.detail(id, commandId, true).then(
       (detail): PipelineCandidate => ({ accepts: detail.accepts, ...(detail.reply ? { replyHarness: detail.reply.harness } : {}) }),
       () => null,
     );
@@ -430,12 +437,13 @@
   $effect(() => {
     const id = workspaceId;
     const command = pipelineId;
+    const code = pipelines;
     pipelineDetail = undefined;
     pipelineError = '';
-    if (!id || !command) return;
+    if (!id || !command || !code) return;
     let cancelled = false;
     pipelineLoading = true;
-    chatPipelines
+    code
       .detail(id, command)
       .then((detail) => {
         if (!cancelled) pipelineDetail = detail;
@@ -463,13 +471,14 @@
     draft = undefined;
     draftError = '';
     draftLoading = false;
-    if (!picked || !id) return;
+    const code = lazyPipelines.code;
+    if (!picked || !id || !code) return;
     let cancelled = false;
     draftLoading = true;
     const base = untrack(() => (harness || available[0]?.kind || 'codex') as AgentProfile['harness']);
-    const names = untrack(() => (chatPipelines.commands[id] ?? []).map((command) => ({ id: command.id, name: command.name })));
+    const names = untrack(() => (code.chatPipelines.commands[id] ?? []).map((command) => ({ id: command.id, name: command.name })));
     const translate = (value: string, parameters: readonly unknown[] | undefined = undefined): string => $t(value, parameters);
-    draftFromTemplate(picked.choice, base, translate, names)
+    code.templateRun.draftFromTemplate(picked.choice, base, translate, names)
       .then((next) => {
         if (!cancelled) draft = next;
       })
@@ -496,6 +505,8 @@
   });
 
   onMount(() => {
+    // The picker and the pipeline store are a chunk of their own; a failure shows in lazyPipelines.failed.
+    loadPipelineCode();
     // Files dropped on the desktop window belong to the desktop; a remote browser takes text only.
     const unregister = remoteMode ? () => undefined : composerDropTargets.register((dropId) => {
       if (workspaceId && trusted) void attachments.redeem(workspaceId, dropId, imageState);
@@ -529,7 +540,7 @@
 
   /** The executor of a project's chat as it is remembered: the saved pipeline, or empty for the harness, with the project's default at that time. */
   function executorMemory(targetId: string, commandId: string): RememberedExecutor {
-    const known = chatPipelines.libraries[targetId];
+    const known = pipelines?.libraries[targetId];
     return { pipeline: commandId, ...(known ? { chatDefault: known.chatDefault ?? '' } : {}) };
   }
 
@@ -582,7 +593,8 @@
     executorPickedIn = workspaceId;
     executorPending = false;
     if (next.kind === 'template') {
-      const choice = choiceFromKey(next.id, chatPipelines.libraries[workspaceId]?.templates ?? []);
+      const code = lazyPipelines.code;
+      const choice = code?.templateRun.choiceFromKey(next.id, code.chatPipelines.libraries[workspaceId]?.templates ?? []);
       if (!choice) return;
       pipelineId = '';
       templateChoice = { choice, key: next.id, name: next.name };
@@ -612,6 +624,8 @@
     const first = result.models[0];
     return first ? { model: first.id, ...(first.provider ? { modelProvider: first.provider } : {}) } : undefined;
   }
+
+  const loadPipelineCode = (): void => void lazyPipelines.load().catch(() => undefined);
 
   function managePipelines(): void {
     if (!workspaceId) return;
@@ -742,6 +756,7 @@
   /** Starts the chat from a captured request. The caller owns `busy`. */
   async function runPipelineRequest(request: PipelineRequest): Promise<void> {
     try {
+      const { chatPipelines } = await lazyPipelines.load();
       await chatPipelines.startChat(store, {
         workspaceId: request.workspaceId,
         commandId: request.commandId,
@@ -800,10 +815,11 @@
     try {
       let commandId: string;
       try {
-        const taken = (chatPipelines.commands[targetId] ?? []).map((command) => command.name);
-        const graph = await readyToSave(current, (kind) => templateModel(targetId, kind), taken, (value, parameters) => $t(value, parameters));
-        commandId = await chatPipelines.saveTemplate(targetId, graph);
-        rememberPipeline(targetId, current.key, commandId);
+        const code = await lazyPipelines.load();
+        const taken = (code.chatPipelines.commands[targetId] ?? []).map((command) => command.name);
+        const graph = await code.templateRun.readyToSave(current, (kind) => templateModel(targetId, kind), taken, (value, parameters) => $t(value, parameters));
+        commandId = await code.chatPipelines.saveTemplate(targetId, graph);
+        code.templateRun.rememberPipeline(targetId, current.key, commandId);
         rememberExecutorIn(targetId, executorMemory(targetId, commandId));
         toasts.show({ title: $t('Saved “{0}” to this project’s pipelines', [graph.name]) });
       } catch (error) {
@@ -1077,15 +1093,20 @@
         {/await}
       {/if}
       {#if !fusionMode}
-      <ExecutorPicker
-        {workspaceId}
-        value={executor}
-        harnesses={executorHarnesses}
-        templates={pipelinesAllowed}
-        disabled={available.length === 0 && !usesPipeline}
-        onChange={chooseExecutor}
-        onManage={pipelinesAllowed ? managePipelines : undefined}
-      />
+      {#if lazyPipelines.code}
+        {@const ExecutorPicker = lazyPipelines.code.ExecutorPicker}
+        <ExecutorPicker
+          {workspaceId}
+          value={executor}
+          harnesses={executorHarnesses}
+          templates={pipelinesAllowed}
+          disabled={available.length === 0 && !usesPipeline}
+          onChange={chooseExecutor}
+          onManage={pipelinesAllowed ? managePipelines : undefined}
+        />
+      {:else}
+        <ExecutorChip {harness} onRetry={lazyPipelines.failed ? loadPipelineCode : undefined} />
+      {/if}
 
       {#if harness && !usesPipeline}
         <ModelPicker
