@@ -25,7 +25,10 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const permissionMode = option("--permission-mode") ?? "default";
 const resumeId = option("--resume");
 const sessionId = resumeId ?? option("--session-id") ?? randomUUID();
-let model = option("--model") ?? "default";
+// `--fixture-resumed-model <name>` imitates a resumed conversation: it runs
+// that model and lists its row under the full name instead of the short one.
+const resumedModel = option("--fixture-resumed-model");
+let model = option("--model") ?? resumedModel ?? "default";
 const accounts = {
   subscription: { email: "fixture@example.test", subscriptionType: "Claude Max", apiProvider: "firstParty" },
   "setup-token": { tokenSource: "CLAUDE_CODE_OAUTH_TOKEN", apiProvider: "firstParty" },
@@ -364,7 +367,7 @@ const initializeResponse = () => ({
   agents: [{ name: "Explore", description: "Explore the codebase" }],
   output_style: "default",
   available_output_styles: ["default"],
-  models,
+  models: resumedModel && !option("--model") ? models.map((entry) => (entry.value === resumedModel ? { ...entry, value: entry.resolvedModel } : entry)) : models,
   ...(accountName === "missing" ? {} : { account: accounts[accountName] }),
   pid: process.pid,
   current_permission_mode: option("--fixture-mode-override") ?? (permissionMode === "manual" ? "default" : permissionMode),
@@ -399,7 +402,7 @@ input.on("line", (line) => {
       ok(requestId, request.cancel_queued ? { still_queued: [], cancelled: [...(run?.batch ?? []), ...cancelled] } : { still_queued: queue.map((item) => item.uuid) });
       if (run) run.aborted = true;
     } else if (request.subtype === "set_model") {
-      if (models.some((entry) => entry.value === request.model && !entry.disabled)) { model = request.model; ok(requestId); }
+      if (request.model === "fixture-unlisted" || models.some((entry) => (entry.value === request.model || entry.resolvedModel === request.model) && !entry.disabled)) { model = request.model; ok(requestId); }
       else refuse(requestId, "set_model: unknown model");
     } else if (request.subtype === "apply_flag_settings") {
       if (has("--fixture-no-flag-settings")) refuse(requestId, "Unsupported control request subtype: apply_flag_settings");
@@ -412,6 +415,8 @@ input.on("line", (line) => {
         send({ type: "system", subtype: "background_tasks_changed", tasks: [], uuid: randomUUID(), session_id: sessionId });
       }
       ok(requestId, {});
+    } else if (request.subtype === "get_settings" && !has("--fixture-no-get-settings")) {
+      ok(requestId, { effective: {}, sources: [], applied: { model: resolved(model), effort: option("--effort") ?? null } });
     } else refuse(requestId, `Unsupported control request subtype: ${request.subtype}`);
     return;
   }

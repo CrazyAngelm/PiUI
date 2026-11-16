@@ -1022,6 +1022,30 @@ Branch `feat/workbench-1116`. Decisions: ADR-064 to ADR-071.
   - Synthetic: bridge, Rust Fusion and contract tests.
   - Not run: a real Fusion pair after the change.
 
+## Details panel without the facts block, Claude model names after a reopen — 2026-11-17 (unreleased)
+
+- **Details panel.** The closed disclosure "About this chat" (agent, model,
+  status, project, update time and the capability list) is removed at the
+  person's request. ADR-072 and `docs/UI_STYLE.md` say so.
+- **Finding.** A reopened Claude Code chat showed "saved model and reasoning
+  could not be restored" although it still ran its model. Claude Code 2.1.325
+  lists the model a resumed conversation runs under its full name
+  (`claude-fable-5-2`) and drops the short name (`fable`) from the list, so
+  the adapter refused the remembered name as unavailable. It also reported
+  the `default` row for every chat opened without a configured model.
+- **Fix.** The Claude adapter asks `get_settings` for the applied model, and
+  `setModel` lets Claude Code resolve a name the list lacks: a name that
+  resolves to a listed model is accepted, anything else is undone and refused
+  (`docs/RUNTIME_SETTINGS.md`, bridge `CONTRACT.md`). The host is unchanged.
+- **Evidence.**
+  - Real provider: Claude Code 2.1.325 through the bridge runner on a copy of
+    a large resumed conversation, control requests only. Before the fix
+    `setModel` with `fable` answered `model-unavailable`; after it the
+    snapshot reads `fable` with `xhigh`. Two short turns on a throwaway
+    conversation created it and showed which model a resumed chat runs.
+  - Synthetic: bridge tests (three new ones) and the runtime tests.
+  - Not run: a reopen in the installed application.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).
