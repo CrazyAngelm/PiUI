@@ -23,7 +23,7 @@ describe('Russian copy for the chat activity', () => {
   });
 
   it('translates the strings the details panel and the toolbar add for it', () => {
-    const keys = ['Activity', 'About this chat', '{0} running in this chat', 'Details', 'Mode', 'What this agent can do here'];
+    const keys = ['Activity', '{0} running in this chat', 'Details', 'Mode'];
     expect(keys.filter((key) => !translated(key))).toEqual([]);
   });
 

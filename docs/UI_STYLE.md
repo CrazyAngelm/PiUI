@@ -111,9 +111,9 @@ does not prove that a setting reaches the harness.
 
 - The panel leads with what the session runs now (ADR-072), then the chat's
   other agents and context: Activity, Linked chats, origin and worktree, agent
-  mode, the pipeline run, plugin panels. Facts and capabilities come last,
-  behind the closed native disclosure "About this chat". Capabilities are
-  demoted, never deleted: enforcement is part of the trust model.
+  mode, the pipeline run, plugin panels. It has no block of session facts or
+  capabilities: the model is on the composer, the project and status are in
+  the sidebar.
 - Activity groups are Agents, Commands and Other, shown only when they have
   rows; a chat with none says "Nothing is running". A row is a state glyph, a
   one-line title (commands in the mono font), the elapsed time and, for a
