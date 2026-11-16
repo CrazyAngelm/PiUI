@@ -747,45 +747,87 @@ fn a_command_cannot_forge_the_envelope_markers() {
     assert!(!commands[0].0.contains("[/PiUI") && !commands[0].0.contains("[PiUI"));
 }
 
+/// The command line a report lists for one shell command.
+fn redacted(command: &str) -> String {
+    commands_of(&[prompt("u1"), bash("b1", command, BlockStatus::Complete)]).unwrap()[0]
+        .0
+        .clone()
+}
+
 #[test]
 fn obvious_inline_secrets_never_reach_a_command_line() {
-    let redacted = |command: &str| {
-        commands_of(&[prompt("u1"), bash("b1", command, BlockStatus::Complete)]).unwrap()[0]
-            .0
-            .clone()
-    };
-    assert_eq!(
-        redacted("FOO_API_KEY=abc123 cargo test"),
-        "FOO_API_KEY=*** cargo test"
-    );
-    assert_eq!(
-        redacted(r#"curl -H "Authorization: Bearer xyz" https://x.test"#),
-        r#"curl -H "Authorization: Bearer *** https://x.test"#
-    );
-    assert_eq!(
-        redacted("deploy --password hunter2 --verbose"),
-        "deploy --password *** --verbose"
-    );
-    assert_eq!(redacted("deploy --token=abc"), "deploy --token=***");
-    assert_eq!(redacted("echo Bearer abc.def"), "echo Bearer ***");
-    assert_eq!(redacted(r#"TOKEN="a b c" make"#), "TOKEN=*** make");
-    assert_eq!(
-        redacted(r#"curl "https://x.test/?a=1&access_token=abc&b=2""#),
-        r#"curl "https://x.test/?a=1&access_token=***"#
-    );
-    assert_eq!(
-        redacted("mysql -u root --passwd=pw1"),
-        "mysql -u root --passwd=***"
-    );
-    // An ordinary command is left as it is.
-    assert_eq!(
-        redacted("cargo test --workspace -- --nocapture"),
-        "cargo test --workspace -- --nocapture"
-    );
-    assert_eq!(
-        redacted(r"type C:\work\notes.txt https://x.test/a"),
-        r"type C:\work\notes.txt https://x.test/a"
-    );
+    let cases = [
+        // `NAME=value` and `NAME: value` with a key word in the name.
+        (
+            "FOO_API_KEY=abc123 cargo test",
+            "FOO_API_KEY=*** cargo test",
+        ),
+        ("export GITHUB_TOKEN=x", "export GITHUB_TOKEN=***"),
+        ("deploy --password=x", "deploy --password=***"),
+        ("deploy --token=abc", "deploy --token=***"),
+        ("mysql -u root --passwd=pw1", "mysql -u root --passwd=***"),
+        (r#"TOKEN="a b c" make"#, "TOKEN=*** make"),
+        (
+            r#"$env:OPENAI_API_KEY="sk-1" npm test"#,
+            "$env:OPENAI_API_KEY=*** npm test",
+        ),
+        (
+            r#"curl -d '{"password":"hunter2"}' https://x.test"#,
+            r#"curl -d '{"password":*** https://x.test"#,
+        ),
+        // Headers keep the scheme word and mask the credential.
+        (
+            r#"curl -H "Authorization: Bearer xyz" https://x.test"#,
+            r#"curl -H "Authorization: Bearer *** https://x.test"#,
+        ),
+        (
+            "curl -H 'Authorization: Basic dXNlcjpwdw==' https://x.test",
+            "curl -H 'Authorization: Basic *** https://x.test",
+        ),
+        (
+            r#"curl -H "Authorization: token ghp_abc" https://x.test"#,
+            r#"curl -H "Authorization: token *** https://x.test"#,
+        ),
+        (
+            r#"curl -H "X-Api-Key:abc123" https://x.test"#,
+            r#"curl -H "X-Api-Key:*** https://x.test"#,
+        ),
+        // A query string.
+        (
+            "curl https://x.test/?a=1&token=x",
+            "curl https://x.test/?a=1&token=***",
+        ),
+        (
+            r#"curl "https://x.test/?a=1&access_token=abc&b=2""#,
+            r#"curl "https://x.test/?a=1&access_token=***"#,
+        ),
+        // The argument after a flag that names a secret.
+        (
+            "deploy --password hunter2 --verbose",
+            "deploy --password *** --verbose",
+        ),
+        ("deploy --token x go", "deploy --token *** go"),
+        ("mysql -password x -u root", "mysql -password *** -u root"),
+        ("tool --api-key sk-123 run", "tool --api-key *** run"),
+        (
+            r#"tool "--password" hunter2 run"#,
+            r#"tool "--password" *** run"#,
+        ),
+        // `Bearer` anywhere.
+        ("echo Bearer abc.def", "echo Bearer ***"),
+        (
+            r#"curl -H "x-auth: Bearer abc" https://x.test"#,
+            r#"curl -H "x-auth: Bearer *** https://x.test"#,
+        ),
+        // Odd UTF-8 does not panic or hide the rest.
+        (
+            "echo пароль=ёж ключ: ✓ token=秘密",
+            "echo пароль=ёж ключ: ✓ token=***",
+        ),
+    ];
+    for (command, expected) in cases {
+        assert_eq!(redacted(command), expected, "{command}");
+    }
     // The cut at 200 characters comes after the redaction: a secret the cut
     // would only half remove (`hu`) is gone whole.
     let long = format!("{} --password hunter2", "x".repeat(185));
@@ -793,6 +835,33 @@ fn obvious_inline_secrets_never_reach_a_command_line() {
         redacted(&long),
         format!("{} --password ***", "x".repeat(185))
     );
+}
+
+#[test]
+fn a_key_word_that_is_only_a_word_of_the_command_is_left_alone() {
+    let unchanged = [
+        // Prose and search terms: no `=`, no `:` after the word, no flag.
+        r#"git commit -m "fix: password reset""#,
+        "grep -rn token src",
+        "cargo test secret_store",
+        r#"rg "api_key" ."#,
+        "git log --grep=token",
+        // A `::` is a path, not an assignment; so are `:` and `=` after a path.
+        "cargo test secret_store::tests::reads_token",
+        "ls ./secrets/token:x",
+        r"type C:\work\password=notes.txt",
+        "cmd --secrets/dir x",
+        // A quoted name with nothing assigned, an empty string.
+        r#"rg -n "password:" src"#,
+        r#"grep "token=" src"#,
+        r#"TOKEN="" make"#,
+        // An ordinary command.
+        "cargo test --workspace -- --nocapture",
+        r"type C:\work\notes.txt https://x.test/a",
+    ];
+    for command in unchanged {
+        assert_eq!(redacted(command), command, "{command}");
+    }
 }
 
 fn numbered(count: usize, failed: &[usize]) -> Vec<FactCommand> {

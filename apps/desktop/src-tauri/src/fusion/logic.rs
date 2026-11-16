@@ -673,7 +673,8 @@ fn value_end(tokens: &[&str], next: usize, value: &str) -> usize {
     let Some(quote) = value.chars().next().filter(|c| is_quote(*c)) else {
         return next;
     };
-    if value.len() > 1 && value.ends_with(quote) {
+    // The value closes its quote inside the same word (`"x"}'`).
+    if value[quote.len_utf8()..].contains(quote) {
         return next;
     }
     tokens[next..]
@@ -682,25 +683,44 @@ fn value_end(tokens: &[&str], next: usize, value: &str) -> usize {
         .map_or(tokens.len(), |closing| next + closing + 1)
 }
 
-/// The position of the first `=` or `:` that follows a secret name (the name
-/// starts after the last `?`, `&`, `;` or `,` before it, so `?a=1&token=x` is
-/// found too).
-fn secret_separator(word: &str) -> Option<usize> {
-    word.char_indices()
-        .filter(|&(_, c)| matches!(c, '=' | ':'))
-        .map(|(at, _)| at)
-        .find(|&at| {
-            let start = word[..at]
-                .rfind(['?', '&', ';', ','])
-                .map_or(0, |cut| cut + 1);
-            names_secret(&word[start..at])
-        })
+/// Whether `c` can be part of an identifier-like name (`FOO_API_KEY`,
+/// `--password`, `X-Api-Key`).
+fn is_name_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '-' | '.')
 }
 
-/// `command` with the obvious inline secrets replaced by `***`: the value
-/// after `api_key`, `token`, `secret`, `password`, `passwd` or `authorization`
-/// (as `name=value`, `name:value` or `name value`) and what follows `Bearer`.
-/// Conservative and no guarantee. Whitespace runs become one space.
+/// The name that a `=` or `:` after `head` assigns: the identifier-like run
+/// that ends `head`, with the quotes between it and the separator skipped
+/// (`"password":`). `None` when there is no such run or it is a path component
+/// (it follows a `/` or `\`).
+fn assigned_name(head: &str) -> Option<&str> {
+    let head = head.trim_end_matches(is_quote);
+    let before = head.trim_end_matches(is_name_char);
+    let name = &head[before.len()..];
+    (!name.is_empty() && !before.ends_with(['/', '\\'])).then_some(name)
+}
+
+/// The position of the first `=` or `:` that assigns a value to a secret name
+/// (`NAME=value`, `NAME:value`, `?a=1&token=x`). A `::` is a path separator,
+/// not an assignment.
+fn secret_separator(word: &str) -> Option<usize> {
+    word.char_indices()
+        .filter(|&(at, c)| match c {
+            '=' => true,
+            ':' => !word[..at].ends_with(':') && !word[at + 1..].starts_with(':'),
+            _ => false,
+        })
+        .map(|(at, _)| at)
+        .find(|&at| assigned_name(&word[..at]).is_some_and(names_secret))
+}
+
+/// `command` with the obvious inline secrets replaced by `***`: the value of an
+/// assignment or header whose name holds `api_key`, `token`, `secret`,
+/// `password`, `passwd` or `authorization` (`NAME=value`, `NAME:value`,
+/// `NAME: value`, also in a query string), the argument after a flag with such
+/// a name (`--password value`) and what follows `Bearer`. A key word that is
+/// only a word of the command (`grep token src`) is left alone. Conservative
+/// and no guarantee. Whitespace runs become one space.
 fn redact_secrets(command: &str) -> String {
     let tokens: Vec<&str> = command
         .split(|c: char| c.is_whitespace() || c.is_control())
@@ -715,6 +735,16 @@ fn redact_secrets(command: &str) -> String {
         // `Authorization: Bearer x`, `Bearer x`.
         let value_follows = if let Some(at) = secret_separator(token) {
             let value = &token[at + 1..];
+            // Nothing is assigned: an empty string (`TOKEN=""`) or the closing
+            // quote of a quoted name (`"password:"`).
+            let empty_quoted = !value.is_empty()
+                && value.chars().all(is_quote)
+                && (value.len() > 1
+                    || (token.len() > 2 && token.starts_with(value) && token.ends_with(value)));
+            if empty_quoted {
+                out.push(token.to_owned());
+                continue;
+            }
             if !value.is_empty() && !is_auth_scheme(value) {
                 out.push(format!("{}***", &token[..=at]));
                 index = value_end(&tokens, index, value);
@@ -722,13 +752,13 @@ fn redact_secrets(command: &str) -> String {
             }
             true
         } else {
-            let bare = token.trim_matches(|c: char| is_quote(c) || c == '-');
+            // Only a flag (`--password x`) or `Bearer` takes the next word; a
+            // key word that is a plain word of the command takes nothing.
+            let unquoted = token.trim_matches(is_quote);
+            let bare = unquoted.trim_matches('-');
             !token.contains(['=', ':'])
                 && (bare.eq_ignore_ascii_case("bearer")
-                    || SECRET_NAMES
-                        .iter()
-                        .any(|secret| bare.eq_ignore_ascii_case(secret))
-                    || (token.starts_with('-') && names_secret(bare)))
+                    || (unquoted.starts_with('-') && names_secret(bare)))
         };
         out.push(token.to_owned());
         if !value_follows {

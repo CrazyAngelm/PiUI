@@ -177,10 +177,13 @@ facts (PiUI, not from the sidekick):
   output never enters a fact. A command is sidekick-authored text under the
   PiUI heading, so envelope markers in it are broken the same way as in the
   body (`[PiUI` becomes `[ PiUI`, `[/PiUI` becomes `[/ PiUI`) and obvious
-  inline secrets are replaced by `***` before the cut: the value after
-  `api_key`, `token`, `secret`, `password`, `passwd` or `authorization` (as
-  `name=value`, `name: value` or `--name value`, also in a query string) and
-  the token after `Bearer`. This is conservative, not a guarantee. Each
+  inline secrets are replaced by `***` before the cut: the value of an
+  assignment or header whose name contains `api_key`, `token`, `secret`,
+  `password`, `passwd` or `authorization` (`name=value`, `name: value`, also
+  in a query string), the argument after a flag with such a name
+  (`--password value`) and the token after `Bearer`. A key word that is only
+  a word of the command (`grep token src`) stays. This is conservative, not a
+  guarantee. Each
   command is one line of at most 200 characters. At most 30 are listed:
   every failed command stays, the newest successful ones fill the rest, in
   execution order, and `commands: N more not shown` counts the others.
