@@ -74,7 +74,8 @@
   }
 
   let composer = $state.raw<ComposerSnapshot | undefined>();
-  let mode = $state<'follow-up' | 'steer'>('follow-up');
+  /** The person's choice for the running turn; without one a message goes to the agent at once. */
+  let chosenMode = $state<'follow-up' | 'steer' | undefined>(undefined);
   let busy = $state(false);
   let error = $state('');
   let editing = $state('');
@@ -104,6 +105,8 @@
   const running = $derived(snapshot.session.status === 'running');
   const stopping = $derived(snapshot.session.status === 'stopping');
   const canSteer = $derived(Boolean(composer?.capabilities.steer));
+  // Steer is the default while a turn runs; a harness that cannot steer queues the message.
+  const mode = $derived<'follow-up' | 'steer'>(canSteer ? (chosenMode ?? 'steer') : 'follow-up');
   const commands = $derived([
     ...(composer?.capabilities.compact
       ? [{ name: 'compact', description: 'Compact conversation context', enabled: snapshot.session.status === 'idle' && !composer.queue.items.length }]
@@ -281,8 +284,9 @@
     }
   }
 
+  // Each turn starts from the default again.
   $effect(() => {
-    if (!running || !canSteer) mode = 'follow-up';
+    if (!running) chosenMode = undefined;
   });
 
   // Loads the project file names for `@` as it is typed.
@@ -780,10 +784,10 @@
           <Segmented
             size="sm"
             label={$t('Send mode')}
-            bind:value={mode}
+            bind:value={() => mode, (value) => { chosenMode = value === 'follow-up' ? 'follow-up' : 'steer'; }}
             options={[
-              { value: 'follow-up', label: $t('Follow up'), title: $t('Send after the current turn finishes') },
               { value: 'steer', label: $t('Steer'), title: $t('Redirect the running turn now') },
+              { value: 'follow-up', label: $t('Follow up'), title: $t('Send after the current turn finishes') },
             ]}
           />
         {/if}

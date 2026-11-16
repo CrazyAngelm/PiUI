@@ -164,7 +164,7 @@ These capabilities are allowed as extensions; the core provides slots and host c
 |---|---|---|
 | CMP-001 | The multiline composer supports regular text, slash commands, path suggestions, and attachments. | Must |
 | CMP-002 | In idle state, `Enter` sends and `Shift+Enter` creates a line; hotkeys are configurable. | Must |
-| CMP-003 | During a run, the user explicitly chooses `Steer` or `Follow up`; the selected behavior is visible before sending. | Must |
+| CMP-003 | During a run, the composer shows whether a message will `Steer` the turn or `Follow up` after it, and the user can switch before sending. `Steer` is the default where the harness supports it. | Must |
 | CMP-004 | The Send button becomes Stop only for an active run; the queued composer remains available. | Must |
 | CMP-005 | The pending queue is shown as chips/list; items can be removed before delivery if Pi capability permits it; otherwise the UI honestly reports the limitation. | Should |
 | CMP-006 | `get_commands` powers autocomplete for extension commands, prompts, and skills. | Must |
