@@ -923,6 +923,16 @@ Branch `feat/workbench-1116`. Decisions: ADR-064 to ADR-071.
   keyed by pane (ADR-068). Six tests were wrong rather than the code: a
   number format, the new Hide sidebar tab stop, a locator that also matched
   a row's Options button, and three workbench assertions.
+- **Review follow-up and the keyboard.** A review of the flat pane list found
+  two defects, both fixed. The splitters came after every pane in the tab
+  order: panes and splitters are now one list in reading order. A direct
+  start forced by a pipeline chunk that failed to load overwrote the executor
+  the project remembered: such a start now keeps it, and the chip's retry is
+  covered by a test. The screenshot pass found a third: the transcript pulled
+  the view back to the latest message when keyboard focus landed on a control
+  above it. Focus now counts as the reader's own move (ADR-071). A seventh
+  wrong test was a sidebar locator in the Russian copy test that also matched
+  a row's Options button.
 - **Test infrastructure.** The full `vitest run` hung on
   `remoteMode.test.ts`: a mock factory waited for a module that imported the
   mocked transport. The avatar contract checks moved to

@@ -85,6 +85,24 @@ test.describe('chat activity', () => {
     await expect(checks).toHaveCount(0);
   });
 
+  test('a control reached with the keyboard stays in view', async ({ lab, page }) => {
+    await lab.open();
+    await lab.chat(/Route host calls through one transport/).click();
+    const transcript = page.getByRole('region', { name: 'Conversation messages' });
+    const control = transcript.getByRole('button', { name: /^Worked for/ });
+    await expect(control).toBeVisible();
+    await expect(control).not.toBeInViewport();
+
+    // Focus scrolls the control into view. The transcript must not pull the view back to the latest message.
+    await control.focus();
+    await expect(control).toBeInViewport();
+    await page.waitForTimeout(500);
+    await expect(control).toBeInViewport();
+    await page.keyboard.press('Enter');
+    await expect(control).toHaveAttribute('aria-expanded', 'true');
+    await expect(control).toBeInViewport();
+  });
+
   test('only a failed call shows the error state', async ({ lab, page }) => {
     await lab.open();
     await lab.chat(/Investigate crash on startup/).click();

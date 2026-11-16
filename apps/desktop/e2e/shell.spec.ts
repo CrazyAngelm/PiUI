@@ -291,7 +291,7 @@ test.describe('appearance and language', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Настройки' })).toBeVisible();
     await expect(page.getByRole('group', { name: 'Тема' }).getByRole('radio', { name: 'Тёмная' })).toBeVisible();
     // Chat titles are user content and stay as written.
-    await expect(sidebar.getByRole('button', { name: /Plan a weekend in Lisbon/ })).toBeVisible();
+    await expect(sidebar.getByRole('button', { name: /^Plan a weekend in Lisbon/ })).toBeVisible();
 
     // The choice survives a reload.
     await page.reload();

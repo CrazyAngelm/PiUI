@@ -145,29 +145,31 @@
 {/snippet}
 
 <!--
-  One flat list keyed by pane, placed by the layout's fractions: a chat stays mounted, with its
-  scroll position and composer, when a pane opens, closes or moves beside it.
+  One flat keyed list in reading order, placed by the layout's fractions: a chat stays mounted,
+  with its scroll position and composer, when a pane opens or closes beside it, and the keyboard
+  walks a pane, the separator after it, then the next pane.
 -->
 <div class="grid">
-  {#each placed.panes as place (place.leaf.id)}
-    <div class="cell" style:left="{place.left * 100}%" style:top="{place.top * 100}%" style:width="{place.width * 100}%" style:height="{place.height * 100}%">
-      {@render leafPane(place.leaf)}
-    </div>
-  {/each}
-  {#each placed.splits as split (split.path.join('/'))}
-    <!-- The box of one split. Its separator sits at the ratio and measures this box while it is dragged. -->
-    <div
-      class="divider"
-      class:divider--column={split.direction === 'column'}
-      style:left="{split.left * 100}%"
-      style:top="{split.top * 100}%"
-      style:width="{split.width * 100}%"
-      style:height="{split.height * 100}%"
-    >
-      <span style:flex="{split.ratio} 1 0"></span>
-      <PaneSplitter direction={split.direction} ratio={split.ratio} label={splitLabel(split.direction)} onResize={(ratio) => workbench.resize(split.path, ratio)} />
-      <span style:flex="{1 - split.ratio} 1 0"></span>
-    </div>
+  {#each placed as place (place.key)}
+    {#if place.kind === 'pane'}
+      <div class="cell" style:left="{place.left * 100}%" style:top="{place.top * 100}%" style:width="{place.width * 100}%" style:height="{place.height * 100}%">
+        {@render leafPane(place.leaf)}
+      </div>
+    {:else}
+      <!-- The box of one split. Its separator sits at the ratio and measures this box while it is dragged. -->
+      <div
+        class="divider"
+        class:divider--column={place.direction === 'column'}
+        style:left="{place.left * 100}%"
+        style:top="{place.top * 100}%"
+        style:width="{place.width * 100}%"
+        style:height="{place.height * 100}%"
+      >
+        <span style:flex="{place.ratio} 1 0"></span>
+        <PaneSplitter direction={place.direction} ratio={place.ratio} label={splitLabel(place.direction)} onResize={(ratio) => workbench.resize(place.path, ratio)} />
+        <span style:flex="{1 - place.ratio} 1 0"></span>
+      </div>
+    {/if}
   {/each}
 </div>
 

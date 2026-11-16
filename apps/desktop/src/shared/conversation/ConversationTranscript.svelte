@@ -326,6 +326,10 @@
     const onWheel = (event: WheelEvent) => {
       if (event.deltaY < 0) gesture();
     };
+    // Focus that lands on a control scrolls it into view: the reader went there with the keyboard.
+    const onFocus = (event: FocusEvent) => {
+      if (event.target !== node) gesture();
+    };
     const onScroll = () => {
       if (pendingView || searchOpen) return;
       if (distance() <= NEAR_BOTTOM) following = true;
@@ -343,6 +347,7 @@
     node.addEventListener('touchmove', gesture, { passive: true });
     node.addEventListener('pointerdown', gesture, { passive: true });
     node.addEventListener('keydown', onKey);
+    node.addEventListener('focusin', onFocus);
     load();
     void apply(params.ready);
     return {
@@ -362,6 +367,7 @@
         node.removeEventListener('touchmove', gesture);
         node.removeEventListener('pointerdown', gesture);
         node.removeEventListener('keydown', onKey);
+        node.removeEventListener('focusin', onFocus);
       },
     };
   }

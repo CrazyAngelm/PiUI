@@ -35,6 +35,11 @@ in `deepseek-ai/deepseek-harness`) were read; no code was copied.
   request, also while it streams. A group that holds a single call or a
   single reasoning block opens that row with it.
 - **An opened group is capped in height** and scrolls inside the transcript.
+- **Keyboard focus keeps its place.** The transcript follows new content
+  until the reader moves away from the latest message. Focus that lands on a
+  control inside it counts as such a move, as a wheel, a touch or a key
+  already did: a control reached with Tab stays in view instead of being
+  pulled back to the latest message.
 - **Presentation only.** No block is dropped, reordered or changed. Search,
   print, history paging, message actions and the generic compatibility row
   are unchanged. A compatibility block stays visible as its own row.

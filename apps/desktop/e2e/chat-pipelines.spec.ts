@@ -263,17 +263,46 @@ test.describe('the executor of a new chat', () => {
 test.describe('pipeline code that cannot load', () => {
   // The refused module request is logged by the browser.
   test.use({ allowConsoleErrors: true });
+  const CODE = '**/src/app/chatPipelines/pipelineCode.ts*';
+  const FAILED = 'Pipelines could not be loaded. Try again.';
 
-  test('a new chat still talks directly, and the chip offers to load again', async ({ lab, page }) => {
-    await page.route('**/src/app/chatPipelines/pipelineCode.ts*', (route) => route.abort());
+  test('a new chat still talks directly, and the project keeps the pipeline it remembered', async ({ lab, page }) => {
+    test.slow(); // Three starts of the lab.
     await lab.open();
     const composer = home(page);
-    const chip = composer.getByRole('button', { name: 'Pi', exact: true });
-    await expect(chip).toHaveAttribute('title', 'Pipelines could not be loaded. Try again.');
-    await expect(chip).toBeEnabled();
+    await composer.getByRole('button', { name: 'Pi', exact: true }).click();
+    await page.getByRole('combobox', { name: 'Who answers' }).fill('Code review');
+    await lab.option(/^Code review/).click();
+    await expect(composer.getByRole('group', { name: 'Pipeline for this message' })).toBeVisible();
 
+    // A restart without the pipeline code: a chat can only talk directly.
+    await page.route(CODE, (route) => route.abort());
+    await page.reload();
+    await expect(lab.sidebar).toBeVisible({ timeout: 30_000 });
+    await expect(composer.getByTitle(FAILED)).toBeEnabled();
+    await expect(composer.getByRole('group', { name: 'Pipeline for this message' })).toHaveCount(0);
     await composer.getByRole('textbox', { name: 'Message' }).fill('Say hello without a pipeline');
     await composer.getByRole('button', { name: 'Start chat' }).click();
     await expect(page.getByRole('region', { name: 'Conversation messages' })).toContainText('Say hello without a pipeline');
+
+    // That start was forced, not chosen: with the code back the project starts with its pipeline.
+    await page.unroute(CODE);
+    await page.reload();
+    await expect(lab.sidebar).toBeVisible({ timeout: 30_000 });
+    await lab.nav('New chat').click();
+    await expect(composer.getByRole('button', { name: 'Code review', exact: true })).toBeVisible();
+  });
+
+  test('the chip loads the code again and the picker comes back', async ({ lab, page }) => {
+    await page.route(CODE, (route) => route.abort());
+    await lab.open();
+    const composer = home(page);
+    await expect(composer.getByTitle(FAILED)).toBeEnabled();
+
+    await page.unroute(CODE);
+    await composer.getByTitle(FAILED).click();
+    await expect(composer.getByTitle(FAILED)).toHaveCount(0);
+    await composer.getByRole('button', { name: 'Pi', exact: true }).click();
+    await expect(page.getByRole('combobox', { name: 'Who answers' })).toBeVisible();
   });
 });

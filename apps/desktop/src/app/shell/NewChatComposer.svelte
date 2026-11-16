@@ -889,7 +889,8 @@
     }
     if (!harness) return;
     busy = true;
-    remember(executorMemory(workspaceId, ''));
+    // A direct start that was forced (no pipelines here, or their code did not load) is not a choice: the project keeps what it remembered.
+    remember(pipelinesAllowed ? executorMemory(workspaceId, '') : undefined);
     // Started now, with the text as it is: the macro rules may still be loading when the chat is created.
     const message = expanded(text, macros.list, skillSyntax);
     const title = chatTitle(text);

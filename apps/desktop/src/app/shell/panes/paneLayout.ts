@@ -88,37 +88,46 @@ export interface PaneBox {
   readonly height: number;
 }
 export interface PanePlace extends PaneBox {
+  readonly kind: 'pane';
+  readonly key: string;
   readonly leaf: PaneLeaf;
 }
 export interface SplitPlace extends PaneBox {
+  readonly kind: 'split';
+  readonly key: string;
   readonly path: SplitPath;
   readonly direction: SplitDirection;
   readonly ratio: number;
 }
+export type Place = PanePlace | SplitPlace;
 
 /**
- * Where every pane and every split sits. The chat area draws the panes from this as one flat
- * list keyed by pane, so a chat stays mounted whatever opens, closes or moves beside it.
- * Panes come in reading order; a split's box is the area its two halves share.
+ * Where every pane and every split sits, in reading order: a split comes between its two
+ * halves, so the keyboard walks a pane, the separator after it, then the next pane. The chat
+ * area draws this as one flat keyed list, so a chat stays mounted whatever opens or closes
+ * beside it. A split's box is the area its halves share. Its key names the pane before its
+ * seam, which keeps the keys that stay in the same order through any change of the layout.
  */
-export function placePanes(node: PaneNode | undefined): { panes: PanePlace[]; splits: SplitPlace[] } {
-  const placed: { panes: PanePlace[]; splits: SplitPlace[] } = { panes: [], splits: [] };
+export function placePanes(node: PaneNode | undefined): Place[] {
+  const places: Place[] = [];
+  let before = '';
   const visit = (current: PaneNode, box: PaneBox, path: SplitPath): void => {
     if (current.kind === 'pane') {
-      placed.panes.push({ leaf: current, ...box });
+      places.push({ kind: 'pane', key: `pane:${current.id}`, leaf: current, ...box });
+      before = current.id;
       return;
     }
-    placed.splits.push({ path, direction: current.direction, ratio: current.ratio, ...box });
     const row = current.direction === 'row';
     const first: PaneBox = row ? { ...box, width: box.width * current.ratio } : { ...box, height: box.height * current.ratio };
     const second: PaneBox = row
       ? { ...box, left: box.left + first.width, width: box.width - first.width }
       : { ...box, top: box.top + first.height, height: box.height - first.height };
     visit(current.first, first, [...path, 'first']);
+    places.push({ kind: 'split', key: `split:${before}`, path, direction: current.direction, ratio: current.ratio, ...box });
     visit(current.second, second, [...path, 'second']);
   };
   if (node) visit(node, { left: 0, top: 0, width: 1, height: 1 }, []);
-  return placed;
+  return places;
 }
 
 function parseNode(value: unknown, ids: Set<string>, chats: Set<string>, depth: number): PaneNode | undefined {

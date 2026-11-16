@@ -1,3 +1,4 @@
+import type { Locator } from '@playwright/test';
 import { expect, test, type Lab } from './fixtures';
 
 const LISBON = 'Plan a weekend in Lisbon';
@@ -16,6 +17,13 @@ async function openChats(lab: Lab, titles: string[]): Promise<void> {
 
 const tab = (lab: Lab, title: string) => lab.page.getByRole('tab', { name: title });
 const pane = (lab: Lab, title: string) => lab.page.getByRole('region', { name: title });
+
+/** The place of an element on the page; an element that is not drawn fails the test. */
+async function box(locator: Locator): Promise<{ x: number; y: number; width: number; height: number }> {
+  const value = await locator.boundingBox();
+  if (!value) throw new Error('The element is not drawn.');
+  return value;
+}
 
 /** Shows a chat beside the active pane through its tab's context menu. */
 async function openFromTab(lab: Lab, title: string, item: 'Open to the right' | 'Open below'): Promise<void> {
@@ -188,6 +196,44 @@ test.describe('split panes', () => {
     await expect(splitter).toHaveAttribute('aria-valuenow', '80');
     await page.keyboard.press('Home');
     await expect(splitter).toHaveAttribute('aria-valuenow', '50');
+  });
+
+  test('the splitter sits between its panes in the tab order', async ({ lab, page }) => {
+    await lab.open();
+    await openChats(lab, [LISBON, CACHE]);
+    await openFromTab(lab, LISBON, 'Open to the right');
+    const splitter = page.getByRole('separator', { name: 'Resize panes side by side' });
+    const holdsFocus = (title: string) => pane(lab, title).evaluate((element) => element.contains(document.activeElement));
+
+    await splitter.focus();
+    await page.keyboard.press('Shift+Tab');
+    expect(await holdsFocus(CACHE)).toBe(true);
+    await splitter.focus();
+    await page.keyboard.press('Tab');
+    expect(await holdsFocus(LISBON)).toBe(true);
+  });
+
+  test('dragging the splitter resizes both panes and it stays on their seam', async ({ lab, page }) => {
+    await lab.open();
+    await openChats(lab, [LISBON, CACHE]);
+    await openFromTab(lab, LISBON, 'Open to the right');
+    const splitter = page.getByRole('separator', { name: 'Resize panes side by side' });
+    const left = await box(pane(lab, CACHE));
+    const right = await box(pane(lab, LISBON));
+    const bar = await box(splitter);
+    expect(Math.abs(left.width - right.width)).toBeLessThan(3);
+
+    const y = bar.y + bar.height / 2;
+    await page.mouse.move(bar.x + bar.width / 2, y);
+    await page.mouse.down();
+    await page.mouse.move(left.x + (left.width + right.width) * 0.3, y, { steps: 5 });
+    await page.mouse.up();
+    await expect(splitter).toHaveAttribute('aria-valuenow', '30');
+
+    const narrow = await box(pane(lab, CACHE));
+    const wide = await box(pane(lab, LISBON));
+    expect(narrow.width / (narrow.width + wide.width)).toBeCloseTo(0.3, 1);
+    expect(Math.abs((await box(splitter)).x - (narrow.x + narrow.width))).toBeLessThan(3);
   });
 
   test('closing a pane keeps its tab', async ({ lab }) => {
