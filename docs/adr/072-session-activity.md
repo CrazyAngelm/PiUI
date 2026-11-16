@@ -20,7 +20,7 @@ no sign of it in the transcript.
   with how long each has run, what a running one is doing now and how a
   finished one ended. Linked chats and a Fusion sidekick follow it: they are
   this chat's agents too. Then come the chat's origin, the agent mode, the
-  pipeline run, plugin panels and, last, a closed disclosure "About this chat".
+  pipeline run and plugin panels.
 - **The list is an additive field.** `SessionSnapshot.tasks` and the workspace
   event `{ type: 'tasks', tasks }` (both additive v15, contract
   `workspace-session-tasks-v1`) carry it; the event replaces the whole list. The
@@ -55,10 +55,13 @@ no sign of it in the transcript.
   small dot sits on its button and a status text says how many native tasks
   and agents run in the chat. The quick tool calls of a turn do not count:
   the mark is for work that outlives one. The button keeps its name.
-- **Facts and capabilities stay.** Agent, model, project, status, update time
-  and "What this agent can do here" move behind "About this chat", closed by
-  default. Capability enforcement is part of the trust model, so it is demoted,
-  not deleted.
+- **No block of facts or capabilities.** The first version kept the agent,
+  model, project, status, update time and the list "What this agent can do
+  here" behind a closed disclosure "About this chat". It was removed on
+  2026-11-17 at the person's request: the model is on the composer, the project
+  and status are in the sidebar, and the list gave nothing to act on.
+  Capability enforcement is unchanged; the host and the adapters still decide
+  it, the panel only stopped listing it.
 
 Alternatives rejected:
 

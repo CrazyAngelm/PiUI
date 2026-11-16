@@ -760,7 +760,8 @@ test("model, effort and speed changes use native runtime controls", async () => 
       model: { id: "sonnet", provider: "anthropic", name: "Sonnet", thinkingLevels: ["low", "medium", "high"] },
       thinkingLevel: "high",
     });
-    assert.deepEqual(controls().slice(1), [{ subtype: "set_model", model: "sonnet" }, { subtype: "apply_flag_settings", settings: { effortLevel: "high" } }]);
+    assert.deepEqual(controls().slice(0, 2).map((request) => request.subtype), ["initialize", "get_settings"]);
+    assert.deepEqual(controls().slice(2), [{ subtype: "set_model", model: "sonnet" }, { subtype: "apply_flag_settings", settings: { effortLevel: "high" } }]);
     const snapshot = await adapter.snapshot();
     assert.deepEqual([snapshot.model.id, snapshot.thinkingLevel], ["sonnet", "high"]);
     await assert.rejects(adapter.setModel({ model: { id: "haiku", name: "Haiku" }, thinkingLevel: "low" }), { bridgeCode: "unsupported-settings" });
@@ -771,11 +772,54 @@ test("model, effort and speed changes use native runtime controls", async () => 
     assert.equal(controls().length, before, "a fast request never reaches Claude Code");
     await assert.rejects(adapter.setModel({ model: { id: "opus-legacy", name: "x" } }), { bridgeCode: "model-unavailable" });
     await adapter.setModel({ model: { id: "default", name: "Default" }, serviceTier: "standard" });
-    assert.deepEqual(controls().slice(before), [{ subtype: "set_model", model: "default" }], "standard speed is already pinned");
+    assert.deepEqual(controls().slice(before), [{ subtype: "get_settings" }, { subtype: "set_model", model: "opus-legacy" }, { subtype: "set_model", model: "default" }], "the unavailable name is refused and standard speed is already pinned");
     assert.equal((await adapter.snapshot()).serviceTier, "standard");
     assert.ok(!controls().some((request) => request.subtype === "apply_flag_settings" && "fastMode" in request.settings));
     assert.equal(records().filter((record) => record.kind === "start").length, 1, "no restart was needed");
     assert.deepEqual(log.problems, []);
+  } finally { await adapter.dispose(); }
+});
+
+test("a resumed chat reports the model it runs and takes back the short name its list no longer carries", async () => {
+  const { config, records } = setup({}, ["--fixture-resumed-model", "sonnet"]);
+  const adapter = await createClaudeAdapter(config, () => {});
+  const controls = () => records().filter((record) => record.kind === "control").map((record) => record.request);
+  try {
+    const opened = await adapter.snapshot();
+    assert.deepEqual([opened.model.id, opened.model.name, opened.thinkingLevel], ["claude-sonnet-5", "Sonnet", undefined], "not the default row");
+    assert.ok(!opened.models.some((model) => model.id === "sonnet"));
+    assert.deepEqual(await adapter.setModel({ model: { id: "sonnet", provider: "anthropic", name: "Sonnet" }, thinkingLevel: "high" }), {
+      model: { id: "sonnet", provider: "anthropic", name: "Sonnet", thinkingLevels: ["low", "medium", "high"] },
+      thinkingLevel: "high",
+    });
+    const restored = await adapter.snapshot();
+    assert.deepEqual([restored.model.id, restored.thinkingLevel], ["sonnet", "high"]);
+    assert.deepEqual(restored.models.filter((model) => model.name === "Sonnet").map((model) => model.id), ["sonnet"], "the listed row goes by the requested name");
+    assert.deepEqual(controls().map((request) => request.subtype), ["initialize", "get_settings", "get_settings", "set_model", "get_settings", "apply_flag_settings"]);
+    await assert.rejects(adapter.setModel({ model: { id: "no-such-model", name: "x" } }), { bridgeCode: "model-unavailable" });
+    assert.equal((await adapter.snapshot()).model.id, "sonnet", "a refused name changes nothing");
+  } finally { await adapter.dispose(); }
+});
+
+test("a name that resolves to no listed model is undone and refused", async () => {
+  const { config, records } = setup();
+  const adapter = await createClaudeAdapter(config, () => {});
+  const controls = () => records().filter((record) => record.kind === "control").map((record) => record.request);
+  try {
+    await assert.rejects(adapter.setModel({ model: { id: "fixture-unlisted", name: "x" } }), { bridgeCode: "model-unavailable" });
+    assert.deepEqual(controls().map((request) => request.subtype), ["initialize", "get_settings", "get_settings", "set_model", "get_settings", "set_model"]);
+    assert.deepEqual(controls().at(-1), { subtype: "set_model", model: "claude-opus-4-8" }, "the earlier model is put back");
+    assert.equal((await adapter.snapshot()).model.id, "default");
+  } finally { await adapter.dispose(); }
+});
+
+test("a CLI without get_settings keeps the default row and refuses unlisted names untouched", async () => {
+  const { config, records } = setup({}, ["--fixture-no-get-settings"]);
+  const adapter = await createClaudeAdapter(config, () => {});
+  try {
+    assert.equal((await adapter.snapshot()).model.id, "default");
+    await assert.rejects(adapter.setModel({ model: { id: "fixture-unlisted", name: "x" } }), { bridgeCode: "model-unavailable" });
+    assert.ok(!records().some((record) => record.kind === "control" && record.request.subtype === "set_model"), "nothing is sent that cannot be verified");
   } finally { await adapter.dispose(); }
 });
 

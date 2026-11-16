@@ -742,6 +742,14 @@ permission mode, fast mode) stay authoritative. No provider client or model loop
   `priority:"later"`. `interrupt` sends `{subtype:"interrupt",cancel_queued:true}`.
   `composerCapabilities` is `{steer:true,compact:false}` (compaction is only a
   literal `/compact` prompt headlessly).
+- Current model: without a configured model the adapter asks `get_settings`
+  for the applied model (a resumed conversation continues on its own model, a
+  new one starts on the user's default) and falls back to the `default` row
+  when an older CLI refuses the request. A resumed conversation lists its
+  model under the full name, so `setModel` with a name the list lacks lets
+  Claude Code resolve it (`set_model`, then `get_settings`): a name that
+  resolves to a listed model is accepted and an exactly named row goes by it;
+  anything else is undone and refused as `model-unavailable`.
 - Settings: `set_model`; effort uses `apply_flag_settings {effortLevel}`. If the
   CLI rejects that request (older CLIs) while idle, the adapter restarts it
   transparently on the same conversation (`--resume`, or `--session-id` for an

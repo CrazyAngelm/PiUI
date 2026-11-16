@@ -97,27 +97,13 @@ test.describe('chat activity', () => {
     await expect(activity.getByRole('button')).toHaveCount(0);
   });
 
-  test('facts and capabilities stay behind the closed About this chat disclosure', async ({ lab, page }) => {
+  test('the details panel has no facts or capabilities block', async ({ lab }) => {
     await lab.open('demo');
     await lab.chat(CLAUDE_CHAT).click();
     const details = await openDetails(lab);
-    const summary = details.getByText('About this chat', { exact: true });
-    const capabilities = details.getByText('What this agent can do here', { exact: true });
-    const model = details.getByText('Claude Lab Opus');
-
-    await expect(summary).toBeVisible();
-    await expect(capabilities).toBeHidden();
-    await expect(model).toBeHidden();
-
-    await summary.click();
-    await expect(capabilities).toBeVisible();
-    await expect(model).toBeVisible();
-    await expect(details.getByText('Accepts messages')).toBeVisible();
-
-    // The summary is a keyboard control: Enter closes it again.
-    await summary.focus();
-    await page.keyboard.press('Enter');
-    await expect(capabilities).toBeHidden();
+    await expect(details.getByText('About this chat')).toHaveCount(0);
+    await expect(details.getByText('What this agent can do here')).toHaveCount(0);
+    await expect(details.getByRole('region', { name: 'Activity' })).toBeVisible();
   });
 
   test('the toolbar tells that work is running while the details panel is closed', async ({ lab, page }) => {
@@ -145,17 +131,13 @@ for (const theme of ['light', 'dark'] as const) {
   test.describe(`chat activity accessibility (${theme})`, () => {
     test.use({ colorScheme: theme, reducedMotion: 'reduce' });
 
-    test('the details panel passes axe, closed and with the disclosure open', async ({ lab, page }) => {
+    test('the details panel passes axe', async ({ lab, page }) => {
       test.slow(); // axe's contrast pass is CPU-heavy.
       await lab.open('demo');
       await lab.chat(CLAUDE_CHAT).click();
       const details = await openDetails(lab);
       await expect(details.getByRole('region', { name: 'Activity' })).toContainText(REVIEW_AGENT);
       expect(await axeBlocking(page, 'aside[aria-label="Chat details"]'), 'activity').toEqual([]);
-
-      await details.getByText('About this chat', { exact: true }).click();
-      await expect(details.getByText('What this agent can do here', { exact: true })).toBeVisible();
-      expect(await axeBlocking(page, 'aside[aria-label="Chat details"]'), 'activity with the disclosure open').toEqual([]);
     });
   });
 }

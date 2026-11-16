@@ -941,6 +941,42 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
       observedModel = { id: oneLine(model, 160), provider: "anthropic", name: oneLine(model, 160) };
     }
   };
+  // What Claude Code really runs. `get_settings` answers the applied model; an
+  // older CLI refuses the request and a silent one is not waited for.
+  const APPLIED_SETTINGS_TIMEOUT_MS = 5000;
+  const appliedModel = async () => {
+    let answer;
+    const request = controlRequest({ subtype: "get_settings" }).then((value) => { answer = value; });
+    if (await withTimeout(request, APPLIED_SETTINGS_TIMEOUT_MS)) return undefined;
+    const model = isRecord(answer) && isRecord(answer.applied) ? answer.applied.model : undefined;
+    return typeof model === "string" && MODEL_PATTERN.test(model) ? model : undefined;
+  };
+  // Claude Code lists the model a resumed conversation already runs under its
+  // full name, so the short name a person chose earlier can be missing from
+  // the list although Claude Code still takes it. The name is kept only when
+  // it resolves to a listed model; an exactly named row then goes by the
+  // requested name, as it does in a conversation started with it.
+  const resolveUnlistedModel = async (id) => {
+    const before = await appliedModel();
+    if (!before) return undefined;
+    try {
+      await controlRequest({ subtype: "set_model", model: id });
+    } catch (error) {
+      if (error?.bridgeCode === "native-command-rejected") return undefined;
+      throw error;
+    }
+    const after = await appliedModel();
+    const entry = after ? catalog.find((row) => row.id === after) ?? catalog.find((row) => row.resolvedModel === after) : undefined;
+    if (!entry) {
+      await controlRequest({ subtype: "set_model", model: before }).catch(() => {});
+      return undefined;
+    }
+    if (entry.id === after) entry.id = id;
+    currentModelId = entry.id;
+    observedModel = undefined;
+    launchSettings.model = entry.id;
+    return entry;
+  };
   const handleInit = (message) => {
     markNativeActive();
     if (message.apiKeySource != null && message.apiKeySource !== "none") {
@@ -1898,11 +1934,18 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
     if (config.model?.id && !findModel(config.model.id)) {
       throw fail("model-unavailable", "The selected Claude model is unavailable for this account.");
     }
+    // Without a configured model the chat runs what Claude Code chose: a
+    // resumed conversation continues on its own model and a new one starts on
+    // the user's default, so the `default` row is only the fallback.
+    if (!config.model?.id) {
+      const applied = await appliedModel();
+      if (applied) observeModel(applied);
+    }
     const effective = findModel(currentModelId ?? "default") ?? catalog[0];
     if (config.thinkingLevel && !effective?.thinkingLevels.includes(config.thinkingLevel)) {
       throw fail("unsupported-settings", "The selected Claude model does not support this effort level.");
     }
-    currentModelId ??= effective?.id;
+    if (!observedModel) currentModelId ??= effective?.id;
   } catch (error) {
     await cleanupStartup();
     throw error;
@@ -2091,7 +2134,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
       // Standard speed is always pinned; fast mode is refused before any native request.
       if (serviceTier != null && serviceTier !== "standard") throw unsupportedSpeed(serviceTier);
       if (disposed || sessionFailed || !proc || proc.ended || restarting) throw fail("not-running", "Claude Code is not running.");
-      const entry = findModel(model.id);
+      const entry = findModel(model.id) ?? (MODEL_PATTERN.test(model.id) ? await resolveUnlistedModel(model.id) : undefined);
       if (!entry) throw fail("model-unavailable", "The selected Claude model is unavailable for this account.");
       if (thinkingLevel != null && !entry.thinkingLevels.includes(thinkingLevel)) {
         throw fail("unsupported-settings", "The selected Claude model does not support this effort level.");

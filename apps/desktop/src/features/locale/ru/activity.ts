@@ -9,6 +9,5 @@ export const activityRu: Readonly<Record<string, string>> = {
   'Nothing is running': 'Сейчас ничего не запущено',
   'Stop {0}': 'Остановить: {0}',
   'The task could not be stopped.': 'Не удалось остановить задачу.',
-  'About this chat': 'О чате',
   '{0} running in this chat': 'Запущено в этом чате: {0}',
 };

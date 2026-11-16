@@ -50,8 +50,6 @@ test.describe('new chat', () => {
     await expect(page.getByRole('radiogroup', { name: 'Reasoning' }).getByRole('radio', { name: 'high', exact: true })).toBeChecked();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('button', { name: 'GPT Lab 5 Codex high' })).toBeVisible();
-    await page.getByRole('button', { name: 'Details' }).click();
-    await expect(page.getByRole('complementary', { name: 'Chat details' })).toContainText('GPT Lab 5 Codex');
   });
 
   test('a restricted project asks for trust instead of starting', async ({ lab, page }) => {
