@@ -1,4 +1,5 @@
 import { acpRu } from './acp';
+import { activityRu } from './activity';
 import { attentionRu } from './attention';
 import { boardRu } from './board';
 import { branchRu } from './branch';
@@ -27,6 +28,7 @@ import { workbenchRu } from './workbench';
 /** Russian UI copy kept per feature area, so parallel work does not share one file. */
 export const featureRu: Readonly<Record<string, string>> = {
   ...acpRu,
+  ...activityRu,
   ...attentionRu,
   ...boardRu,
   ...branchRu,

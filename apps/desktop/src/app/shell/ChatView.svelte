@@ -26,6 +26,7 @@
   import PluginComposerActions from '../plugins/PluginComposerActions.svelte';
   import { extensionSurfaces } from '../chat/extensions/extensionSurfaces.svelte';
   import Transcript from '../chat/transcript/Transcript.svelte';
+  import { sessionActivity } from '../chat/activity/sessionActivity';
   import SearchIcon from '@lucide/svelte/icons/search';
   import GitCompare from '@lucide/svelte/icons/git-compare';
   import ArrowRightLeft from '@lucide/svelte/icons/arrow-right-left';
@@ -134,6 +135,10 @@
   const sessionMark = $derived(marks.session(sessionId));
   let titleDraft = $state('');
   let titleInput = $state<HTMLInputElement | null>(null);
+
+  const detailsShown = $derived(roomy && detailsOpen && !reviewOpen);
+  /** What the agent runs now (ADR-072); the toolbar says so while the details panel is closed. */
+  const runningWork = $derived(sessionActivity(snapshot).ongoing);
 
   function readDetailsOpen(): boolean {
     try {
@@ -311,7 +316,11 @@
             <IconButton label={$t('Review changes')} shortcut="Mod+Shift+G" active={reviewOpen} onclick={toggleReview}><GitCompare /></IconButton>
           {/if}
           {#if roomy}
-            <IconButton label={$t('Details')} shortcut="Mod+Alt+B" active={detailsOpen && !reviewOpen} onclick={toggleDetails}><PanelRight /></IconButton>
+            <span class="chat__details-toggle">
+              <IconButton label={$t('Details')} shortcut="Mod+Alt+B" active={detailsOpen && !reviewOpen} onclick={toggleDetails}><PanelRight /></IconButton>
+              {#if runningWork > 0 && !detailsShown}<span class="chat__running-dot" aria-hidden="true"></span>{/if}
+              <span class="visually-hidden" role="status">{runningWork > 0 ? $t('{0} running in this chat', [runningWork]) : ''}</span>
+            </span>
           {/if}
           <Menu
             align="end"
@@ -471,7 +480,7 @@
         {/key}
       {/await}
     {:else if detailsOpen && snapshot}
-      <ChatDetails {snapshot} onClose={toggleDetails} onReview={toggleReview} />
+      <ChatDetails {snapshot} managed={isSidekick || Boolean(snapshot.session.runId)} onClose={toggleDetails} onReview={toggleReview} />
     {/if}
   </div>
 {:else}
@@ -545,6 +554,20 @@
     align-items: center;
     gap: 2px;
     margin-left: auto;
+  }
+  .chat__details-toggle {
+    position: relative;
+    display: inline-flex;
+  }
+  .chat__running-dot {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--piui-accent);
+    pointer-events: none;
   }
   .banner {
     display: flex;

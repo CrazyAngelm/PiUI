@@ -996,6 +996,7 @@ pub fn run() -> Result<(), tauri::Error> {
             workspace_api::harness_models_v18,
             workspace_api::harness_models_v19,
             workspace_api::workspace_session_mode_v1,
+            workspace_api::workspace_task_stop_v1,
             review_api::workspace_review_v1,
             placement_api::workspace_placement_v1,
             adopt_api::workspace_adopt_v1,

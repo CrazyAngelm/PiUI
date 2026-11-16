@@ -13,6 +13,7 @@ import {
 } from './labState';
 import { chatTurn, compactionTurn, withImageMarkers, type ApprovalStep, type TurnContext, type TurnStep } from './turnScripts';
 import { isAcpHarness } from '../../../../../contracts/harness-identity-v3';
+import type { SessionTaskV1 } from '../../../../../contracts/workspace-session-tasks-v1';
 
 /** `lost`: the runtime was disposed before a terminal outcome (the host records uncertainty). */
 export type TurnOutcome = 'succeeded' | 'failed' | 'interrupted' | 'lost';
@@ -68,6 +69,13 @@ export class LabSessions {
 
   publishSession(record: LabSessionRecord): void {
     this.publish(record, { type: 'session', session: sessionSummary(record) });
+  }
+
+  /** Replaces a live session's tasks and publishes the whole new list (ADR-072); a closed session has none. */
+  replaceTasks(record: LabSessionRecord, tasks: readonly SessionTaskV1[]): void {
+    if (record.live === undefined) return;
+    record.live.tasks = tasks.map((task) => ({ ...task }));
+    this.publish(record, { type: 'tasks', tasks: record.live.tasks.map((task) => ({ ...task })) });
   }
 
   touch(record: LabSessionRecord): void {

@@ -36,6 +36,10 @@ runs an agent, touches a file or makes a network request. Choose a scenario with
 Add `&claude=signed-out` to any scenario to see Claude Code without a subscription login: the new-chat composer's
 sign-in status and a saved "Claude check" system whose run fails before it starts.
 
+The demo's Claude Code chat "Map pipeline editor shortcuts" runs two background tasks (an agent and the UI Lab dev
+server) and has two finished ones, so Details → Activity has rows to show; `lab/sessionTasksFake.ts` stops them like
+`workspace_task_stop_v1` does. Their instants follow the wall clock, not the lab epoch, so the elapsed times are real.
+
 Settings → Harnesses uses the lab ACP registry (`lab/acpFake.ts`): every scenario lists the shipped Gemini CLI
 (ready in `demo` and `long`, not installed in `empty`, not checked in `safe`, which runs no discovery), and
 `demo`, `safe` and `long` add a user descriptor whose program is missing (Qwen Code) and an untrusted one (Lab

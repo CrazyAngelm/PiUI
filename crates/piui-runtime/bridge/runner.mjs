@@ -5,7 +5,7 @@ const MAX_FRAME_BYTES = 32 * 1024 * 1024;
 const METHODS = new Set([
   "initialize", "snapshot", "prompt", "interrupt", "models", "resources", "catalogModels",
   "setModel", "respond", "rename", "dispose", "coordinatorResponse", "boardResponse", "sidekickResponse", "sessionsResponse",
-  "openSession", "sessionRequest", "composerCapabilities", "compact", "setMode", "composerCatalog",
+  "openSession", "sessionRequest", "composerCapabilities", "compact", "setMode", "stopTask", "composerCatalog",
 ]);
 const MAX_DETAILS_BYTES = 4 * 1024;
 // Upper bound for an adapter to confirm the native write of a sidekick result.

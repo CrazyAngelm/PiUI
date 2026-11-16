@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { blockStartedAt, forgetBlockStarts } from './blockStarts';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionSnapshot, WorkspaceApproval, WorkspaceEvent } from '../../../../../contracts/workspace-v15';
+import type { SessionTaskV1 } from '../../../../../contracts/workspace-session-tasks-v1';
 import { acceptWorkspaceSnapshot, applyWorkspaceEvent, harnessLabel, mergeCatalogSession, protectClosedCatalogSessions, resolveCloseAfterCatalog, retainSnapshotWithCatalogSession, sortedSessions } from './workspaceState';
 
 function snapshot(revision = 4): SessionSnapshot {
@@ -65,6 +67,24 @@ describe('workspace event revision handling', () => {
     expect(added.snapshot.approvals).toEqual([approval]);
     const resolved = applyWorkspaceEvent(added.snapshot, event(6, { type: 'approvalResolved', requestId: 'request-1' }));
     expect(resolved.snapshot.approvals).toEqual([]);
+  });
+
+  it('replaces the whole task list with a tasks event and advances the revision', () => {
+    const first: SessionTaskV1 = { id: 'task-1', kind: 'agent', title: 'Review the diff', status: 'running', background: true, startedAt: '2026-03-01T10:00:00Z' };
+    const second: SessionTaskV1 = { id: 'task-2', kind: 'command', title: 'pnpm test', status: 'completed', background: false, startedAt: '2026-03-01T10:01:00Z', endedAt: '2026-03-01T10:02:00Z' };
+    const added = applyWorkspaceEvent(snapshot(), event(5, { type: 'tasks', tasks: [first] }));
+    expect(added.type).toBe('applied');
+    expect(added.snapshot.revision).toBe(5);
+    expect(added.snapshot.tasks).toEqual([first]);
+    expect(added.snapshot.blocks).toEqual(snapshot().blocks);
+
+    const replaced = applyWorkspaceEvent(added.snapshot, event(6, { type: 'tasks', tasks: [second] }));
+    expect(replaced.snapshot.revision).toBe(6);
+    expect(replaced.snapshot.tasks).toEqual([second]);
+
+    const cleared = applyWorkspaceEvent(replaced.snapshot, event(7, { type: 'tasks', tasks: [] }));
+    expect(cleared.snapshot.tasks).toEqual([]);
+    expect(applyWorkspaceEvent(cleared.snapshot, event(7, { type: 'tasks', tasks: [first] })).type).toBe('stale');
   });
 });
 
@@ -139,5 +159,26 @@ describe('workspace catalog projections', () => {
     const newer = { ...first, id: 'session-new', title: 'Newer', updatedAt: '2026-03-02T10:00:00Z' };
     expect(sortedSessions([first, newer]).map((item) => item.id)).toEqual(['session-new', 'session-a']);
     expect(harnessLabel('prime-agent')).toBe('Prime Agent');
+  });
+});
+
+describe('live block starts', () => {
+  beforeEach(forgetBlockStarts);
+  afterEach(() => vi.useRealTimers());
+  it('records the first streaming tool event once', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const block = {id:'tool-start',kind:'tool' as const,label:'Bash',status:'streaming' as const};
+    const first = applyWorkspaceEvent(snapshot(), event(5, {type:'block',block}));
+    expect(blockStartedAt('session-a', block.id)).toBe(1000);
+    vi.setSystemTime(2000);
+    applyWorkspaceEvent(first.snapshot, event(6, {type:'block',block}));
+    expect(blockStartedAt('session-a', block.id)).toBe(1000);
+  });
+  it('ignores assistants and already completed tools', () => {
+    for (const [id,kind,status] of [['assistant','assistant','streaming'],['finished','tool','complete']] as const) {
+      applyWorkspaceEvent(snapshot(), event(5, {type:'block',block:{id,kind,status,label:'Block'}}));
+      expect(blockStartedAt('session-a',id)).toBeUndefined();
+    }
   });
 });

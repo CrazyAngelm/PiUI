@@ -70,6 +70,7 @@ const writeTranscript = (entry) => {
 };
 
 const queue = [];
+const liveTasks = new Set();
 const permissionWaiters = new Map();
 let run = null;
 let requestSerial = 0;
@@ -120,6 +121,32 @@ const until = async (predicate) => {
 };
 
 const scenarios = {
+  async tasks() {
+    const system = (subtype, fields) => send({ type: "system", subtype, ...fields, uuid: randomUUID(), session_id: sessionId });
+    useTool("tool-shell", "Bash", { command: "pnpm dev", description: "Start the dev server", run_in_background: true });
+    system("background_tasks_changed", { tasks: [{ task_id: "shell-1", run_id: "run-1", task_type: "local_bash", description: "Start the dev server" }] });
+    system("task_started", { task_id: "shell-1", run_id: "run-1", tool_use_id: "tool-shell", description: "Start the dev server", is_backgrounded: true, task_type: "local_bash" });
+    toolResult("tool-shell", "Command running in background with ID: shell-1.");
+    useTool("tool-agent", "Agent", { description: "Count to three", prompt: "PRIVATE-TASK-PROMPT", subagent_type: "general-purpose", run_in_background: true });
+    system("task_started", { task_id: "agent-1", run_id: "run-2", tool_use_id: "tool-agent", description: "Count to three", subagent_type: "general-purpose", is_backgrounded: true, spawn_depth: 1, task_type: "local_agent", prompt: "PRIVATE-TASK-PROMPT" });
+    toolResult("tool-agent", "Async agent launched successfully.");
+    system("task_progress", { task_id: "agent-1", run_id: "run-2", tool_use_id: "tool-agent", description: "Running sleep 3", subagent_type: "general-purpose", usage: { total_tokens: 25531, tool_uses: 1, duration_ms: 1904 }, last_tool_name: "Bash" });
+    system("task_started", { task_id: "nested-1", run_id: "run-3", owned_by_subagent: true, tool_use_id: "tool-nested", description: "sleep 3", is_backgrounded: false, parent_task_id: "agent-1", task_type: "local_bash" });
+    system("task_notification", { task_id: "nested-1", run_id: "run-3", tool_use_id: "tool-nested", status: "completed", output_file: "", summary: "sleep 3" });
+    useTool("tool-front", "Bash", { command: "pnpm test" });
+    system("task_started", { task_id: "front-1", run_id: "run-4", tool_use_id: "tool-front", description: "Run the tests", is_backgrounded: false, task_type: "local_bash" });
+    system("task_notification", { task_id: "front-1", run_id: "run-4", tool_use_id: "tool-front", status: "completed", output_file: "", summary: "Run the tests" });
+    toolResult("tool-front", "ok");
+    system("task_updated", { task_id: "agent-1", run_id: "run-2", patch: { status: "completed", end_time: 1794849808707 } });
+    system("task_notification", { task_id: "agent-1", run_id: "run-2", tool_use_id: "tool-agent", status: "completed", output_file: "C:/PRIVATE-TASK-PATH/agent-1.output", summary: "Counted", usage: { total_tokens: 28927, tool_uses: 1, duration_ms: 7911 } });
+    useTool("tool-agent-2", "Agent", { description: "Check the notes", prompt: "PRIVATE-TASK-PROMPT", subagent_type: "Explore", run_in_background: true });
+    system("task_started", { task_id: "agent-2", run_id: "run-5", tool_use_id: "tool-agent-2", description: "Check the notes", subagent_type: "Explore", is_backgrounded: true, spawn_depth: 1, task_type: "local_agent", prompt: "PRIVATE-TASK-PROMPT" });
+    toolResult("tool-agent-2", "Async agent launched successfully.");
+    system("task_updated", { task_id: "agent-2", run_id: "run-5", patch: { status: "completed", end_time: 1794849809707 } });
+    system("task_notification", { task_id: "agent-2", run_id: "run-5", tool_use_id: "tool-agent-2", status: "completed", output_file: "", summary: 'This agent\'s report was delivered to you as a message from "agent-2" (its SubagentHandback call). Read it there; it is not repeated here.', usage: { total_tokens: 27385, tool_uses: 1, duration_ms: 2100 } });
+    liveTasks.add("shell-1");
+    say("msg-tasks", "Started.");
+  },
   async hello(current) {
     say("msg-hello", `ack ${current.text}`);
   },
@@ -377,6 +404,14 @@ input.on("line", (line) => {
     } else if (request.subtype === "apply_flag_settings") {
       if (has("--fixture-no-flag-settings")) refuse(requestId, "Unsupported control request subtype: apply_flag_settings");
       else ok(requestId);
+    } else if (request.subtype === "stop_task") {
+      // Claude Code 2.1.325 answers success for an unknown task id as well.
+      if (liveTasks.delete(request.task_id)) {
+        send({ type: "system", subtype: "task_updated", task_id: request.task_id, run_id: "run-1", patch: { status: "killed", end_time: 1794850025649 }, uuid: randomUUID(), session_id: sessionId });
+        send({ type: "system", subtype: "task_notification", task_id: request.task_id, run_id: "run-1", tool_use_id: "tool-shell", status: "stopped", output_file: "", summary: "Start the dev server", uuid: randomUUID(), session_id: sessionId });
+        send({ type: "system", subtype: "background_tasks_changed", tasks: [], uuid: randomUUID(), session_id: sessionId });
+      }
+      ok(requestId, {});
     } else refuse(requestId, `Unsupported control request subtype: ${request.subtype}`);
     return;
   }

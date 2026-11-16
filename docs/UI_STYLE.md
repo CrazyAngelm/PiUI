@@ -107,6 +107,33 @@ does not prove that a setting reaches the harness.
   transcript. A new kind of call gets an icon in `toolIcons.ts` and its
   phrases in `toolKinds.ts`; an unknown tool stays generic.
 
+## Chat details
+
+- The panel leads with what the session runs now (ADR-072), then the chat's
+  other agents and context: Activity, Linked chats, origin and worktree, agent
+  mode, the pipeline run, plugin panels. Facts and capabilities come last,
+  behind the closed native disclosure "About this chat". Capabilities are
+  demoted, never deleted: enforcement is part of the trust model.
+- Activity groups are Agents, Commands and Other, shown only when they have
+  rows; a chat with none says "Nothing is running". A row is a state glyph, a
+  one-line title (commands in the mono font), the elapsed time and, for a
+  running task the harness can stop, a stop button. Below it a muted line gives
+  the detail, tool uses and tokens, and at most two lines say what the task is
+  doing now or how it ended. Running rows come first, oldest first, then at most
+  six finished ones, latest first; finished rows are dimmed.
+- State is never colour alone: a spinner, a check, a cross or a square, each
+  with an accessible name (Running, Completed, Failed, Stopped). The glyph is an
+  image with that name, not a live region per row. The stop
+  button is always visible on a stoppable row, never hover-only; a run member,
+  a Fusion sidekick, safe mode and a remote viewer have none. It stays
+  focusable and shows a spinner until the harness reports the task stopped;
+  when it leaves, focus stays on its row. The list changes only through the
+  host's `tasks` event.
+- While the panel is closed, a 7px accent dot on its toolbar button and a
+  visually hidden status ("2 running in this chat") say that work is running.
+  They count native tasks and running agents, not every tool call of a turn.
+  The button's name does not change.
+
 ## Execution workbench
 
 Use dependency levels for graph layout and group parallel work in the same column.

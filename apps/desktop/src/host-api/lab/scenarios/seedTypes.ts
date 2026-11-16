@@ -1,3 +1,4 @@
+import type { SessionTaskV1 } from '../../../../../../contracts/workspace-session-tasks-v1';
 import type {
   DesktopTimelineBlock, HarnessKind, HarnessSummary, PermissionMode, QueuedMessage, SessionStatus, UsageReceipt,
   WorkspaceApproval, WorkspaceModel,
@@ -46,6 +47,8 @@ export interface SessionSeed {
   /** Absent: the session is closed (history only). */
   live?: SessionStatus;
   approvals?: WorkspaceApproval[];
+  /** Subagents and commands a live session is running (ADR-072); ignored for a closed one. */
+  tasks?: SessionTaskV1[];
   usage?: UsageReceipt[];
   queue?: { paused: boolean; items: QueuedMessage[] };
   run?: { runId: string; memberId: string; profileId: string };
@@ -73,6 +76,7 @@ export function sessionRecord(seed: SessionSeed): LabSessionRecord {
   if (seed.live !== undefined) {
     record.live = newLiveState(seed.live);
     record.live.approvals = seed.approvals ?? [];
+    record.live.tasks = (seed.tasks ?? []).map((task) => ({ ...task }));
   }
   return record;
 }

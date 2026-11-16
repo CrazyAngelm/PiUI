@@ -72,6 +72,7 @@ function historyBlock(block: DesktopTimelineBlock, fullAnswers: boolean): Deskto
 /** A live runtime snapshot: full native blocks with harness labels. */
 export function liveSnapshot(state: LabState, record: LabSessionRecord): SessionSnapshot {
   const summary = state.harnesses.find((harness) => harness.kind === record.harness);
+  const tasks = record.live?.tasks ?? [];
   return {
     session: sessionSummary(record),
     revision: record.revision,
@@ -83,6 +84,8 @@ export function liveSnapshot(state: LabState, record: LabSessionRecord): Session
     ...(isAcpHarness(record.harness)
       ? { modes: { current: record.mode ?? ACP_LAB_MODES[0]?.id ?? '', available: ACP_LAB_MODES.map((mode) => ({ ...mode })) } }
       : {}),
+    // Subagents and commands of the live agent (additive, ADR-072): omitted when empty.
+    ...(tasks.length > 0 ? { tasks: tasks.map((task) => ({ ...task })) } : {}),
   };
 }
 

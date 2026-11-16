@@ -16,7 +16,7 @@ import { demoExtensions, extensionHandlers } from './extensionsFake';
 import { codexSandboxFromSearch, createLabFusion, fusionHandlers, type LabFusion } from './fusionFake';
 import { harnessConnectHandlers } from './harnessConnectFake';
 import { LabEventBus } from './labBus';
-import { browserTimers, LabClock, type LabTimers } from './labClock';
+import { browserTimers, LabClock, LAB_BASE_TIME, labIso, type LabTimers } from './labClock';
 import { LabDecodeFailure, tauriArgumentError } from './labErrors';
 import type { LabHandlers } from './labHandlers';
 import { LabIdSource } from './labRandom';
@@ -29,6 +29,7 @@ import { LabRunScheduler } from './orchestration/runScheduler';
 import { scriptTestHandlers } from './orchestration/scriptTestFake';
 import { runDebuggingHandlers } from './orchestration/runDebuggingFake';
 import { buildSeed, type SeedActivity } from './scenarios';
+import { sessionTasksHandlers } from './sessionTasksFake';
 import { sessionToolsHandlers } from './sessionToolsFake';
 import { createLabSessionLinks } from './sessionLinksFake';
 import { createLabTeam, seedLabTeam, teammatesHandlers } from './teammatesFake';
@@ -158,6 +159,17 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ids: new LabIdSource(`lab:${scenario}`),
     catalog: options.catalog ?? (typeof window === 'undefined' ? 'normal' : catalogBehaviorFromSearch(window.location.search)),
   };
+  // Seeded tasks sit on the Lab epoch; the window measures elapsed time against this computer's clock.
+  const taskShift = timers.now() - LAB_BASE_TIME;
+  const shifted = (instant: string): string => labIso(Date.parse(instant) + taskShift);
+  for (const record of state.sessions.values()) {
+    if (record.live === undefined) continue;
+    record.live.tasks = record.live.tasks.map((task) => ({
+      ...task,
+      startedAt: shifted(task.startedAt),
+      ...(task.endedAt === undefined ? {} : { endedAt: shifted(task.endedAt) }),
+    }));
+  }
   const runtime = new LabSessions(state, bus, clock);
   const scheduler = new LabRunScheduler(runtime, bus);
   const team = createLabTeam();
@@ -196,6 +208,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ...interactiveAnswersHandlers(state),
     ...attentionHandlers(),
     ...acpHandlers(runtime, bus),
+    ...sessionTasksHandlers(runtime),
     ...harnessConnectHandlers(state),
     ...runDebuggingHandlers(runtime),
     ...appUpdateHandlers(

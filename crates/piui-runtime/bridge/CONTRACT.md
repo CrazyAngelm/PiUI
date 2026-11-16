@@ -925,3 +925,30 @@ Pi lane's classification.
 Pi (1.4.0) turns a relay error into `<status>: <error object as JSON>`, for example
 `402: {"message":"...","type":"nano","code":"nano_credits_exhausted"}`, so the code
 is visible to the bridge whenever the relay sends its OpenAI-shaped body.
+
+### Native tasks
+
+Adapters may implement `stopTask({taskId})` (runner method `stopTask`). An
+adapter without it returns the same unsupported-method error as `setMode`.
+`NativeSnapshot` adds optional `tasks?: NativeTask[]`; the event
+`{type:'tasks',tasks:NativeTask[]}` replaces the whole list, at most 32 entries,
+running first. Each text is one line of at most 200 characters.
+
+`NativeTask` has `id: string` (adapter-opaque), `kind: 'agent'|'command'|'task'`,
+`title: string`, `status: 'running'|'completed'|'failed'|'stopped'`,
+`background: boolean`, `startedAt: string` (ISO instant), and optional
+`endedAt: string`, `detail: string`, `activity: string`, `toolUses: number`,
+`totalTokens: number`, `blockId: string` (timeline tool block).
+
+Claude Code 2.1.325 verified stream-json system frames are `task_started`
+(task type, description, background flag and ownership), `task_progress`
+(current description, summary and usage), `task_updated` (status/end/background
+patch), `task_notification` (terminal status, summary and usage), and
+`background_tasks_changed` (background list, possibly before task_started).
+Tasks owned by a subagent are not listed. A foreground task is dropped when
+it ends; a background task keeps status, end and summary. Prompt, output file
+and native task/run/tool-use ids never leave the bridge in task reports. The
+list is cleared when the native process ends. Native control `stop_task`
+succeeds even for unknown ids, so the bridge checks a running opaque id first.
+
+A text that names the native task or is Claude Code's hand-back notice is dropped.

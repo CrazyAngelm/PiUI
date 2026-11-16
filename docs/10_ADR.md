@@ -2062,3 +2062,11 @@ See [the decision](adr/070-chat-branches.md).
 Reasoning no longer splits tool calls into separate rows: one group holds a whole stretch of work and, while it runs, names the current action. A finished turn with several groups folds them behind one control; replies stay visible.
 
 See [the decision](adr/071-turn-work-folding.md).
+
+## ADR-072 — The chat inspector shows what the session is running
+
+**Status:** Accepted 2026-11-17.
+
+The chat details panel now leads with the subagents and shell commands the live agent runs, including background ones, with elapsed time and a stop control. Claude Code reports them through an additive `SessionSnapshot.tasks` field and `tasks` event (bounded to 32 one-line entries, no native ids, prompts, output or file paths); harnesses that report nothing still show the tool calls that are running in the timeline. `workspace_task_stop_v1` stops one running task through Claude Code's `stop_task` control request; it is refused in safe mode, for run members and for a Fusion sidekick, and is not in the remote allowlist. Tasks belong to the live native process and are not persisted. Session facts and capabilities stay behind "About this chat".
+
+See [the decision](adr/072-session-activity.md).

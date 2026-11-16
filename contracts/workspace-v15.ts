@@ -92,6 +92,11 @@ export interface SessionSnapshot {
    * when empty. Show "Board tools unavailable in this chat" for either code.
    */
   notices?: WorkspaceNoticeCode[];
+  /**
+   * Additive v15 field (ADR-072): subagents and shell commands the live agent
+   * runs beside its turn (`workspace-session-tasks-v1`), omitted when empty.
+   */
+  tasks?: import('./workspace-session-tasks-v1').SessionTaskV1[];
 }
 /**
  * Non-fatal runtime notices (bridge `NativeNoticeCode`). The project board is
@@ -139,7 +144,9 @@ export type WorkspaceEventPayload =
   | { type: 'approvalResolved'; requestId: string }
   | { type: 'error'; message: string }
   /** Additive v15 event (ADR-041): a notice also listed in `SessionSnapshot.notices`. */
-  | { type: 'notice'; code: WorkspaceNoticeCode };
+  | { type: 'notice'; code: WorkspaceNoticeCode }
+  /** Additive v15 event (ADR-072): the whole new `SessionSnapshot.tasks` list. */
+  | { type: 'tasks'; tasks: import('./workspace-session-tasks-v1').SessionTaskV1[] };
 export interface WorkspaceEvent {
   protocol: 15; sessionId: string; revision: number; event: WorkspaceEventPayload;
 }

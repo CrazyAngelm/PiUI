@@ -436,6 +436,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
       slot.reject(reason);
     }
     retireApprovals();
+    clearTasks();
     nativeActive = false;
     if (current.expected || disposed || !ready) return;
     sessionFailed = true;
@@ -705,6 +706,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
     }
     completeReadyTurns();
     retireApprovals();
+    clearTasks();
     nativeActive = false;
     setStatus("failed");
   };
@@ -730,13 +732,15 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
   };
   const startTool = (toolUseId, name, input) => {
     const toolName = safeToolName(name);
-    tools.set(toolUseId, { name: toolName });
+    const args = isRecord(input) ? input : {};
+    const command = toolName === "Bash" || toolName === "PowerShell" ? plain(args.command) || tools.get(toolUseId)?.command : undefined;
+    tools.set(toolUseId, command ? { name: toolName, command } : { name: toolName });
     const id = toolBlockId(toolUseId);
     runBlocks.add(id);
     const existing = blocks.get(id);
     putBlock({
       ...(existing ?? { id, kind: "tool", label: toolName, toolName, collapsible: true, status: "streaming" }),
-      title: toolTitle(toolName, isRecord(input) ? input : {}),
+      title: toolTitle(toolName, args),
     });
   };
   const finishTool = (toolUseId, content, isError) => {
@@ -963,6 +967,126 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
     compactionId = undefined;
     if (block) putBlock({ ...block, status: next, safeSummary: summary });
   };
+  // Native tasks: subagents and shell commands Claude Code runs beside the
+  // turn, including those that outlive the tool call that started them.
+  const TASK_LIMIT = 32;
+  const TASK_TEXT_LIMIT = 200;
+  const tasks = new Map(); // native task id -> reported task
+  let tasksTimer;
+  const taskKind = (type) => (type === "local_bash" ? "command"
+    : ["local_agent", "remote_agent", "in_process_teammate", "local_workflow"].includes(type) ? "agent" : "task");
+  const taskStatus = (value) => (value === "completed" ? "completed" : value === "failed" ? "failed"
+    : value === "killed" || value === "stopped" ? "stopped" : undefined);
+  const taskLine = (value) => (plain(value) ? oneLine(value, TASK_TEXT_LIMIT) : "");
+  // Claude Code's own notices can name the native task or agent (its hand-back
+  // notice does); such a text is internal and is not reported.
+  const taskText = (value, nativeTaskId) => {
+    const line = taskLine(value);
+    return line && !line.includes(nativeTaskId) && !/SubagentHandback/.test(line) ? line : "";
+  };
+  const taskCount = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : undefined);
+  const taskList = () => {
+    const rows = [...tasks.values()];
+    const finished = rows.filter((task) => task.status !== "running").sort((a, b) => (a.endedAt < b.endedAt ? 1 : -1));
+    return [...rows.filter((task) => task.status === "running"), ...finished].slice(0, TASK_LIMIT).map((task) => ({ ...task }));
+  };
+  const flushTasks = () => {
+    clearTimeout(tasksTimer);
+    tasksTimer = undefined;
+    emit({ type: "tasks", tasks: taskList() });
+  };
+  // Progress arrives per tool call of every subagent, so it is batched.
+  const scheduleTasks = () => {
+    if (tasksTimer) return;
+    tasksTimer = setTimeout(flushTasks, 250);
+    tasksTimer.unref?.();
+  };
+  const clearTasks = () => {
+    clearTimeout(tasksTimer);
+    tasksTimer = undefined;
+    if (tasks.size === 0) return;
+    tasks.clear();
+    if (!disposed) emit({ type: "tasks", tasks: [] });
+  };
+  const startTask = (message) => {
+    if (typeof message.task_id !== "string" || !message.task_id || message.owned_by_subagent === true || tasks.has(message.task_id)) return;
+    const kind = taskKind(message.task_type);
+    const toolUseId = typeof message.tool_use_id === "string" && message.tool_use_id ? message.tool_use_id : undefined;
+    const description = taskText(message.description, message.task_id);
+    const command = kind === "command" && toolUseId ? taskLine(tools.get(toolUseId)?.command) : "";
+    const title = command || description || (kind === "command" ? "Command" : kind === "agent" ? "Agent" : "Task");
+    const detail = kind === "command" ? (command ? description : "") : taskLine(message.subagent_type);
+    tasks.set(message.task_id, {
+      id: opaque("claude-task", message.task_id), kind, title, status: "running",
+      background: message.is_backgrounded === true, startedAt: new Date().toISOString(),
+      ...(detail && detail !== title ? { detail } : {}),
+      ...(toolUseId && blocks.has(toolBlockId(toolUseId)) ? { blockId: toolBlockId(toolUseId) } : {}),
+    });
+    // Over the limit the oldest finished tasks go first.
+    const finished = [...tasks].filter(([, task]) => task.status !== "running").sort(([, a], [, b]) => (a.endedAt < b.endedAt ? -1 : 1));
+    for (const [nativeTaskId] of finished) {
+      if (tasks.size <= TASK_LIMIT) break;
+      tasks.delete(nativeTaskId);
+    }
+    flushTasks();
+  };
+  const progressTask = (message) => {
+    const task = typeof message.task_id === "string" ? tasks.get(message.task_id) : undefined;
+    if (!task || task.status !== "running") return;
+    const usage = isRecord(message.usage) ? message.usage : {};
+    const activity = taskText(message.summary, message.task_id) || taskText(message.description, message.task_id) || taskLine(message.last_tool_name);
+    const toolUses = taskCount(usage.tool_uses);
+    const totalTokens = taskCount(usage.total_tokens);
+    if (activity && activity !== task.title) task.activity = activity;
+    if (toolUses !== undefined) task.toolUses = toolUses;
+    if (totalTokens !== undefined) task.totalTokens = totalTokens;
+    scheduleTasks();
+  };
+  // A task that never left its tool call is not kept once it ends: its result
+  // is already in the timeline. A background task keeps how it ended.
+  const endTask = (nativeTaskId, task, status, endTime) => {
+    if (task.status !== "running") return false;
+    if (!task.background) { tasks.delete(nativeTaskId); return true; }
+    task.status = status;
+    task.endedAt = new Date(Number.isFinite(endTime) && endTime > 0 ? endTime : Date.now()).toISOString();
+    delete task.activity;
+    return true;
+  };
+  const updateTask = (message) => {
+    const task = typeof message.task_id === "string" ? tasks.get(message.task_id) : undefined;
+    const patch = isRecord(message.patch) ? message.patch : undefined;
+    if (!task || !patch) return;
+    let changed = false;
+    if (patch.is_backgrounded === true && !task.background) { task.background = true; changed = true; }
+    const status = taskStatus(patch.status);
+    if (status && endTask(message.task_id, task, status, patch.end_time)) changed = true;
+    if (changed) flushTasks();
+  };
+  // `task_updated` reports the end first; the notification adds the summary and the usage.
+  const notifyTask = (message) => {
+    const task = typeof message.task_id === "string" ? tasks.get(message.task_id) : undefined;
+    if (!task) return;
+    endTask(message.task_id, task, taskStatus(message.status) ?? "completed", undefined);
+    if (tasks.has(message.task_id)) {
+      const usage = isRecord(message.usage) ? message.usage : {};
+      const summary = taskText(message.summary, message.task_id);
+      const toolUses = taskCount(usage.tool_uses);
+      const totalTokens = taskCount(usage.total_tokens);
+      if (summary && summary !== task.title && summary !== task.detail) task.activity = summary;
+      if (toolUses !== undefined) task.toolUses = toolUses;
+      if (totalTokens !== undefined) task.totalTokens = totalTokens;
+    }
+    flushTasks();
+  };
+  const backgroundTasks = (message) => {
+    let changed = false;
+    for (const row of Array.isArray(message.tasks) ? message.tasks : []) {
+      const task = isRecord(row) && typeof row.task_id === "string" ? tasks.get(row.task_id) : undefined;
+      if (task && task.status === "running" && !task.background) { task.background = true; changed = true; }
+    }
+    if (changed) flushTasks();
+  };
+
   const handleSystem = (message) => {
     switch (message.subtype) {
       case "init":
@@ -993,8 +1117,13 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
       case "commands_changed":
         commands = mapCommands(message.commands);
         return;
+      case "task_started": startTask(message); return;
+      case "task_progress": progressTask(message); return;
+      case "task_updated": updateTask(message); return;
+      case "task_notification": notifyTask(message); return;
+      case "background_tasks_changed": backgroundTasks(message); return;
       default:
-        // Hooks, tasks, retries and other native metadata are not transcript content.
+        // Hooks, retries and other native metadata are not transcript content.
     }
   };
   const handleRateLimit = (message) => {
@@ -1879,6 +2008,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
         approvals: [...approvals.values()].map((item) => item.approval),
         capabilities,
         models: catalog.map(workspaceModel),
+        ...(tasks.size > 0 ? { tasks: taskList() } : {}),
       };
     },
     async models() { return catalog.map(workspaceModel); },
@@ -1947,6 +2077,14 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
       return { accepted: true };
     },
     async interrupt() { return interruptTurns(); },
+    // Claude Code answers `stop_task` for an unknown id too, so the id is checked here.
+    async stopTask({ taskId } = {}) {
+      if (disposed || sessionFailed || !proc || proc.ended || restarting) throw fail("not-running", "Claude Code is not running.");
+      const entry = typeof taskId === "string" ? [...tasks].find(([, task]) => task.id === taskId) : undefined;
+      if (!entry || entry[1].status !== "running") throw fail("invalid-request", "The task is not running.");
+      await controlRequest({ subtype: "stop_task", task_id: entry[0] });
+      return null;
+    },
     async setModel({ model, thinkingLevel, serviceTier } = {}) {
       if (!isRecord(model) || typeof model.id !== "string") throw fail("invalid-request", "A Claude model id is required.");
       if (model.provider != null && model.provider !== "anthropic") throw fail("unsupported-settings", "Claude Code only runs Anthropic models.");

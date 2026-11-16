@@ -34,7 +34,7 @@ export function toolTitle(block: TimelineBlock): string {
 }
 
 /** Plural form index: en one/other, ru one/few/many. */
-function pluralIndex(count: number, language: Language): 0 | 1 | 2 {
+export function pluralIndex(count: number, language: Language): 0 | 1 | 2 {
   if (language === 'ru') {
     const mod10 = count % 10;
     const mod100 = count % 100;
