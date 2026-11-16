@@ -113,7 +113,9 @@ test.describe('chat header', () => {
     // "Install" makes the lab pause the turn on an approval, so the turn stays active.
     await startChat(lab, 'Install the lab dependencies and run the checks');
     await expect(page.getByRole('article', { name: 'Permission request' })).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole('textbox', { name: 'Message' })).toHaveAttribute('placeholder', 'Queue a follow-up…');
+    await expect(page.getByRole('textbox', { name: 'Message' })).toHaveAttribute('placeholder', 'Send to the agent now…');
+    await expect(page.getByRole('group', { name: 'Send mode' }).getByRole('radio', { name: 'Steer', exact: true })).toBeChecked();
+    await expect(page.getByRole('button', { name: 'Steer', exact: true })).toBeVisible();
     // The composer owns it; the header does not repeat it.
     const stops = page.getByRole('button', { name: /^Stop/ });
     await expect(stops).toHaveCount(1);
@@ -264,6 +266,11 @@ test.describe('queue and steer', () => {
     const card = page.getByRole('article', { name: 'Permission request' });
     await expect(card).toBeVisible({ timeout: 15_000 });
     const message = page.getByRole('textbox', { name: 'Message' });
+    const sendMode = page.getByRole('group', { name: 'Send mode' });
+    await expect(message).toHaveAttribute('placeholder', 'Send to the agent now…');
+    await expect(sendMode.getByRole('radio', { name: 'Steer', exact: true })).toBeChecked();
+    await expect(page.getByRole('button', { name: 'Steer', exact: true })).toBeVisible();
+    await sendMode.getByRole('radio', { name: 'Follow up', exact: true }).click();
     await expect(message).toHaveAttribute('placeholder', 'Queue a follow-up…');
 
     await message.fill('Also cover backpressure');
@@ -283,6 +290,8 @@ test.describe('queue and steer', () => {
     await expect(queue.getByRole('article').filter({ hasText: 'Also cover backpressure' })).toContainText('Queued');
 
     // Once the turn continues, the agent reads the message: it stays in the chat once, unmarked.
+    // Leave an explicit Follow up choice behind: the next turn must reset it.
+    await sendMode.getByRole('radio', { name: 'Follow up', exact: true }).click();
     await card.getByRole('button', { name: 'Allow once' }).click();
     await expect(unread).toHaveCount(0);
     await expect(transcript.getByText('Keep the answer short', { exact: true })).toHaveCount(1);
@@ -290,6 +299,13 @@ test.describe('queue and steer', () => {
     // (The lab's answer quotes the prompt, so the text appears twice.)
     await expect(transcript.getByText('Also cover backpressure', { exact: true }).first()).toBeVisible({ timeout: 45_000 });
     await expect(queue).toBeHidden({ timeout: 45_000 });
+    await expect(page.getByRole('button', { name: 'Stop turn', exact: true })).toBeHidden({ timeout: 45_000 });
+    await message.fill('Install the tools for the next turn');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(card).toBeVisible({ timeout: 15_000 });
+    await expect(sendMode.getByRole('radio', { name: 'Steer', exact: true })).toBeChecked();
+    await expect(message).toHaveAttribute('placeholder', 'Send to the agent now…');
+    await expect(page.getByRole('button', { name: 'Steer', exact: true })).toBeVisible();
   });
 
   test('an uncertain delivery blocks the queue until it is checked', async ({ lab, page }) => {

@@ -296,6 +296,19 @@ test.describe('pipeline code that cannot load', () => {
   test('the chip loads the code again and the picker comes back', async ({ lab, page }) => {
     await page.route(CODE, (route) => route.abort());
     await lab.open();
+    // The chip retries with a second import(). An engine that keeps a failed module fetch until the
+    // page reloads cannot fetch it again (Playwright's bundled Chromium on CI); Edge and WebView2 can.
+    // The probe asks the engine itself instead of guessing from its name.
+    const probe = '/__module-retry-probe.js';
+    const imports = (): Promise<boolean> =>
+      page.evaluate<boolean>(`import(${JSON.stringify(probe)}).then(() => true, () => false)`);
+    await page.route(`**${probe}`, (route) => route.abort());
+    expect(await imports()).toBe(false);
+    await page.unroute(`**${probe}`);
+    await page.route(`**${probe}`, (route) => route.fulfill({ contentType: 'text/javascript', body: 'export default 1;' }));
+    const refetches = await imports();
+    await page.unroute(`**${probe}`);
+    test.skip(!refetches, 'This engine keeps a failed module fetch until the page reloads.');
     const composer = home(page);
     await expect(composer.getByTitle(FAILED)).toBeEnabled();
 

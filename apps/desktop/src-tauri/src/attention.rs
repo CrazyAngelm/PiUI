@@ -14,15 +14,24 @@ const MAIN_WINDOW: &str = "main";
 /// The largest count accepted; a greater one is capped.
 pub const MAX_COUNT: u32 = 9999;
 
+// The badge image exists only for the Windows taskbar overlay; other platforms
+// set the native badge count, so its parts are compiled for Windows and tests.
 /// Overlay icon edge in pixels; Windows scales it to the taskbar.
+#[cfg(any(windows, test))]
 const ICON_SIZE: u32 = 32;
 /// #E5484D, the shared danger red.
+#[cfg(any(windows, test))]
 const BADGE_RED: [u8; 4] = [0xE5, 0x48, 0x4D, 0xFF];
+#[cfg(any(windows, test))]
 const WHITE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
+#[cfg(any(windows, test))]
 const GLYPH_COLUMNS: u32 = 5;
+#[cfg(any(windows, test))]
 const GLYPH_ROWS: u32 = 7;
 /// Glyph scale for one character and for the two characters of "9+".
+#[cfg(any(windows, test))]
 const SINGLE_SCALE: u32 = 3;
+#[cfg(any(windows, test))]
 const DOUBLE_SCALE: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -50,6 +59,7 @@ pub enum AttentionError {
 
 /// Seven rows of five bits per glyph; the most significant of the five bits is
 /// the left column.
+#[cfg(any(windows, test))]
 fn glyph(character: char) -> [u8; GLYPH_ROWS as usize] {
     match character {
         '0' => [
@@ -90,6 +100,7 @@ fn glyph(character: char) -> [u8; GLYPH_ROWS as usize] {
 }
 
 /// The text on the badge: the digit up to 9, and "9+" from ten up.
+#[cfg(any(windows, test))]
 fn badge_label(count: u32) -> &'static str {
     match count {
         0 => "0",
@@ -106,6 +117,7 @@ fn badge_label(count: u32) -> &'static str {
     }
 }
 
+#[cfg(any(windows, test))]
 fn put(rgba: &mut [u8], x: u32, y: u32, color: [u8; 4]) {
     let at = ((y * ICON_SIZE + x) * 4) as usize;
     if let Some(pixel) = rgba.get_mut(at..at + 4) {
@@ -116,6 +128,7 @@ fn put(rgba: &mut [u8], x: u32, y: u32, color: [u8; 4]) {
 /// The overlay icon for a count: a 32x32 RGBA red circle with the count in
 /// white, as `(pixels, width, height)`. The circle edge is anti-aliased
 /// through its alpha; the corners stay transparent.
+#[cfg(any(windows, test))]
 pub fn badge_rgba(count: u32) -> (Vec<u8>, u32, u32) {
     let mut rgba = vec![0_u8; (ICON_SIZE * ICON_SIZE * 4) as usize];
     let radius = ICON_SIZE as f32 / 2.0;

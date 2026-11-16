@@ -155,12 +155,12 @@ The user sees explicit semantics:
 - **Queue next** — a follow-up after the current turn;
 - **Stop** — `abort`.
 
-Enter must not silently change semantics based on timing. Recommended default:
+Enter must not silently change semantics based on timing: the composer shows the mode before sending. Default:
 
 - Enter sends `prompt` in Ready;
-- during Running, Enter queues a follow-up;
-- a separate button/shortcut performs Steer;
-- a tooltip and queue badge show the selected mode.
+- during Running, Enter steers the current turn where the harness supports it;
+- the Send mode control switches that turn to Follow up, which queues the message; a harness that cannot steer always queues;
+- the placeholder, the send button and the queue show the selected mode.
 
 The queue-mode setting is synchronized through Pi RPC if the capability is available.
 
