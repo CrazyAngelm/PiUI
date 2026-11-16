@@ -933,6 +933,11 @@ Branch `feat/workbench-1116`. Decisions: ADR-064 to ADR-071.
   above it. Focus now counts as the reader's own move (ADR-071). A seventh
   wrong test was a sidebar locator in the Russian copy test that also matched
   a row's Options button.
+  A second review of that change left two low-priority notes open. Focus that
+  the application or the window moves on its own also counts as the reader's
+  move for one second, so a large chunk streamed in that second can stop the
+  following until Latest is pressed. A direct start forced by a remembered
+  pipeline that cannot run at the moment still replaces the memory.
 - **Test infrastructure.** The full `vitest run` hung on
   `remoteMode.test.ts`: a mock factory waited for a module that imported the
   mocked transport. The avatar contract checks moved to
@@ -944,6 +949,18 @@ Branch `feat/workbench-1116`. Decisions: ADR-064 to ADR-071.
   only (ADR-070), the Lab fake has no refusal paths for linked chats, and
   the turn control in the embedded conversation view stays open for the last
   turn because that view has no running flag.
+- **Verification (synthetic; no real-provider turn, no run in the installed
+  application).** On commit 31ab7d6: Vitest 256 files / 2326 tests, contract
+  tests 22 files / 246 tests, `svelte-check` with 0 errors and 0 warnings,
+  the e2e type check and the repository audit pass. All 320 UI Lab Playwright
+  tests pass, over several invocations (240, 79 and 1 tests). The dev server's
+  dependency cache sits in a `node_modules` folder linked from another
+  checkout and was rewritten from there during the runs. Five tests failed on
+  mismatched modules or a page reload at those moments and pass when run
+  again. The production-CSP suite passes with 5 tests. The first screen
+  is 550002 raw and 153837 gzip bytes. Rust tests and clippy ran after the merge
+  with master; no Rust or bridge file changed since. The native WebView2
+  harness was not run for this section.
 
 ## Next
 
