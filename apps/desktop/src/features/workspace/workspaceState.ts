@@ -1,3 +1,4 @@
+import { noteBlockStart } from './blockStarts';
 import { parseTimestamp } from '../../host-api/projectsClient';
 import type {
   HarnessKind,
@@ -38,6 +39,10 @@ export function applyWorkspaceEvent(snapshot: SessionSnapshot, incoming: Workspa
       break;
     case 'block': {
       const index = next.blocks.findIndex((block) => block.id === event.block.id);
+      // A live block carries no start instant: remember when this window saw a tool call start (ADR-072).
+      if (event.block.kind === 'tool' && event.block.status === 'streaming' && next.blocks[index]?.status !== 'streaming') {
+        noteBlockStart(incoming.sessionId, event.block.id);
+      }
       const blocks = index < 0
         ? [...next.blocks, event.block]
         : next.blocks.map((block, blockIndex) => blockIndex === index ? event.block : block);
@@ -61,6 +66,10 @@ export function applyWorkspaceEvent(snapshot: SessionSnapshot, incoming: Workspa
     }
     case 'approvalResolved':
       next = { ...next, approvals: next.approvals.filter((request) => request.id !== event.requestId) };
+      break;
+    // Additive v15 event (ADR-072): the whole new task list replaces the old one.
+    case 'tasks':
+      next = { ...next, tasks: event.tasks };
       break;
     case 'error':
       break;

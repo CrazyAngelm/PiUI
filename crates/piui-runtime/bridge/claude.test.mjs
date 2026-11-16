@@ -91,6 +91,7 @@ const BLOCK_KEYS = new Set(["id", "kind", "label", "status", "text", "createdAt"
 const APPROVAL_KEYS = new Set(["id", "kind", "title", "description", "decisions", "inputLabel", "options"]);
 const USAGE_KEYS = new Set(["id", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "totalTokens"]);
 const EVENT_KEYS = {
+  tasks: ["tasks"],
   usage: ["usage"], block: ["block"], textDelta: ["blockId", "text"], status: ["status"], approval: ["approval"],
   approvalResolved: ["requestId"], binding: ["nativeId", "nativePath"], turnCompleted: ["outcome"],
   coordinatorRequest: ["requestId", "operation"], boardRequest: ["requestId", "operation"], sidekickRequest: ["requestId", "operation", "identity"], notice: ["code"], error: ["message"],
@@ -112,6 +113,7 @@ function recorder() {
     const allowed = EVENT_KEYS[event?.type];
     if (!allowed) { problems.push(`unknown event ${event?.type}`); return; }
     for (const key of Object.keys(event)) if (key !== "type" && !allowed.includes(key)) problems.push(`${event.type}.${key}`);
+    for (const task of event.tasks ?? []) for (const key of Object.keys(task)) if (!["id","kind","title","status","background","startedAt","endedAt","detail","activity","toolUses","totalTokens","blockId"].includes(key)) problems.push(`task.${key}`);
     if (event.block) problems.push(...blockProblems(event.block));
     if (event.approval) {
       for (const key of Object.keys(event.approval)) if (!APPROVAL_KEYS.has(key)) problems.push(`approval.${key}`);
@@ -128,7 +130,7 @@ function recorder() {
   return { events, problems, emit, of: (type) => events.filter((event) => event.type === type) };
 }
 function snapshotProblems(snapshot) {
-  const allowed = new Set(["thinkingLevel", "serviceTier", "nativeId", "nativePath", "materialized", "title", "status", "model", "blocks", "approvals", "capabilities", "models"]);
+  const allowed = new Set(["tasks", "thinkingLevel", "serviceTier", "nativeId", "nativePath", "materialized", "title", "status", "model", "blocks", "approvals", "capabilities", "models"]);
   const problems = Object.keys(snapshot).filter((key) => !allowed.has(key));
   for (const block of snapshot.blocks) problems.push(...blockProblems(block));
   const capabilityKeys = Object.keys(snapshot.capabilities).sort().join(",");
@@ -1305,7 +1307,8 @@ test("native notices, usage limits, compaction and unknown events map to safe bl
     assert.equal(limits[0].text, `Your Claude subscription usage is close to its limit. It resets at ${new Date(1790000000 * 1000).toISOString()}.`);
     const unknown = blocks.filter((block) => block.kind === "unknown");
     assert.deepEqual(unknown.map((block) => [block.safeSummary, block.fallback]), [["Unsupported Claude Code event: future_event", true]]);
-    assert.doesNotMatch(JSON.stringify(log.events), /SECRET-MUST-NOT-LEAK|SessionStart|background/);
+    assert.doesNotMatch(JSON.stringify(log.events.filter((event) => event.type !== "tasks")), /SECRET-MUST-NOT-LEAK|SessionStart|background/);
+    assert.deepEqual(log.of("tasks").at(-1).tasks.map((task) => [task.kind, task.title, task.status, task.background]), [["task", "background", "running", false]]);
 
     await runTurn(adapter, log, "compact");
     const compactions = (await adapter.snapshot()).blocks.filter((block) => block.kind === "compaction");
@@ -1662,5 +1665,36 @@ test("a sidekick reply is confirmed to the runner only after it reached the MCP 
     release();
     await waitFor(() => outcomes.wait !== undefined);
     assert.equal(outcomes.wait, "failed", "a reply to a closed connection is not delivered");
+  } finally { await adapter.dispose(); }
+});
+
+test("native tasks are listed while they run, keep how they ended and can be stopped", async () => {
+  const { config, records } = setup();
+  const log = recorder();
+  const adapter = await createClaudeAdapter(config, log.emit);
+  try {
+    await runTurn(adapter, log, "tasks");
+    const tasks = log.of("tasks").at(-1).tasks;
+    for (const task of tasks) {
+      assert.match(task.id, /^claude-task-[0-9a-f]{24}$/);
+      assert.equal(new Date(task.startedAt).toISOString(), task.startedAt);
+    }
+    assert.deepEqual(tasks.map(({id, startedAt, blockId, ...task}) => task), [
+      {kind:"command",title:"pnpm dev",status:"running",background:true,detail:"Start the dev server"},
+      {kind:"agent",title:"Check the notes",status:"completed",background:true,detail:"Explore",toolUses:1,totalTokens:27385,endedAt:new Date(1794849809707).toISOString()},
+      {kind:"agent",title:"Count to three",status:"completed",background:true,detail:"general-purpose",activity:"Counted",toolUses:1,totalTokens:28927,endedAt:new Date(1794849808707).toISOString()},
+    ]);
+    const snapshot = await adapter.snapshot();
+    assert.equal(tasks[0].blockId, snapshot.blocks.find(block => block.title?.startsWith("Bash: pnpm dev")).id);
+    assert.deepEqual(snapshot.tasks, tasks);
+    assert.ok(log.of("tasks").some(event => event.tasks.some(task => task.title === "pnpm test" && task.status === "running" && !task.background)));
+    assert.ok(log.of("tasks").some(event => event.tasks.some(task => task.activity === "Running sleep 3")));
+    assert.ok(!log.of("tasks").some(event => event.tasks.some(task => task.title === "sleep 3")));
+    assert.doesNotMatch(JSON.stringify(log.of("tasks")), /PRIVATE-TASK|shell-1|agent-1|run-\d|tool-shell|agent-2|SubagentHandback/);
+    await adapter.stopTask({taskId:tasks[0].id});
+    await waitFor(() => log.of("tasks").at(-1).tasks.some(task => task.id === tasks[0].id && task.status === "stopped" && task.endedAt));
+    assert.ok(records().some(record => record.kind === "control" && record.request.subtype === "stop_task" && record.request.task_id === "shell-1"));
+    for (const taskId of ["claude-task-000000000000000000000000", tasks[1].id, tasks[0].id]) await assert.rejects(adapter.stopTask({taskId}), error => /not running/.test(error.safeMessage));
+    assert.deepEqual(log.problems, []);
   } finally { await adapter.dispose(); }
 });

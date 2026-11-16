@@ -40,7 +40,8 @@ use piui_runtime::workspace_runtime::{
     CLAUDE_SIGN_IN_MESSAGE, CoordinatorOperation, CoordinatorResponse, HarnessAvailability,
     HostTool, NativeApproval, NativeBlock, NativeEvent, NativeEventReceiver, NativeFork,
     NativeNoticeCode, NativeRuntime, NativeRuntimeConfig, NativeRuntimeError, NativeSessionModes,
-    NativeSnapshot, SidekickCallIdentity, offline_harness_capabilities, probe_native_harnesses,
+    NativeSnapshot, NativeTask, NativeTaskStatus, SidekickCallIdentity,
+    offline_harness_capabilities, probe_native_harnesses,
 };
 pub use piui_runtime::workspace_runtime::{
     ApprovalDecision, ApprovalOption, HarnessCapabilities, HarnessKind, PermissionMode, PromptMode,
@@ -173,6 +174,9 @@ pub struct SessionSnapshot {
     /// restored"); omitted when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notices: Vec<NativeNoticeCode>,
+    /// Additive v15 field (ADR-072): native work beside the turn; omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<NativeTask>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -275,6 +279,10 @@ pub enum WorkspaceEventPayload {
     /// running. Also listed in `SessionSnapshot.notices`.
     Notice {
         code: NativeNoticeCode,
+    },
+    /// Additive v15 event (ADR-072): the whole new SessionSnapshot.tasks list.
+    Tasks {
+        tasks: Vec<NativeTask>,
     },
 }
 
@@ -2484,6 +2492,7 @@ impl WorkspaceHost {
                 .lock()
                 .map(|notices| notices.clone())
                 .unwrap_or_default(),
+            tasks: bounded_tasks(native.tasks),
         })
     }
 
@@ -3426,6 +3435,7 @@ fn empty_closed_snapshot(record: PersistedSession) -> SessionSnapshot {
         models: record.model.clone().into_iter().collect(),
         modes: None,
         notices: Vec::new(),
+        tasks: Vec::new(),
     }
 }
 
@@ -3446,6 +3456,7 @@ fn snapshot_from_history(
         models: record.model.clone().into_iter().collect(),
         modes: None,
         notices: Vec::new(),
+        tasks: Vec::new(),
     }
 }
 
@@ -3698,6 +3709,93 @@ async fn runtime_settings(
         models: native.models,
         thinking_level: native.thinking_level,
         service_tier: native.service_tier,
+    })
+}
+
+const TASK_LIMIT: usize = 32;
+const TASK_TEXT_LIMIT: usize = 200;
+
+/// The host's own bound on what an adapter reports: at most 32 tasks, every
+/// text at most 200 characters. The bridge already keeps these limits; this
+/// is the IPC boundary's check.
+fn bounded_tasks(mut tasks: Vec<NativeTask>) -> Vec<NativeTask> {
+    tasks.truncate(TASK_LIMIT);
+    for task in &mut tasks {
+        task.title = task.title.chars().take(TASK_TEXT_LIMIT).collect();
+        task.detail = task
+            .detail
+            .take()
+            .map(|text| text.chars().take(TASK_TEXT_LIMIT).collect());
+        task.activity = task
+            .activity
+            .take()
+            .map(|text| text.chars().take(TASK_TEXT_LIMIT).collect());
+    }
+    tasks
+}
+
+/// Identifies one running task of a live session to stop.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionTaskStopRequestV1 {
+    session_id: String,
+    task_id: String,
+}
+
+/// Confirms the native stop request for the session.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTaskStopResultV1 {
+    protocol: u8,
+    session_id: String,
+}
+
+/// Stops one task the live agent runs beside its turn (a background command or a subagent).
+/// A live trusted-session action of this window, deliberately absent from the remote allowlist.
+#[tauri::command]
+pub async fn workspace_task_stop_v1(
+    state: State<'_, HostState>,
+    request: SessionTaskStopRequestV1,
+) -> Result<SessionTaskStopResultV1, WorkspaceError> {
+    stop_session_task(state.inner(), request).await
+}
+
+/// Body of `workspace_task_stop_v1`, independent of the Tauri state handle.
+async fn stop_session_task(
+    host: &HostState,
+    request: SessionTaskStopRequestV1,
+) -> Result<SessionTaskStopResultV1, WorkspaceError> {
+    if host.safe_mode {
+        return Err(WorkspaceError::safe_mode());
+    }
+    validate_session_id(&request.session_id)?;
+    validate_token(&request.task_id)?;
+    if request.task_id.len() > 128 {
+        return Err(WorkspaceError::invalid());
+    }
+    let _operation = authorize_ordinary_live_session(host, &request.session_id).await?;
+    let (runtime, _) = host
+        .workspace
+        .live_runtime(&request.session_id)?
+        .ok_or_else(WorkspaceError::closed)?;
+    let before = runtime
+        .snapshot()
+        .await
+        .map_err(|_| WorkspaceError::runtime())?;
+    if !before
+        .tasks
+        .iter()
+        .any(|task| task.id == request.task_id && task.status == NativeTaskStatus::Running)
+    {
+        return Err(WorkspaceError::not_found());
+    }
+    runtime
+        .stop_task(request.task_id)
+        .await
+        .map_err(|_| WorkspaceError::runtime())?;
+    Ok(SessionTaskStopResultV1 {
+        protocol: 1,
+        session_id: request.session_id,
     })
 }
 
@@ -4823,6 +4921,9 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                         },
                     }
                 }
+                NativeEvent::Tasks { tasks } => WorkspaceEventPayload::Tasks {
+                    tasks: bounded_tasks(tasks),
+                },
                 NativeEvent::Block { block } => {
                     mark_materialized(&inner, &state, &session_id);
                     WorkspaceEventPayload::Block { block }
@@ -6214,6 +6315,7 @@ Board."
             models,
             modes: None,
             notices: Vec::new(),
+            tasks: Vec::new(),
         };
         assert_eq!(
             serde_json::to_value(WorkspaceResult::Session {
@@ -8970,17 +9072,19 @@ mod native_host_tests {
         const models = [{id:'frozen',name:'Frozen'},{id:'wider',name:'Wider'}];
         let model = models[0];
         let mode = 'ask';
+        const tasks = [{id:'task-1',kind:'command',title:'pnpm test',status:'running',background:true,startedAt:'2026-11-17T00:00:00Z'}];
         let approvals = [{id:'approval-1',kind:'command',title:'Run tests',description:'npm test',decisions:['approve-once','approve-session','deny']}];
         const setStatus = (next) => { status = next; emit({type:'status',status:next}); };
         return {
           snapshot() {
             return {nativeId:'native-member',materialized:false,title:config.title ?? 'Member',status,model,blocks:[],approvals,
               capabilities:{prompt:native,resume:native,models:native,approvals:native,instructions:unsupported,toolPolicy:native,nativeSubagents:unsupported},
-              models,modes:{current:mode,available:[{id:'ask',name:'Ask'},{id:'auto',name:'Auto'}]}};
+              models,tasks,modes:{current:mode,available:[{id:'ask',name:'Ask'},{id:'auto',name:'Auto'}]}};
           },
           models() { return models; },
           setModel({ model: next }) { model = models.find((item) => item.id === next.id) ?? model; return null; },
           setMode({ modeId }) { mode = modeId; return null; },
+          stopTask({ taskId }) { const task = tasks.find(task => task.id === taskId); if (task) task.status = 'stopped'; return null; },
           respond({ requestId }) { approvals = approvals.filter((item) => item.id !== requestId); return null; },
           rename() { return null; },
           prompt() {
@@ -9107,6 +9211,16 @@ mod native_host_tests {
         refused(dispatch(&host, set_model(&member, &wider)).await);
         refused(runtime_settings(&host, set_settings(&member, &wider)).await);
         refused(select_session_mode(&host, set_mode(&member)).await);
+        refused(
+            super::stop_session_task(
+                &host,
+                super::SessionTaskStopRequestV1 {
+                    session_id: member.clone(),
+                    task_id: "task-1".into(),
+                },
+            )
+            .await,
+        );
         refused(dispatch(&host, respond(&member, ApprovalDecision::ApproveSession)).await);
         let settings = native_settings(&host, &member).await;
         assert_eq!(
@@ -9164,6 +9278,22 @@ mod native_host_tests {
         select_session_mode(&host, set_mode(&chat))
             .await
             .expect("an ordinary chat changes mode");
+        let snapshot = host.workspace.snapshot(&chat).await.expect("live snapshot");
+        assert_eq!(
+            serde_json::to_value(&snapshot).expect("serialize")["tasks"][0]["id"],
+            "task-1"
+        );
+        for (task_id, success) in [("task-1", true), ("task-1", false), ("unknown", false)] {
+            let result = super::stop_session_task(
+                &host,
+                super::SessionTaskStopRequestV1 {
+                    session_id: chat.clone(),
+                    task_id: task_id.into(),
+                },
+            )
+            .await;
+            assert_eq!(result.is_ok(), success);
+        }
         runtime_settings(&host, set_settings(&chat, &frozen))
             .await
             .expect("an ordinary chat changes settings");
@@ -10013,5 +10143,29 @@ mod acp_host_tests {
         );
         host.shutdown_all().await;
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod native_task_bounds_tests {
+    #[test]
+    fn bounded_tasks_limits_rows_and_unicode_text() {
+        let task: piui_runtime::workspace_runtime::NativeTask = serde_json::from_value(serde_json::json!({"id":"task","kind":"command","title":"\u{754c}".repeat(201),"status":"running","background":true,"startedAt":"now","detail":"\u{1f600}".repeat(201),"activity":"a".repeat(201)})).expect("task");
+        let tasks = super::bounded_tasks(vec![task; 33]);
+        assert_eq!(tasks.len(), 32);
+        assert_eq!(tasks[0].title.chars().count(), 200);
+        assert_eq!(
+            tasks[0].detail.as_ref().expect("detail").chars().count(),
+            200
+        );
+        assert_eq!(
+            tasks[0]
+                .activity
+                .as_ref()
+                .expect("activity")
+                .chars()
+                .count(),
+            200
+        );
     }
 }

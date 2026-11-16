@@ -8,6 +8,7 @@ import type { NanoAccountStatusV1 } from '../../../../../contracts/nano-account-
 import type { NanoExternalProviderV1 } from '../../../../../contracts/nano-providers-v1';
 import type { NanoChatGptResultV1 } from '../../../../../contracts/nano-chatgpt-v1';
 import type { DictationProviderIdV1, DictationSourceV1 } from '../../../../../contracts/dictation-v1';
+import type { SessionTaskV1 } from '../../../../../contracts/workspace-session-tasks-v1';
 import type { LabRun } from './orchestration/runEngine';
 import { apiFailure } from './labErrors';
 import type { LabIdSource } from './labRandom';
@@ -48,6 +49,8 @@ export interface LabLiveState {
   composerWaiting: boolean;
   /** Plain `send` prompts accepted while a turn is active (native follow-up queue). */
   pendingPrompts: string[];
+  /** Subagents and shell commands the live agent runs beside its turn (ADR-072); they end with the runtime. */
+  tasks: SessionTaskV1[];
 }
 
 /** The host registry row plus the native history the fake harness owns. */
@@ -176,7 +179,7 @@ export function newQueue(): LabQueue {
 }
 
 export function newLiveState(status: SessionStatus): LabLiveState {
-  return { status, approvals: [], composerNotify: false, composerPaused: false, composerWaiting: false, pendingPrompts: [] };
+  return { status, approvals: [], composerNotify: false, composerPaused: false, composerWaiting: false, pendingPrompts: [], tasks: [] };
 }
 
 /** Queued, sending and uncertain messages still need a decision. */

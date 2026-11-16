@@ -825,6 +825,53 @@ pub struct NativeSnapshot {
     /// never report it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modes: Option<NativeSessionModes>,
+    /// Additive; only adapters that track native tasks report it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<NativeTask>,
+}
+
+/// One unit of work the native agent runs beside its turn: a subagent or a
+/// shell command. Every text is one bounded line; the id is adapter-opaque.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeTask {
+    pub id: String,
+    pub kind: NativeTaskKind,
+    pub title: String,
+    pub status: NativeTaskStatus,
+    pub background: bool,
+    pub started_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_uses: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_id: Option<String>,
+}
+
+/// What kind of work a native task is; `Task` is the generic fallback.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NativeTaskKind {
+    Agent,
+    Command,
+    Task,
+}
+
+/// How a native task stands; anything but `Running` is final.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NativeTaskStatus {
+    Running,
+    Completed,
+    Failed,
+    Stopped,
 }
 
 /// One agent-defined session mode (ACP `session/set_mode` or a `mode`
@@ -1131,6 +1178,10 @@ pub enum NativeEvent {
     /// A non-fatal notice; the session keeps running.
     Notice {
         code: NativeNoticeCode,
+    },
+    /// The whole new task list of the session (replaces the previous one).
+    Tasks {
+        tasks: Vec<NativeTask>,
     },
     /// A fire-and-forget extension UI request (Pi `notify`, `setStatus`,
     /// `setWidget`, `setTitle`, `set_editor_text`, or an unknown method).
@@ -2230,6 +2281,19 @@ impl NativeRuntime {
         self.request(
             "setMode",
             json!({ "modeId": mode_id }),
+            REQUEST_TIMEOUT,
+            false,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Stops one running native task (a background command or a subagent).
+    /// Adapters that track no native tasks reject the request as an unsupported method.
+    pub async fn stop_task(&self, task_id: String) -> Result<(), NativeRuntimeError> {
+        self.request(
+            "stopTask",
+            json!({ "taskId": task_id }),
             REQUEST_TIMEOUT,
             false,
         )
@@ -6888,6 +6952,19 @@ mod tests {
                 "{case}"
             );
         }
+    }
+
+    #[test]
+    fn tasks_event_and_snapshot_field_parse() {
+        let value = json!({"type":"tasks","tasks":[{"id":"opaque","kind":"command","title":"pnpm test","status":"running","background":true,"startedAt":"2026-11-17T00:00:00Z","endedAt":"2026-11-17T00:01:00Z","detail":"Tests","activity":"Running","toolUses":1,"totalTokens":2,"blockId":"block"}]});
+        let event: NativeEvent = serde_json::from_value(value.clone()).expect("tasks");
+        assert!(matches!(event, NativeEvent::Tasks { .. }));
+        assert_eq!(serde_json::to_value(event).expect("serialize"), value);
+        let mut invalid = value;
+        invalid["tasks"][0]["unknown"] = json!(true);
+        assert!(serde_json::from_value::<NativeEvent>(invalid).is_err());
+        let snapshot: NativeSnapshot = serde_json::from_value(json!({"nativeId":"private","title":"title","status":"idle","blocks":[],"approvals":[],"capabilities":capabilities(),"models":[]})).expect("snapshot");
+        assert!(snapshot.tasks.is_empty());
     }
 
     #[test]

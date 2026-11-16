@@ -1,8 +1,9 @@
 import { catalogModel } from '../catalogFake';
-import { DAY, HOUR, LAB_BASE_TIME, MINUTE, seededIso } from '../labClock';
+import { DAY, HOUR, LAB_BASE_TIME, MINUTE, SECOND, seededIso } from '../labClock';
 import type { DesktopTimelineBlock, HarnessKind, WorkspaceModel } from '../labContracts';
 import { createRandom, labUuid } from '../labRandom';
 import type { LabProject } from '../labState';
+import type { SessionTaskV1 } from '../../../../../../contracts/workspace-session-tasks-v1';
 import { TranscriptBuilder } from '../transcriptBuilder';
 import {
   AUDIT_ANSWER, AUDIT_GREP_OUTPUT, AUDIT_PROMPT, cargoBuildLog, CHECK_COMMAND, CHECK_OUTPUT, COMPACTION_SUMMARY,
@@ -339,7 +340,33 @@ function issueTriage(): { record: LabSeed['sessions'][number]; activity: SeedAct
   return { record, activity: { kind: 'paused-approval', sessionId: id, approvalId, step } };
 }
 
-/** A live Claude Code chat on the user's subscription, near its usage limit. */
+/** Seeded on the Lab epoch; `createLabHost` moves live tasks onto this computer's clock. */
+function keymapTasks(): SessionTaskV1[] {
+  const ago = (milliseconds: number): string => seededIso(-milliseconds);
+  return [
+    {
+      id: 'lab-task-review', kind: 'agent', title: 'Review the transport diff', status: 'running', background: true,
+      startedAt: ago(4 * MINUTE + 12 * SECOND), detail: 'general-purpose', activity: 'Reading apps/desktop/src/host-api/transport.ts',
+      toolUses: 7, totalTokens: 18_400,
+    },
+    {
+      id: 'lab-task-imports', kind: 'agent', title: 'Map every direct Tauri import', status: 'completed', background: true,
+      startedAt: ago(9 * MINUTE), endedAt: ago(6 * MINUTE + 20 * SECOND), detail: 'Explore',
+      activity: 'Three components still import Tauri directly.', toolUses: 12, totalTokens: 31_200,
+    },
+    {
+      id: 'lab-task-dev', kind: 'command', title: 'pnpm --filter @piui/desktop dev', status: 'running', background: true,
+      startedAt: ago(7 * MINUTE + 30 * SECOND), detail: 'Start the UI Lab',
+    },
+    {
+      id: 'lab-task-cargo', kind: 'command', title: 'cargo test -p piui-runtime', status: 'failed', background: true,
+      startedAt: ago(12 * MINUTE), endedAt: ago(11 * MINUTE + 10 * SECOND),
+      activity: 'Background command "Run the runtime tests" failed (exit code 101)',
+    },
+  ];
+}
+
+/** A live Claude Code chat on the user's subscription, near its usage limit, with background agents and commands. */
 function keymap(): LabSeed['sessions'][number] {
   const transcript = new TranscriptBuilder('claude-code', 'keymap', LAB_BASE_TIME - 26 * MINUTE)
     .user(KEYMAP_PROMPT)
@@ -352,6 +379,7 @@ function keymap(): LabSeed['sessions'][number] {
     id: demoSessionId('keymap'), workspaceId: DEMO_PROJECTS.piui, harness: 'claude-code', title: 'Map pipeline editor shortcuts',
     blocks: transcript.build(), updatedAt: transcript.lastInstant(), model: model('claude-code', 'anthropic', 'lab-opus'),
     thinkingLevel: 'xhigh', permissionMode: 'workspace-write', live: 'idle',
+    tasks: keymapTasks(),
     usage: [seededUsage('claude-keymap-1', 28_410, 1_960)],
   });
 }

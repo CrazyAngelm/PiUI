@@ -453,3 +453,7 @@ the transcript, scoped independently from transcript scrolling/layout.
 These browser-local contracts introduce no IPC command, persisted history
 format or new native capability. Missing optional capabilities keep the generic
 presentation and existing owner behavior.
+
+# Session tasks (ADR-072)
+
+`workspace-session-tasks-v1.ts` adds `workspace_task_stop_v1` and the additive v15 `SessionSnapshot.tasks` field and `tasks` event: the subagents and shell commands a live agent runs, including background ones, at most 32 one-line entries. A harness that reports none sends neither.
