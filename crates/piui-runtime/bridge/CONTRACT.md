@@ -771,7 +771,11 @@ permission mode, fast mode) stay authoritative. No provider client or model loop
   shown." block, and a branch point is still found anywhere in the chain. A missing transcript fails with
   `invalid-session`; a new conversation is never substituted. `rename` is PiUI
   metadata only. Closed sessions use the host's own read-only projection
-  (`WorkspaceHistoryFormat::ClaudeCode`) with the same branch rules.
+  (`WorkspaceHistoryFormat::ClaudeCode`) with the same branch rules. It streams
+  the transcript (LF framing, no 128 MiB refusal, a 1 GiB safety cap, a line
+  over 64 MiB shown as one unreadable entry) and, when the active chain holds
+  more than 32 MiB of text, projects only its newest part behind one custom
+  "Earlier Claude Code history is not shown." block.
 - Catalog: models map `value`/`displayName`/`supportedEffortLevels` (disabled
   rows dropped, provider `anthropic`, `supportsFast` always `false`); commands
   map to `skill` resources. Subagent types are omitted (no matching resource kind).

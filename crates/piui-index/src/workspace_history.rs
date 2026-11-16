@@ -12,8 +12,9 @@ use super::{
 };
 use piui_platform::{ProjectDirectory, ProjectDirectoryError};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 use thiserror::Error;
@@ -160,7 +161,8 @@ impl WorkspaceHistoryProjection {
 /// Projects one host-registered native transcript without launching its
 /// runtime. The byte bound is the index scanner's existing authoritative file
 /// bound; callers cannot accidentally invent a different workspace-history
-/// quota.
+/// quota. Claude Code transcripts are the one exception: they are streamed
+/// under their own, larger safety cap.
 pub fn project_native_workspace_history(
     source: &HostNativeHistorySource,
     project: &ProjectDirectory,
@@ -1356,6 +1358,313 @@ mod tests {
     }
 
     #[test]
+    fn claude_code_history_streams_large_side_entries_without_the_scanner_bound() {
+        use std::io::Write;
+        // The projection no longer reads through the scanner's 128 MiB bound;
+        // its own safety cap is far above it. A fixture over 128 MiB on every
+        // test run would be too heavy, so a few MiB stand in for it.
+        assert!(
+            ClaudeReadLimits::PRODUCTION.max_file_bytes
+                > SessionDiscoveryLimits::default().max_file_bytes
+        );
+        let directory = TemporaryDirectory::new();
+        let path = directory.path().join(format!("{CLAUDE_SESSION}.jsonl"));
+        let bound = 3 * 1024 * 1024;
+        let mut file = std::io::BufWriter::new(fs::File::create(&path).expect("transcript"));
+        let mut write = |value: serde_json::Value| -> usize {
+            let line = claude_line(&directory, value);
+            writeln!(file, "{line}").expect("transcript line");
+            line.len() + 1
+        };
+        write(
+            serde_json::json!({"type":"user","uuid":"u1","parentUuid":null,"message":{"role":"user","content":"Open the build log"}}),
+        );
+        write(
+            serde_json::json!({"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":[{"type":"text","text":"Opened."}]}}),
+        );
+        // Large results beside the active chain make the file bigger than the
+        // scanner bound without adding to what is projected.
+        let filler = "y".repeat(1024 * 1024);
+        let mut written = 0_usize;
+        let mut index = 0_u32;
+        while written <= bound {
+            written += write(
+                serde_json::json!({"type":"user","uuid":format!("side-{index}"),"parentUuid":"a1","isSidechain":true,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":format!("toolu_side_{index}"),"content":filler}]}}),
+            );
+            index += 1;
+        }
+        write(
+            serde_json::json!({"type":"user","uuid":"u2","parentUuid":"a1","message":{"role":"user","content":"Thanks"}}),
+        );
+        write(
+            serde_json::json!({"type":"assistant","uuid":"a2","parentUuid":"u2","message":{"role":"assistant","content":[{"type":"text","text":"Done."}]}}),
+        );
+        file.flush().expect("transcript flush");
+        drop(file);
+        let length = fs::metadata(&path).expect("transcript metadata").len();
+        assert!(
+            length > bound as u64,
+            "the fixture holds several large side entries"
+        );
+
+        let projection = project_native_workspace_history(
+            &claude_source(path.clone(), CLAUDE_SESSION),
+            &project(&directory),
+        )
+        .expect("a transcript with large side entries projects");
+        let previews = projection
+            .timeline_blocks()
+            .iter()
+            .map(|block| block.preview.as_deref().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            previews,
+            ["Open the build log", "Opened.", "Thanks", "Done."]
+        );
+        assert_eq!(projection.final_assistant_text(None, None), Some("Done."));
+        assert_eq!(projection.report.complete_bytes as u64, length);
+        assert_eq!(projection.report.partial_tail_bytes, 0);
+        assert!(projection.report.unknown_entries.is_empty());
+        fs::remove_file(&path).expect("large fixture is removed");
+    }
+
+    #[test]
+    fn claude_code_history_refuses_a_transcript_over_the_safety_cap() {
+        let directory = TemporaryDirectory::new();
+        let path = directory.write_fixture(&format!("{CLAUDE_SESSION}.jsonl"), fixture("claude"));
+        let limits = ClaudeReadLimits {
+            max_file_bytes: 100,
+            ..ClaudeReadLimits::PRODUCTION
+        };
+        assert!(matches!(
+            project_claude_code_history_with_limits(
+                &claude_source(path, CLAUDE_SESSION),
+                &project(&directory),
+                limits
+            ),
+            Err(WorkspaceHistoryError::File(
+                BoundedScanError::FileTooLarge { limit: 100 }
+            ))
+        ));
+    }
+
+    #[test]
+    fn claude_code_history_shows_an_overlong_line_as_unreadable() {
+        let directory = TemporaryDirectory::new();
+        let path = directory.path().join(format!("{CLAUDE_SESSION}.jsonl"));
+        let overlong = claude_line(
+            &directory,
+            serde_json::json!({"type":"user","uuid":"big","parentUuid":"a1","isSidechain":true,"message":{"role":"user","content":"z".repeat(3000)}}),
+        );
+        let lines = [
+            claude_line(
+                &directory,
+                serde_json::json!({"type":"user","uuid":"u1","parentUuid":null,"message":{"role":"user","content":"First"}}),
+            ),
+            claude_line(
+                &directory,
+                serde_json::json!({"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":[{"type":"text","text":"First reply"}]}}),
+            ),
+            overlong.clone(),
+            claude_line(
+                &directory,
+                serde_json::json!({"type":"assistant","uuid":"a2","parentUuid":"a1","message":{"role":"assistant","content":[{"type":"text","text":"Second reply"}]}}),
+            ),
+        ];
+        assert!(
+            lines[..2]
+                .iter()
+                .chain(&lines[3..])
+                .all(|line| line.len() <= 1024)
+        );
+        fs::write(&path, format!("{}\n", lines.join("\n"))).expect("fixture");
+        let limits = ClaudeReadLimits {
+            max_line_bytes: 1024,
+            ..ClaudeReadLimits::PRODUCTION
+        };
+        let projection = project_claude_code_history_with_limits(
+            &claude_source(path, CLAUDE_SESSION),
+            &project(&directory),
+            limits,
+        )
+        .expect("an overlong line does not fail the projection");
+        let kinds = projection
+            .timeline_blocks()
+            .iter()
+            .map(|block| block.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            [
+                GenericBlockKind::User,
+                GenericBlockKind::Assistant,
+                GenericBlockKind::Unknown,
+                GenericBlockKind::Assistant
+            ]
+        );
+        assert_eq!(
+            projection.final_assistant_text(None, None),
+            Some("Second reply")
+        );
+        assert!(matches!(
+            projection.report.parse_state,
+            ParseState::Unsupported
+        ));
+        let [summary] = projection.report.unknown_entries.as_slice() else {
+            panic!("exactly the overlong line is unreadable");
+        };
+        assert_eq!(summary.line, 3);
+        assert_eq!(summary.entry_type, "unreadable");
+        assert_eq!(summary.byte_length, overlong.len());
+        assert_eq!(summary.sha256, sha256(overlong.as_bytes()));
+    }
+
+    #[test]
+    fn claude_line_assembler_caps_a_line_without_buffering_it() {
+        let mut assembler = ClaudeLineAssembler::new(4);
+        assembler.push(b"ab");
+        assembler.push(b"cd");
+        assert!(matches!(assembler.line(), ClaudeRawLine::Frame(b"abcd")));
+        assembler.reset();
+        assert!(assembler.is_empty());
+        assembler.push(b"ab");
+        assembler.push(b"cde");
+        assembler.push(b"fg");
+        assert!(
+            assembler.buffer.is_empty(),
+            "nothing is buffered once over the cap"
+        );
+        let ClaudeRawLine::Oversized {
+            byte_length,
+            sha256: digest,
+        } = assembler.line()
+        else {
+            panic!("a seven byte line is over a four byte cap");
+        };
+        assert_eq!(byte_length, 7);
+        assert_eq!(digest, sha256(b"abcdefg"));
+        assembler.reset();
+        assert!(assembler.is_empty());
+    }
+
+    #[test]
+    fn claude_transcript_stream_is_independent_of_the_chunk_size() {
+        let directory = TemporaryDirectory::new();
+        let complete = [
+            claude_line(
+                &directory,
+                serde_json::json!({"type":"user","uuid":"u1","parentUuid":null,"message":{"role":"user","content":"Hi"}}),
+            ),
+            "not json".to_owned(),
+            String::new(),
+            claude_line(
+                &directory,
+                serde_json::json!({"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":[{"type":"text","text":"Hello"}]}}),
+            ),
+        ];
+        let torn = "{\"type\":\"assistant\",\"uuid\":\"a2\"";
+        let bytes = format!("{}\n{torn}", complete.join("\n")).into_bytes();
+        let complete_bytes = bytes.len() - torn.len();
+        for chunk in [1, 3, 7, 4096] {
+            let transcript = stream_claude_transcript(
+                BufReader::with_capacity(chunk, bytes.as_slice()),
+                CLAUDE_SESSION,
+                CLAUDE_MAX_LINE_BYTES,
+            )
+            .expect("transcript streams");
+            assert_eq!(transcript.entries.len(), 2, "chunk {chunk}");
+            assert_eq!(transcript.entries[1].line, 4, "chunk {chunk}");
+            let lines = transcript
+                .unreadable
+                .iter()
+                .map(|summary| summary.line)
+                .collect::<Vec<_>>();
+            assert_eq!(lines, [2, 5], "the malformed line and the torn tail");
+            assert_eq!(transcript.unreadable[1].byte_length, torn.len());
+            assert_eq!(transcript.total_bytes, bytes.len());
+            assert_eq!(transcript.complete_bytes, complete_bytes);
+            assert_eq!(transcript.revision, sha256(&bytes), "chunk {chunk}");
+        }
+    }
+
+    #[test]
+    fn claude_code_history_starts_a_long_chain_later_behind_one_notice() {
+        let directory = TemporaryDirectory::new();
+        let path = directory.path().join(format!("{CLAUDE_SESSION}.jsonl"));
+        let user = |id: &str, parent: Option<&str>, second: u32, text: &str| {
+            claude_line(
+                &directory,
+                serde_json::json!({"type":"user","uuid":id,"parentUuid":parent,"timestamp":format!("2026-01-01T00:00:0{second}Z"),"message":{"role":"user","content":text}}),
+            )
+        };
+        let assistant = |id: &str, parent: &str, second: u32, text: &str| {
+            claude_line(
+                &directory,
+                serde_json::json!({"type":"assistant","uuid":id,"parentUuid":parent,"timestamp":format!("2026-01-01T00:00:0{second}Z"),"message":{"role":"assistant","content":[{"type":"text","text":text}]}}),
+            )
+        };
+        let lines = [
+            user("u1", None, 1, "First prompt"),
+            assistant("a1", "u1", 2, "Reply one"),
+            claude_line(
+                &directory,
+                serde_json::json!({"type":"system","subtype":"compact_boundary","uuid":"c1","parentUuid":"a1"}),
+            ),
+            user("u2", Some("c1"), 3, "Second prompt"),
+            assistant("a2", "u2", 4, "Reply two"),
+            user("u3", Some("a2"), 5, "Third prompt"),
+            assistant("a3", "u3", 6, "Reply three"),
+        ];
+        fs::write(&path, format!("{}\n", lines.join("\n"))).expect("fixture");
+        let source = claude_source(path, CLAUDE_SESSION);
+
+        let whole = project_claude_code_history_with_limits(
+            &source,
+            &project(&directory),
+            ClaudeReadLimits::PRODUCTION,
+        )
+        .expect("the whole chain projects");
+        assert!(
+            whole
+                .timeline_blocks()
+                .iter()
+                .all(|block| block.source_type != "claude_history_trimmed")
+        );
+        assert_eq!(whole.report.compaction_entry_count, 1);
+
+        // Room for the newest two entries (12 + 11 bytes) but not the third.
+        let limits = ClaudeReadLimits {
+            chain_text_budget: 25,
+            ..ClaudeReadLimits::PRODUCTION
+        };
+        let trimmed =
+            project_claude_code_history_with_limits(&source, &project(&directory), limits)
+                .expect("the newest part of the chain projects");
+        let blocks = trimmed.timeline_blocks();
+        let previews = blocks
+            .iter()
+            .map(|block| block.preview.as_deref().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            previews,
+            [CLAUDE_HISTORY_TRIMMED_NOTICE, "Third prompt", "Reply three"]
+        );
+        assert_eq!(blocks[0].kind, GenericBlockKind::Custom);
+        assert_eq!(blocks[0].source_type, "claude_history_trimmed");
+        assert_eq!(
+            trimmed.final_assistant_text(None, None),
+            Some("Reply three")
+        );
+        // The report still describes the whole conversation.
+        let report = &trimmed.report;
+        assert_eq!(report.first_user_preview.as_deref(), Some("First prompt"));
+        assert_eq!(report.created_at.as_deref(), Some("2026-01-01T00:00:01Z"));
+        assert_eq!(report.updated_at.as_deref(), Some("2026-01-01T00:00:06Z"));
+        assert_eq!(report.compaction_entry_count, 1);
+        assert_eq!(report.file_revision, whole.report.file_revision);
+    }
+
+    #[test]
     fn projects_pi_prime_through_existing_generic_redacted_renderer() {
         let directory = TemporaryDirectory::new();
         let path = directory.write_fixture("prime.jsonl", fixture("pi-prime"));
@@ -1874,6 +2183,45 @@ const CLAUDE_API_ERROR_NOTICE: &str = "Claude Code could not complete this turn.
 /// so a transcript never holds more than this per result in memory.
 const CLAUDE_TOOL_OUTPUT_CAP: usize = super::DISPLAY_DETAIL_LIMIT + 8;
 
+/// A Claude Code transcript is streamed line by line and never held whole, so
+/// its safety cap is far above the scanner's 128 MiB bound: real transcripts
+/// with many compactions reach 200 MB.
+const CLAUDE_MAX_FILE_BYTES: usize = 1024 * 1024 * 1024;
+
+/// One line is parsed in memory. A longer line is consumed without buffering
+/// and shown as an unreadable entry.
+const CLAUDE_MAX_LINE_BYTES: usize = 64 * 1024 * 1024;
+
+/// Raw bytes read from the file per step.
+const CLAUDE_READ_CHUNK_BYTES: usize = 256 * 1024;
+
+/// The line buffer is released after a line that grew it beyond this.
+const CLAUDE_RETAINED_LINE_BYTES: usize = 1024 * 1024;
+
+/// The projected part of the active chain keeps at most about this much text
+/// (user, assistant and thinking text plus tool output). A longer chain starts
+/// later, behind one notice block.
+const CLAUDE_CHAIN_TEXT_BUDGET: usize = 32 * 1024 * 1024;
+
+/// Same wording as the live bridge's notice for the same situation.
+const CLAUDE_HISTORY_TRIMMED_NOTICE: &str = "Earlier Claude Code history is not shown.";
+
+/// Read limits of the Claude Code projection; tests pass small ones.
+#[derive(Clone, Copy)]
+struct ClaudeReadLimits {
+    max_file_bytes: usize,
+    max_line_bytes: usize,
+    chain_text_budget: usize,
+}
+
+impl ClaudeReadLimits {
+    const PRODUCTION: Self = Self {
+        max_file_bytes: CLAUDE_MAX_FILE_BYTES,
+        max_line_bytes: CLAUDE_MAX_LINE_BYTES,
+        chain_text_budget: CLAUDE_CHAIN_TEXT_BUDGET,
+    };
+}
+
 /// One entry of a Claude Code conversation chain (`uuid`/`parentUuid`).
 struct ClaudeChainEntry {
     line: u64,
@@ -2219,24 +2567,319 @@ impl CodexProjectionBuilder<'_> {
         });
         self.last_visible = None;
     }
+
+    /// Marks the top of a chain whose older part is not projected. It reuses
+    /// the generic custom block, so it needs no new block kind.
+    fn push_claude_history_notice(&mut self) {
+        let id = format!("timeline-{}", self.blocks.len());
+        self.blocks.push(GenericTimelineBlock {
+            id,
+            parent_id: None,
+            kind: GenericBlockKind::Custom,
+            source_type: "claude_history_trimmed".into(),
+            created_at: None,
+            preview: Some(CLAUDE_HISTORY_TRIMMED_NOTICE.into()),
+            has_image: false,
+            title: Some("Earlier history not shown".into()),
+            tool_name: None,
+            collapsible: false,
+            truncated: false,
+            fallback: false,
+            status: GenericBlockStatus::Complete,
+        });
+        self.last_visible = None;
+    }
 }
 
 fn unknown_summary(line: u64, entry_type: &str, frame: &[u8]) -> UnknownEntrySummary {
+    unknown_summary_of(line, entry_type, frame.len(), sha256(frame))
+}
+
+fn unknown_summary_of(
+    line: u64,
+    entry_type: &str,
+    byte_length: usize,
+    sha256: String,
+) -> UnknownEntrySummary {
     UnknownEntrySummary {
         line,
         entry_type: super::safe_text(entry_type, super::TYPE_LIMIT),
-        byte_length: frame.len(),
-        sha256: sha256(frame),
+        byte_length,
+        sha256,
     }
+}
+
+/// The finished line of a streamed transcript.
+enum ClaudeRawLine<'a> {
+    Frame(&'a [u8]),
+    /// A line over the cap: only its byte length and SHA-256 were kept.
+    Oversized {
+        byte_length: usize,
+        sha256: String,
+    },
+}
+
+/// Collects the pieces of one LF-delimited line. A line over the cap is never
+/// buffered: its length and hash are accumulated while it streams past.
+struct ClaudeLineAssembler {
+    max_line_bytes: usize,
+    buffer: Vec<u8>,
+    oversized: Option<(usize, Sha256)>,
+}
+
+impl ClaudeLineAssembler {
+    fn new(max_line_bytes: usize) -> Self {
+        Self {
+            max_line_bytes,
+            buffer: Vec::new(),
+            oversized: None,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.buffer.is_empty() && self.oversized.is_none()
+    }
+
+    fn push(&mut self, piece: &[u8]) {
+        if let Some((length, hasher)) = &mut self.oversized {
+            *length = length.saturating_add(piece.len());
+            hasher.update(piece);
+        } else if self.buffer.len().saturating_add(piece.len()) > self.max_line_bytes {
+            let mut hasher = Sha256::new();
+            hasher.update(&self.buffer);
+            hasher.update(piece);
+            let length = self.buffer.len().saturating_add(piece.len());
+            self.buffer = Vec::new();
+            self.oversized = Some((length, hasher));
+        } else {
+            self.buffer.extend_from_slice(piece);
+        }
+    }
+
+    /// The line collected so far; call `reset` before collecting the next.
+    fn line(&mut self) -> ClaudeRawLine<'_> {
+        match self.oversized.take() {
+            Some((byte_length, hasher)) => ClaudeRawLine::Oversized {
+                byte_length,
+                sha256: format!("{:x}", hasher.finalize()),
+            },
+            None => ClaudeRawLine::Frame(&self.buffer),
+        }
+    }
+
+    fn reset(&mut self) {
+        if self.buffer.capacity() > CLAUDE_RETAINED_LINE_BYTES {
+            self.buffer = Vec::new();
+        } else {
+            self.buffer.clear();
+        }
+        self.oversized = None;
+    }
+}
+
+/// A Claude Code transcript read as a stream: compact entries instead of raw
+/// bytes, so memory does not grow with lines that are only skipped.
+struct ClaudeTranscript {
+    entries: Vec<ClaudeChainEntry>,
+    /// Lines that are not JSON, or too long to parse, summarized when read.
+    unreadable: Vec<UnknownEntrySummary>,
+    /// SHA-256 of the whole file.
+    revision: String,
+    total_bytes: usize,
+    /// Bytes up to and including the last LF.
+    complete_bytes: usize,
+}
+
+impl ClaudeTranscript {
+    fn accept(
+        &mut self,
+        line: u64,
+        raw: ClaudeRawLine<'_>,
+        expected_native_id: &str,
+    ) -> Result<(), WorkspaceHistoryError> {
+        match raw {
+            ClaudeRawLine::Frame(frame) => {
+                match read_claude_line(line, frame, expected_native_id)? {
+                    ClaudeLine::Chain(entry) => self.entries.push(*entry),
+                    ClaudeLine::Metadata => {}
+                    ClaudeLine::Malformed => {
+                        self.unreadable
+                            .push(unknown_summary(line, "unreadable", frame));
+                    }
+                }
+            }
+            ClaudeRawLine::Oversized {
+                byte_length,
+                sha256,
+            } => self
+                .unreadable
+                .push(unknown_summary_of(line, "unreadable", byte_length, sha256)),
+        }
+        Ok(())
+    }
+}
+
+/// Splits only on LF and keeps at most one line plus one read chunk of raw
+/// bytes. A crash can leave a final line without its LF: it is read like any
+/// other line, and a torn one is shown as unreadable, never hiding the rest.
+fn stream_claude_transcript<R: BufRead>(
+    mut reader: R,
+    expected_native_id: &str,
+    max_line_bytes: usize,
+) -> Result<ClaudeTranscript, WorkspaceHistoryError> {
+    let mut transcript = ClaudeTranscript {
+        entries: Vec::new(),
+        unreadable: Vec::new(),
+        revision: String::new(),
+        total_bytes: 0,
+        complete_bytes: 0,
+    };
+    let mut assembler = ClaudeLineAssembler::new(max_line_bytes);
+    let mut hasher = Sha256::new();
+    let mut line = 1_u64;
+    loop {
+        let chunk = match reader.fill_buf() {
+            Ok(chunk) => chunk,
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) => return Err(BoundedScanError::Read(error).into()),
+        };
+        if chunk.is_empty() {
+            break;
+        }
+        hasher.update(chunk);
+        let mut start = 0;
+        while let Some(relative) = chunk[start..].iter().position(|byte| *byte == b'\n') {
+            let end = start + relative;
+            assembler.push(&chunk[start..end]);
+            transcript.accept(line, assembler.line(), expected_native_id)?;
+            assembler.reset();
+            line = line.saturating_add(1);
+            start = end + 1;
+            transcript.complete_bytes = transcript.total_bytes + start;
+        }
+        assembler.push(&chunk[start..]);
+        let consumed = chunk.len();
+        transcript.total_bytes += consumed;
+        reader.consume(consumed);
+    }
+    if !assembler.is_empty() {
+        transcript.accept(line, assembler.line(), expected_native_id)?;
+    }
+    transcript.revision = format!("{:x}", hasher.finalize());
+    Ok(transcript)
+}
+
+/// Streams the transcript through a no-follow handle and, like
+/// `read_stable_bounded`, rejects a file that was replaced, resized or touched
+/// while it was read.
+fn read_claude_transcript(
+    path: &Path,
+    expected_native_id: &str,
+    limits: ClaudeReadLimits,
+) -> Result<(ClaudeTranscript, Option<SystemTime>), WorkspaceHistoryError> {
+    let too_large = BoundedScanError::FileTooLarge {
+        limit: limits.max_file_bytes,
+    };
+    let (file, opened_identity) = open_session_file_no_follow(path)?;
+    let opened_metadata = file.metadata().map_err(BoundedScanError::Read)?;
+    if opened_metadata.len() > limits.max_file_bytes as u64 {
+        return Err(too_large.into());
+    }
+    // One byte past the cap tells a file that grew while read from one at the cap.
+    let reader = BufReader::with_capacity(
+        CLAUDE_READ_CHUNK_BYTES,
+        file.take(limits.max_file_bytes as u64 + 1),
+    );
+    let transcript = stream_claude_transcript(reader, expected_native_id, limits.max_line_bytes)?;
+    if transcript.total_bytes > limits.max_file_bytes {
+        return Err(too_large.into());
+    }
+
+    let (final_file, final_identity) = open_session_file_no_follow(path)?;
+    let final_metadata = final_file.metadata().map_err(BoundedScanError::Read)?;
+    let length = transcript.total_bytes as u64;
+    if final_identity != opened_identity
+        || opened_metadata.len() != length
+        || final_metadata.len() != length
+        || (opened_metadata.modified().ok().is_some()
+            && final_metadata.modified().ok() != opened_metadata.modified().ok())
+    {
+        return Err(BoundedScanError::Changed.into());
+    }
+    Ok((transcript, final_metadata.modified().ok()))
+}
+
+/// Text a chain entry contributes to the retained-text budget.
+fn claude_entry_text_bytes(entry: &ClaudeChainEntry) -> usize {
+    match &entry.content {
+        ClaudeEntryContent::User { text, results, .. } => {
+            text.as_ref().map_or(0, String::len)
+                + results
+                    .iter()
+                    .filter_map(|result| result.output.as_ref())
+                    .map(String::len)
+                    .sum::<usize>()
+        }
+        ClaudeEntryContent::Assistant(parts) => parts
+            .iter()
+            .map(|part| match part {
+                ClaudeAssistantPart::Text(text) | ClaudeAssistantPart::Thinking(text) => text.len(),
+                ClaudeAssistantPart::ToolUse { .. } | ClaudeAssistantPart::Unsupported(_) => 0,
+            })
+            .sum(),
+        ClaudeEntryContent::ApiError
+        | ClaudeEntryContent::Compaction
+        | ClaudeEntryContent::Internal
+        | ClaudeEntryContent::Unknown { .. } => 0,
+    }
+}
+
+/// Position in `chain` where the projection starts: the newest entries within
+/// the text budget (the newest entry is always kept), moved on to the next user
+/// prompt so the shown history does not open in the middle of a turn.
+fn claude_chain_start(entries: &[ClaudeChainEntry], chain: &[usize], budget: usize) -> usize {
+    let mut kept = 0_usize;
+    let mut start = chain.len();
+    while start > 0 {
+        let weight = claude_entry_text_bytes(&entries[chain[start - 1]]);
+        if start < chain.len() && kept.saturating_add(weight) > budget {
+            break;
+        }
+        kept = kept.saturating_add(weight);
+        start -= 1;
+    }
+    if start > 0
+        && let Some(offset) = chain[start..].iter().position(|&index| {
+            matches!(
+                &entries[index].content,
+                ClaudeEntryContent::User { text: Some(_), .. }
+            )
+        })
+    {
+        start += offset;
+    }
+    start
 }
 
 /// Native Claude Code JSONL projection. It follows the active branch back
 /// from the newest main-conversation entry through `parentUuid` (compaction
 /// boundaries through `logicalParentUuid`), skips meta, sidechain, summary
 /// and other internal entries, and never writes or converts the history.
+///
+/// The transcript is streamed (no 128 MiB refusal; a 1 GiB safety cap) and only
+/// the newest part of the active chain is projected when it holds more than
+/// 32 MiB of text.
 fn project_claude_code_history(
     source: &HostNativeHistorySource,
     project: &ProjectDirectory,
+) -> Result<WorkspaceHistoryProjection, WorkspaceHistoryError> {
+    project_claude_code_history_with_limits(source, project, ClaudeReadLimits::PRODUCTION)
+}
+
+fn project_claude_code_history_with_limits(
+    source: &HostNativeHistorySource,
+    project: &ProjectDirectory,
+    limits: ClaudeReadLimits,
 ) -> Result<WorkspaceHistoryProjection, WorkspaceHistoryError> {
     validate_source_path(&source.path)?;
     // Claude Code names every transcript after its immutable session id.
@@ -2246,30 +2889,15 @@ fn project_claude_code_history(
     {
         return Err(WorkspaceHistoryError::NativeSessionMismatch);
     }
-    let max_bytes = SessionDiscoveryLimits::default().max_file_bytes;
-    let (bytes, modified) = read_stable_bounded(&source.path, max_bytes)?;
-    let (frames, tail_start) = lf_frames(&bytes);
-    let mut entries = Vec::new();
-    let mut unreadable = Vec::new();
-    let mut next_line = 1;
-    for (line, frame) in frames {
-        next_line = line.saturating_add(1);
-        match read_claude_line(line, frame, &source.expected_native_id)? {
-            ClaudeLine::Chain(entry) => entries.push(*entry),
-            ClaudeLine::Metadata => {}
-            ClaudeLine::Malformed => unreadable.push((line, frame)),
-        }
-    }
-    // A crash can leave a final line without its LF. A complete entry is
-    // kept; a torn one is shown as unreadable, never hiding the rest.
-    if tail_start < bytes.len() {
-        let tail = &bytes[tail_start..];
-        match read_claude_line(next_line, tail, &source.expected_native_id)? {
-            ClaudeLine::Chain(entry) => entries.push(*entry),
-            ClaudeLine::Metadata => {}
-            ClaudeLine::Malformed => unreadable.push((next_line, tail)),
-        }
-    }
+    let (transcript, modified) =
+        read_claude_transcript(&source.path, &source.expected_native_id, limits)?;
+    let ClaudeTranscript {
+        entries,
+        unreadable,
+        revision,
+        total_bytes,
+        complete_bytes,
+    } = transcript;
     let leaf = entries
         .iter()
         .rposition(|entry| entry.conversational)
@@ -2338,22 +2966,54 @@ fn project_claude_code_history(
     let mut builder = CodexProjectionBuilder::new(&project_root);
     let mut shown_unknown = std::collections::HashSet::new();
     let mut unreadable = unreadable.into_iter().peekable();
-    let mut created_at = None;
-    let mut updated_at = None;
-    for &index in &chain {
+    // Times describe the whole conversation, whatever part is projected.
+    let created_at = chain
+        .iter()
+        .find_map(|&index| entries[index].created_at.clone());
+    let updated_at = chain
+        .iter()
+        .rev()
+        .find_map(|&index| entries[index].created_at.clone());
+    // A chain with more text than the budget is projected from a later entry,
+    // behind one notice. What the dropped part contributes to the report's
+    // counts and first prompt is still taken from it.
+    let first_kept = claude_chain_start(&entries, &chain, limits.chain_text_budget);
+    let notice_blocks = usize::from(first_kept > 0);
+    let mut first_user_preview = None;
+    if first_kept > 0 {
+        builder.push_claude_history_notice();
+        for &index in &chain[..first_kept] {
+            match &entries[index].content {
+                ClaudeEntryContent::User {
+                    text, has_image, ..
+                } => {
+                    builder.image_entry_count = builder
+                        .image_entry_count
+                        .saturating_add(usize::from(*has_image));
+                    if first_user_preview.is_none()
+                        && let Some(text) = text
+                    {
+                        let (preview, _) = bounded_display(
+                            Some(text.as_str()),
+                            display_limit(GenericBlockKind::User),
+                        );
+                        first_user_preview = preview.map(|value| {
+                            redact_display_paths(&value, Some(project_root.as_path()))
+                        });
+                    }
+                }
+                ClaudeEntryContent::Compaction => {
+                    builder.compaction_entry_count =
+                        builder.compaction_entry_count.saturating_add(1);
+                }
+                _ => {}
+            }
+        }
+    }
+    for &index in &chain[first_kept..] {
         let entry = &entries[index];
-        while let Some((line, frame)) = unreadable.next_if(|(line, _)| *line < entry.line) {
-            builder.push_claude_unknown(
-                &mut shown_unknown,
-                unknown_summary(line, "unreadable", frame),
-                None,
-            );
-        }
-        if created_at.is_none() {
-            created_at.clone_from(&entry.created_at);
-        }
-        if entry.created_at.is_some() {
-            updated_at.clone_from(&entry.created_at);
+        while let Some(summary) = unreadable.next_if(|summary| summary.line < entry.line) {
+            builder.push_claude_unknown(&mut shown_unknown, summary, None);
         }
         let at = entry.created_at.clone();
         match &entry.content {
@@ -2436,12 +3096,8 @@ fn project_claude_code_history(
             ),
         }
     }
-    for (line, frame) in unreadable {
-        builder.push_claude_unknown(
-            &mut shown_unknown,
-            unknown_summary(line, "unreadable", frame),
-            None,
-        );
+    for summary in unreadable {
+        builder.push_claude_unknown(&mut shown_unknown, summary, None);
     }
     let pending_calls = builder
         .tools
@@ -2460,8 +3116,9 @@ fn project_claude_code_history(
             block.status = GenericBlockStatus::Interrupted;
         }
     }
-    trim_old_display(&mut builder.blocks);
-    if builder.blocks.is_empty() {
+    // The notice keeps its preview: only the history behind it is trimmed.
+    trim_old_display(&mut builder.blocks[notice_blocks..]);
+    if builder.blocks.len() <= notice_blocks {
         return Err(WorkspaceHistoryError::NoTimelineRecords);
     }
 
@@ -2471,18 +3128,20 @@ fn project_claude_code_history(
         .and_then(|name| name.to_str())
         .unwrap_or("session.jsonl");
     let mut report = super::scan_bytes(source_name, b"");
-    report.file_revision = sha256(&bytes);
+    report.file_revision = revision;
     report.source_modified = modified;
-    report.complete_bytes = tail_start;
-    report.partial_tail_bytes = bytes.len().saturating_sub(tail_start);
+    report.complete_bytes = complete_bytes;
+    report.partial_tail_bytes = total_bytes.saturating_sub(complete_bytes);
     report.pi_session_id = Some(source.expected_native_id.clone());
     report.project_cwd = Some(cwd);
     report.created_at = created_at;
     report.updated_at = updated_at.or_else(|| report.created_at.clone());
-    report.first_user_preview = builder.blocks.iter().find_map(|block| {
-        (block.kind == GenericBlockKind::User)
-            .then(|| block.preview.clone())
-            .flatten()
+    report.first_user_preview = first_user_preview.or_else(|| {
+        builder.blocks.iter().find_map(|block| {
+            (block.kind == GenericBlockKind::User)
+                .then(|| block.preview.clone())
+                .flatten()
+        })
     });
     report.last_message_preview = builder.blocks.iter().rev().find_map(|block| {
         matches!(

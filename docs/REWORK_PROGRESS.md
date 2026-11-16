@@ -1005,9 +1005,15 @@ Branch `feat/workbench-1116`. Decisions: ADR-064 to ADR-071.
   transcript over 32 MB ("This Claude Code conversation is too large to
   display here."). It now reads in two passes: an LF-framed skeleton scan,
   then the newest 32 MiB of the active chain by offset. The 38.5 MB lead
-  history opens in 457 ms with +64 MB RSS, from its first message. Closed
-  chats still use the host projection, which keeps the index's 128 MiB file
-  bound.
+  history opens in 457 ms with +64 MB RSS, from its first message. The
+  host projection for closed chats no longer reads through the index's
+  128 MiB bound: it streams the transcript (LF only, 64 MiB line cap, 1 GiB
+  safety cap) and keeps the newest 32 MiB of chain text behind the same
+  notice. A real 201 MB transcript projects in 0.63 s (release build), from
+  its first message.
+- **Command redaction.** Secrets are masked only in assignment, header and
+  flag forms; a key word that is just part of the command (`grep token src`,
+  `git commit -m "fix: password reset"`) stays.
 - **Evidence.**
   - Real provider: one Claude Code 2.1.325 probe
     (`evidence/fusion-lead-delegation-20261116/`). A silent 330 s MCP call
