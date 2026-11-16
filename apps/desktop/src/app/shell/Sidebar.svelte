@@ -248,24 +248,18 @@
     <remoteShell.Indicator onOpen={() => go(() => store.navigate({ name: 'settings', section: 'nano' }))} />
   {/if}
 
-  <div class="primary" class:primary--split={onCollapse}>
-    <button type="button" class="nav-item nav-item--strong" onclick={() => go(() => store.goHome())}>
-      <SquarePen size={16} />
-      <span class="nav-item__label">{$t('New chat')}</span>
-      <Kbd keys="Mod+N" />
-    </button>
-    {#if onCollapse}
-      <IconButton label={$t('Hide sidebar')} shortcut="Mod+B" data-sidebar-hide="" onclick={() => onCollapse?.()}><PanelLeftClose /></IconButton>
-    {/if}
-  </div>
-
   <div class="section-head">
     <span>{$t('Projects')}</span>
-    {#if !remoteMode}
+    {#if !remoteMode || onCollapse}
       <div class="section-head__actions">
-        <button type="button" class="tiny-action" aria-label={$t('Add project')} onclick={() => void store.addProject()} disabled={store.addingProject}>
-          <Plus size={14} />
-        </button>
+        {#if !remoteMode}
+          <button type="button" class="tiny-action" aria-label={$t('Add project')} onclick={() => void store.addProject()} disabled={store.addingProject}>
+            <Plus size={14} />
+          </button>
+        {/if}
+        {#if onCollapse}
+          <IconButton label={$t('Hide sidebar')} shortcut="Mod+B" size="sm" data-sidebar-hide="" onclick={() => onCollapse?.()}><PanelLeftClose /></IconButton>
+        {/if}
       </div>
     {/if}
   </div>
@@ -474,20 +468,10 @@
     background: var(--piui-bg-raised);
     border-right: 1px solid var(--piui-border-subtle);
   }
-  .primary,
   .footer {
     display: grid;
     gap: 1px;
     flex: none;
-  }
-  .primary {
-    padding-top: var(--piui-space-2);
-  }
-  .primary--split {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: var(--piui-space-1);
-    padding-right: var(--piui-space-1);
   }
   .footer {
     padding: var(--piui-space-2) 0;
@@ -516,10 +500,6 @@
   .nav-item[aria-current='page'] {
     background: var(--piui-selected);
     color: var(--piui-text);
-  }
-  .nav-item--strong {
-    color: var(--piui-text);
-    font-weight: var(--piui-weight-medium);
   }
   .nano-chip[data-tone='warning'] :global(svg) {
     color: var(--piui-warning);

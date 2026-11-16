@@ -16,11 +16,9 @@ test.describe('keyboard-only operation', () => {
     await page.keyboard.press('Tab');
     await expect(lab.rail.getByRole('button', { name: 'More', exact: true })).toBeFocused();
     await page.keyboard.press('Tab');
-    await expect(lab.sidebar.getByRole('button', { name: 'New chat Ctrl+N' })).toBeFocused();
+    await expect(lab.sidebar.getByRole('button', { name: 'Add project' })).toBeFocused();
     await page.keyboard.press('Tab');
     await expect(lab.sidebar.getByRole('button', { name: 'Hide sidebar' })).toBeFocused();
-    await page.keyboard.press('Tab');
-    await expect(lab.sidebar.getByRole('button', { name: 'Add project' })).toBeFocused();
     await page.keyboard.press('Tab');
     const project = lab.sidebar.getByRole('button', { name: 'piui', exact: true });
     await expect(project).toBeFocused();

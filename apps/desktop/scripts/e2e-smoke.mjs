@@ -29,7 +29,7 @@ for (const requiredText of ['TimelineActivityGroup', 'groupTimelineBlocks', 'sho
 for (const requiredText of ['parseMarkdown', 'code-block', 'Copy', 'safe-link', '--piui-chat-font-size']) {
   if (!markdown.includes(requiredText)) throw new Error(`Safe Markdown smoke check is missing: ${requiredText}`);
 }
-for (const requiredText of ['--piui-chat-column-width: 1280px', 'data-font-size="large"', 'data-chat-width="centered"']) {
+for (const requiredText of ['--piui-chat-column-width: 960px', 'data-font-size="large"', 'data-chat-width="centered"']) {
   if (!tokens.includes(requiredText)) throw new Error(`Appearance tokens smoke check is missing: ${requiredText}`);
 }
 if (!projectsClient.includes("'update_preferences_v8'")) throw new Error('Appearance preferences must use the versioned v8 host command.');

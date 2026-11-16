@@ -203,7 +203,7 @@ export async function runShellWebview2Proof({
       await reload();
       await waitFor(`document.documentElement.lang === 'en'`, 'English for the safe-mode proof');
     }
-    await click('New chat', sidebar);
+    await click('New chat', rail);
     await waitFor(`document.querySelector('#home-title')`, 'Home in safe mode');
     // The banner and the disabled composer follow the host catalog, which
     // can land after Home renders.
@@ -231,7 +231,7 @@ export async function runShellWebview2Proof({
     await focusButton('Nano', safeStyleGroup);
     await automation.dispatchKey({ key: 'Enter', code: 'Enter' });
     await waitFor(`document.documentElement.dataset.style === 'nano'`, 'Nano in safe mode');
-    await click('New chat', sidebar);
+    await click('New chat', rail);
     checks.push('built-in-style-keyboard-safe-mode');
     if (!freshSafe) {
       assertion(snapshot.workspaces.some((workspace) => !workspace.personal && workspace.trust === 'trusted'), 'Safe mode lost the trusted fixture project from the readable catalog.');
@@ -257,7 +257,7 @@ export async function runShellWebview2Proof({
       const scope = ${rail};
       return scope !== null && [...scope.querySelectorAll('button')].some((button) =>
         button.getAttribute('aria-label')?.startsWith(name) && (name === 'Inbox' || button.textContent?.trim() === ''));
-    }) && (${buttonExpression('New chat', sidebar)}) !== null && (${buttonExpression('Settings', sidebar)}) !== null,
+    }) && (${buttonExpression('New chat', sidebar)}) === null && (${buttonExpression('Settings', sidebar)}) !== null,
   }))()`);
   assertion(shell.main && shell.skip && shell.nav, `The default view lost a landmark or navigation label: ${JSON.stringify(shell)}`);
   assertion(shell.home === 'What should we work on?', `The default view did not open Home: ${JSON.stringify(shell)}`);
@@ -405,7 +405,7 @@ export async function runShellWebview2Proof({
   const russian = await evaluate(`(() => {
     const nav = document.querySelector('nav[aria-label="Навигация рабочей области"]');
     return {
-      newChat: [...nav.querySelectorAll('.nav-item__label')].some((label) => label.textContent?.trim() === 'Новый чат'),
+      newChat: document.querySelector('nav[aria-label="Основная навигация"] button[aria-label="Новый чат"]') !== null,
       project: [...nav.querySelectorAll('button[aria-expanded]')].some((button) => button.textContent?.includes(${JSON.stringify(added.name)})),
     };
   })()`);
@@ -421,7 +421,7 @@ export async function runShellWebview2Proof({
   checks.push('pipelines-view-default-shell');
 
   // 8. Home keeps a usable composer outside safe mode.
-  await click('New chat', sidebar);
+  await click('New chat', rail);
   await waitFor(`document.querySelector('#home-title') && document.querySelector('textarea[aria-label="Message"]')?.disabled === false`, 'enabled new-chat composer');
   checks.push('home-composer-enabled');
 

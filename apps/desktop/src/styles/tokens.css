@@ -154,10 +154,10 @@
   --piui-header-height: 48px;
   --piui-panel-width: 360px;
 
-  /* The wide default avoids wasting the workspace while preserving a
-     centered reading lane. Appearance preferences override these only after
+  /* A centered reading lane with free margins on a desktop window, as in
+     common chat clients. Appearance preferences override these only after
      the host has returned its validated local preference set. */
-  --piui-chat-column-width: 1280px;
+  --piui-chat-column-width: 960px;
   --piui-chat-inline-padding: clamp(16px, 2vw, 32px);
   --piui-chat-reading-width: 104ch;
   --piui-chat-font-size: 15px;
@@ -329,13 +329,13 @@
 }
 
 :root[data-chat-width="centered"] {
-  --piui-chat-column-width: 980px;
+  --piui-chat-column-width: 820px;
   --piui-chat-inline-padding: clamp(20px, 3vw, 48px);
   --piui-chat-reading-width: 76ch;
 }
 
 :root[data-chat-width="focused"] {
-  --piui-chat-column-width: 780px;
+  --piui-chat-column-width: 700px;
   --piui-chat-inline-padding: clamp(20px, 4vw, 56px);
   --piui-chat-reading-width: 66ch;
 }

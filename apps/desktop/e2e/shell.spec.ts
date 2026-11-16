@@ -118,13 +118,14 @@ test.describe('shell navigation', () => {
     await expect(name).toHaveValue('');
   });
 
-  test('the list keeps a New chat row and the rail shows icons without captions', async ({ lab, page }) => {
+  test('New chat lives only in the rail, which shows icons without captions', async ({ lab, page }) => {
     await lab.open();
     await lab.nav('Inbox').click();
     await expect(page.getByRole('heading', { level: 1, name: 'Inbox' })).toBeVisible();
     for (const label of ['New chat', 'Search', 'Pipelines', 'Runs', 'Automations'] as const) await expect(lab.nav(label)).toHaveText('');
     await expect(lab.rail.getByRole('button', { name: 'More', exact: true })).toHaveText('');
-    await lab.sidebar.getByRole('button', { name: 'New chat Ctrl+N' }).click();
+    await expect(lab.sidebar.getByRole('button', { name: 'New chat Ctrl+N' })).toHaveCount(0);
+    await lab.nav('New chat').click();
     await expect(page.getByRole('heading', { level: 1, name: 'What should we work on?' })).toBeVisible();
     await expect(lab.nav('New chat')).toHaveAttribute('aria-current', 'page');
     // The rail owns these entries; the list no longer repeats them.
@@ -286,8 +287,10 @@ test.describe('appearance and language', () => {
     await expect(page.locator('html')).toHaveAttribute('lang', 'ru');
 
     const sidebar = page.getByRole('navigation', { name: 'Навигация рабочей области' });
-    await expect(sidebar.getByRole('button', { name: 'Новый чат Ctrl+N' })).toBeVisible();
-    await expect(page.getByRole('navigation', { name: 'Основная навигация' }).getByRole('button', { name: 'Конвейеры', exact: true })).toBeVisible();
+    const rail = page.getByRole('navigation', { name: 'Основная навигация' });
+    await expect(rail.getByRole('button', { name: 'Новый чат', exact: true })).toBeVisible();
+    await expect(sidebar.getByRole('button', { name: 'Новый чат Ctrl+N' })).toHaveCount(0);
+    await expect(rail.getByRole('button', { name: 'Конвейеры', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { level: 1, name: 'Настройки' })).toBeVisible();
     await expect(page.getByRole('group', { name: 'Тема' }).getByRole('radio', { name: 'Тёмная' })).toBeVisible();
     // Chat titles are user content and stay as written.
@@ -296,7 +299,7 @@ test.describe('appearance and language', () => {
     // The choice survives a reload.
     await page.reload();
     await expect(page.getByRole('navigation', { name: 'Навигация рабочей области' })).toBeVisible();
-    await sidebar.getByRole('button', { name: 'Новый чат Ctrl+N' }).click();
+    await rail.getByRole('button', { name: 'Новый чат', exact: true }).click();
     await expect(page.getByRole('heading', { level: 1, name: 'Что делаем?' })).toBeVisible();
 
     await sidebar.getByRole('button', { name: 'Настройки Ctrl+,' }).click();
