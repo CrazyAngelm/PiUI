@@ -1,11 +1,11 @@
 /**
  * Composer mention parsing and ranking (pure, no DOM): `/` commands at the
- * start of a message, `@` project files, `$` skills and `//` macros at the
- * caret. The inserted text is exactly what the harness reads, except a
- * `//name` macro, which the composer replaces with its text when it sends
- * (ADR-060); nothing is executed here.
+ * start of a message, `@` project files, `$` skills and the macro list a
+ * space opens (ADR-060, ADR-074) at the caret. The inserted text is exactly
+ * what the harness reads, except a `//name` macro, which the composer
+ * replaces with its text when it sends; nothing is executed here.
  */
-export type MentionTrigger = '/' | '@' | '$' | '//';
+export type MentionTrigger = '/' | '@' | '$' | 'space';
 
 export interface ActiveMention {
   readonly trigger: MentionTrigger;
@@ -21,19 +21,38 @@ export interface MentionTriggers {
   readonly slash: boolean;
   readonly at: boolean;
   readonly dollar: boolean;
-  /** `//name` macros; off unless the composer has macros to offer. */
+  /** The macro list a space opens; off unless the composer has macros to offer. */
   readonly macros?: boolean;
 }
 
 const TOKEN_BREAK = /\s/u;
-/** What may follow `//` in a macro token: the characters of a macro name. */
-const MACRO_NAME_PART = /^[\p{L}\p{N}_-]*$/u;
+/** A character of a macro name. */
+const MACRO_NAME_CHAR = /[\p{L}\p{N}_-]/u;
+
+/**
+ * The space that opens the macro list, for a name typed after it up to the
+ * caret: the first character of the message, or the second of two spaces
+ * right after text. A third space, a space after a line break and a lone
+ * space between words open nothing.
+ */
+function macroSpace(text: string, position: number): { space: number; end: number } | undefined {
+  let name = position;
+  while (name > 0 && MACRO_NAME_CHAR.test(text[name - 1] ?? '')) name -= 1;
+  const space = name - 1;
+  if (space < 0 || text[space] !== ' ') return undefined;
+  if (space > 0 && !(text[space - 1] === ' ' && /\S/u.test(text[space - 2] ?? ''))) return undefined;
+  let end = position;
+  while (end < text.length && MACRO_NAME_CHAR.test(text[end] ?? '')) end += 1;
+  if (end < text.length && !TOKEN_BREAK.test(text[end] ?? '')) return undefined;
+  return { space, end };
+}
 
 /**
  * The mention being typed at `caret`, if any. `/` only counts as the first
  * character of a single-line message (native commands must start a
- * message); `@`, `$` and `//` start a token after whitespace or at the start.
- * `//name` wins over `/`: a message that starts with `//` is no native command.
+ * message); `@` and `$` start a token after whitespace or at the start. The
+ * macro mention starts at its space (`macroSpace`), which the chosen macro
+ * replaces.
  */
 export function activeMention(text: string, caret: number, triggers: MentionTriggers): ActiveMention | undefined {
   const position = Math.max(0, Math.min(caret, text.length));
@@ -41,9 +60,8 @@ export function activeMention(text: string, caret: number, triggers: MentionTrig
   while (start > 0 && !TOKEN_BREAK.test(text[start - 1] ?? '')) start -= 1;
   let end = position;
   while (end < text.length && !TOKEN_BREAK.test(text[end] ?? '')) end += 1;
-  if (triggers.macros && position >= start + 2 && text.startsWith('//', start) && MACRO_NAME_PART.test(text.slice(start + 2, end))) {
-    return { trigger: '//', query: text.slice(start + 2, position), start, end };
-  }
+  const spaced = triggers.macros ? macroSpace(text, position) : undefined;
+  if (spaced) return { trigger: 'space', query: text.slice(spaced.space + 1, position), start: spaced.space, end: spaced.end };
   if (triggers.slash && /^\/[^\s]*$/u.test(text) && position > 0) {
     return { trigger: '/', query: text.slice(1), start: 0, end: text.length };
   }

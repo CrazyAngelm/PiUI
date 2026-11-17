@@ -81,7 +81,7 @@
       {/each}
     </div>
   {:else}
-    <EmptyState title={$t('No macros yet')} description={$t('A macro is a saved prompt or a set of skills. Type // in a message to add one.')}>
+    <EmptyState title={$t('No macros yet')} description={$t('A macro is a saved prompt or a set of skills. Press Space in an empty message, or Space twice after text, to add one.')}>
       {#snippet actions()}<Button variant="primary" size="sm" onclick={() => openEditor()}>{$t('New macro')}</Button>{/snippet}
     </EmptyState>
   {/if}

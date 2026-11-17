@@ -25,7 +25,7 @@
   import { ComposerAttachments } from '../chat/composer/composerAttachments.svelte';
   import { FileMentions } from '../chat/composer/composerLookups.svelte';
   import { composerDropTargets } from '../chat/composer/dropTargets.svelte';
-  import { activeMention, fileMention, rankFiles, rankNamed, replaceMention } from '../chat/composer/mentions';
+  import { activeMention, fileMention, type ActiveMention, rankFiles, rankNamed, replaceMention } from '../chat/composer/mentions';
   import type { ComposerMenuItem } from '../chat/composer/menuItems';
   import { chatTitle } from '../chat/chatTitle';
   import { macros } from '../macros/macros.svelte';
@@ -127,6 +127,9 @@
   let textarea = $state<HTMLTextAreaElement | null>(null);
   let menuIndex = $state(0);
   let menuDismissed = $state(false);
+  /** The macro space Escape turned into an ordinary space: it stays closed while the text before it is unchanged. */
+  let dismissedSpace = $state<string | undefined>();
+  const spaceKey = (value: string, start: number): string => `${start}:${value.slice(0, start + 1)}`;
   let htmlDragging = $state(false);
   const attachments = new ComposerAttachments(store.attachmentsFor(DRAFT_KEY), (images) => store.updateAttachments(DRAFT_KEY, images));
   // A previous instance may acknowledge a send after Home was reopened. Keep
@@ -164,19 +167,21 @@
           .map((item) => ({ name: item.name, mention: `$${item.name}` }))
       : [],
   );
+  const unlessDismissed = (found: ActiveMention | undefined): ActiveMention | undefined =>
+    found?.trigger === 'space' && dismissedSpace === spaceKey(text, found.start) ? undefined : found;
   const mention = $derived(
     menuDismissed || store.safeMode
       ? undefined
       // A remote browser cannot read the desktop's files or skills: no `@` file or `$` skill menus.
-      : activeMention(text, caret, { slash: false, at: !remoteMode && Boolean(workspaceId), dollar: !remoteMode && skillMentions.length > 0, macros: macros.list.length > 0 }),
+      : unlessDismissed(activeMention(text, caret, { slash: false, at: !remoteMode && Boolean(workspaceId), dollar: !remoteMode && skillMentions.length > 0, macros: macros.list.length > 0 })),
   );
   type Menu = { kind: 'macro'; items: ComposerMenuItem[]; names: string[] } | { kind: 'file'; items: ComposerMenuItem[]; paths: string[] } | { kind: 'skill'; items: ComposerMenuItem[]; mentions: string[] };
   const menu = $derived.by((): Menu | undefined => {
     if (!mention) return undefined;
-    if (mention.trigger === '//') {
+    if (mention.trigger === 'space') {
       const found = rankNamed(macros.list, mention.query);
-      // A whole name with nothing longer to offer needs no menu: Enter sends the message.
-      if (found.length === 1 && found[0]?.name === mention.query.toLowerCase()) return undefined;
+      // A space that names no macro is an ordinary space.
+      if (found.length === 0) return undefined;
       return {
         kind: 'macro',
         names: found.map((macro) => macro.name),
@@ -935,7 +940,9 @@
       menuIndex = (activeIndex + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
     } else if (event.key === 'Escape' && menu) {
       event.preventDefault();
-      menuDismissed = true;
+      // Escape after a macro space keeps the space as typed, and only that space stays closed.
+      if (mention?.trigger === 'space') dismissedSpace = spaceKey(text, mention.start);
+      else menuDismissed = true;
     } else if (items.length && (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey))) {
       event.preventDefault();
       choose(activeIndex);

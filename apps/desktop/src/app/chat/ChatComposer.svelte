@@ -36,7 +36,7 @@
   import { ComposerAttachments } from './composer/composerAttachments.svelte';
   import { FileMentions, loadComposerCatalog, type NativeEntries } from './composer/composerLookups.svelte';
   import { composerDropTargets } from './composer/dropTargets.svelte';
-  import { activeMention, fileMention, rankFiles, rankNamed, replaceMention } from './composer/mentions';
+  import { activeMention, fileMention, type ActiveMention, rankFiles, rankNamed, replaceMention } from './composer/mentions';
   import type { ComposerMenuItem } from './composer/menuItems';
   import HandoffChips from '../board/HandoffChips.svelte';
   import { boards } from '../board/boardStore.svelte';
@@ -82,6 +82,9 @@
   let editText = $state('');
   let menuIndex = $state(0);
   let menuDismissed = $state(false);
+  /** The macro space Escape turned into an ordinary space: it stays closed while the text before it is unchanged. */
+  let dismissedSpace = $state<string | undefined>();
+  const spaceKey = (value: string, start: number): string => `${start}:${value.slice(0, start + 1)}`;
   // Keyed per chat by the parent: the saved draft seeds the editor once.
   let text = $state(untrack(() => draft));
   let caret = $state(untrack(() => draft.length));
@@ -121,11 +124,13 @@
   const nativeCommands = $derived(catalog.commands.filter((command) => !commands.some((own) => own.name === command.name)));
   // `@` also mentions teammates when the project board is on (ADR-041).
   const teamMentions = $derived(boards.stores.get(workspaceId)?.enabled === true);
+  const unlessDismissed = (found: ActiveMention | undefined): ActiveMention | undefined =>
+    found?.trigger === 'space' && dismissedSpace === spaceKey(text, found.start) ? undefined : found;
   const mention = $derived(
     menuDismissed
       ? undefined
       // A remote browser cannot read the desktop's files or skills: no `@` file or `$` skill menus.
-      : activeMention(text, caret, { slash: true, at: !remoteMode && Boolean(workspaceId), dollar: !remoteMode && support.skillMentions && catalog.skills.length > 0, macros: macros.list.length > 0 }),
+      : unlessDismissed(activeMention(text, caret, { slash: true, at: !remoteMode && Boolean(workspaceId), dollar: !remoteMode && support.skillMentions && catalog.skills.length > 0, macros: macros.list.length > 0 })),
   );
   $effect(() => {
     const id = workspaceId;
@@ -144,10 +149,10 @@
     | { kind: 'skill'; items: ComposerMenuItem[]; mentions: string[] };
   const menu = $derived.by((): Menu | undefined => {
     if (!mention) return undefined;
-    if (mention.trigger === '//') {
+    if (mention.trigger === 'space') {
       const found = rankNamed(macros.list, mention.query);
-      // A whole name with nothing longer to offer needs no menu: Enter sends the message.
-      if (found.length === 1 && found[0]?.name === mention.query.toLowerCase()) return undefined;
+      // A space that names no macro is an ordinary space.
+      if (found.length === 0) return undefined;
       return {
         kind: 'macro',
         names: found.map((macro) => macro.name),
@@ -574,7 +579,9 @@
       menuIndex = (activeIndex + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
     } else if (event.key === 'Escape' && menu) {
       event.preventDefault();
-      menuDismissed = true;
+      // Escape after a macro space keeps the space as typed, and only that space stays closed.
+      if (mention?.trigger === 'space') dismissedSpace = spaceKey(text, mention.start);
+      else menuDismissed = true;
     } else if (items.length && (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey))) {
       event.preventDefault();
       choose(activeIndex, event.key === 'Tab' ? 'Tab' : 'Enter');

@@ -4,12 +4,14 @@ All notable changes to Nano Desktop (formerly PiUI) are documented here.
 
 Nano Desktop is currently a developer preview. Versions before 1.0 may change without a stable migration promise; changes to typed host contracts remain versioned under `contracts/`.
 
-## [Unreleased]
+## [0.3.2] - 2026-11-17
 
 ### Added
 
 - **Dictation sources.** Settings → Dictation chooses what turns speech into text: your Nano subscription, OpenAI, Groq, or your own OpenAI-compatible address (for example a local Whisper server). The dictation button now appears without a Nano sign-in once a source is set up. API keys are entered in a system dialog and kept in the Windows credential store; the app's window never sees them (ADR-061).
-- **Macros.** Settings → Macros keeps your ready prompts and sets of skills. Type `//name` in a message to add one, or several. The macro is highlighted as you type; hover it, or move the caret onto it, to see what it adds and to open it for editing, or press `F2`. Sending replaces it with its text, with skills written the way the chat's agent expects (ADR-060).
+- **Macros.** Settings → Macros keeps your ready prompts and sets of skills. Press Space in an empty message, or Space twice after text, to open the list of macros; pick one with the mouse or the arrow keys, or type part of its name to narrow the list. The chosen macro takes the place of that space, and Escape closes the list and keeps a plain space. A typed `//name` still works. The macro is highlighted as you type; hover it, or move the caret onto it, to see what it adds and to open it for editing, or press `F2`. Sending replaces it with its text, with skills written the way the chat's agent expects (ADR-060).
+
+- **Remote access from Nano Web.** Settings → Nano turns on access to this computer's chats from the Nano web app on a phone or another computer. A new browser is approved at the computer with a six-digit code shown on both screens; a remembered browser reconnects without asking. It can read and continue chats, answer approvals and pick models, and nothing else: no settings, files, plugins or account actions. Off by default, never in safe mode or when signed out (ADR-062).
 
 ### Changed
 

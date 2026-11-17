@@ -4,14 +4,29 @@ import { activeMention, fileMention, rankFiles, rankNamed, replaceMention, split
 const ALL = { slash: true, at: true, dollar: true } as const;
 
 describe('composer mentions', () => {
-  it('prefers // macros when enabled, including mid-message tokens', () => {
-    expect(activeMention('//re', 4, { ...ALL, macros: true })).toEqual({ trigger: '//', query: 're', start: 0, end: 4 });
-    expect(activeMention('//re', 4, { ...ALL, macros: false })).toEqual({ trigger: '/', query: '/re', start: 0, end: 4 });
-    expect(activeMention('fix //re', 8, { ...ALL, macros: true })).toEqual({ trigger: '//', query: 're', start: 4, end: 8 });
-    expect(activeMention('//a/b', 5, { slash: false, at: true, dollar: true, macros: true })).toBeUndefined();
-    expect(activeMention('//review', 1, { ...ALL, macros: true })?.trigger).not.toBe('//');
-    expect(activeMention('//', 2, { ...ALL, macros: true })).toEqual({ trigger: '//', query: '', start: 0, end: 2 });
+  it('opens macros at the first space of a message or the second space after text', () => {
+    const on = { ...ALL, macros: true };
+    expect(activeMention(' ', 1, on)).toEqual({ trigger: 'space', query: '', start: 0, end: 1 });
+    expect(activeMention(' re', 3, on)).toEqual({ trigger: 'space', query: 're', start: 0, end: 3 });
+    expect(activeMention('fix  ', 5, on)).toEqual({ trigger: 'space', query: '', start: 4, end: 5 });
+    expect(activeMention('fix  re now', 7, on)).toEqual({ trigger: 'space', query: 're', start: 4, end: 7 });
+    expect(activeMention(' ', 1, ALL)).toBeUndefined();
+    // One space between words, a third space, two leading spaces and a space after a line break open nothing.
+    expect(activeMention('fix ', 4, on)).toBeUndefined();
+    expect(activeMention('fix   ', 6, on)).toBeUndefined();
+    expect(activeMention('  ', 2, on)).toBeUndefined();
+    expect(activeMention('fix\n ', 5, on)).toBeUndefined();
+    // A name ends at whitespace; other characters make it no macro name.
+    expect(activeMention(' re.md', 3, on)).toBeUndefined();
+    expect(activeMention('//re', 4, on)).toEqual({ trigger: '/', query: '/re', start: 0, end: 4 });
   });
+
+  it('replaces the macro space with the chosen token', () => {
+    const mention = activeMention('fix  re', 7, { ...ALL, macros: true });
+    if (!mention) throw new Error('no mention');
+    expect(replaceMention('fix  re', mention, '//review')).toEqual({ text: 'fix //review ', caret: 13 });
+  });
+
   it('finds `/` only as the whole first token of the message', () => {
     expect(activeMention('/rev', 4, ALL)).toEqual({ trigger: '/', query: 'rev', start: 0, end: 4 });
     expect(activeMention('/review now', 11, ALL)).toBeUndefined();

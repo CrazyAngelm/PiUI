@@ -22,7 +22,7 @@ afterEach(() => { macros.list = []; macros.sessionOnly = false; vi.unstubAllGlob
 it('explains the empty list and offers a new macro', () => {
   const body = html();
   expect(body).toContain('No macros yet');
-  expect(body).toContain('A macro is a saved prompt or a set of skills. Type // in a message to add one.');
+  expect(body).toContain('A macro is a saved prompt or a set of skills. Press Space in an empty message, or Space twice after text, to add one.');
   expect(body).toContain('New macro');
 });
 
