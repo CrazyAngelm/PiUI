@@ -93,16 +93,26 @@ does not prove that a setting reaches the harness.
 
 ## Chat activity
 
-- A turn reads as replies with one line of work between them (ADR-071). Every
-  adjacent reasoning and tool block is one group. Only a reply, a message, an
-  error or a compatibility block ends it. Reasoning is a row inside its group,
-  never a control of its own.
-- A group that is working names the action and its detail ("Running a
-  command · pnpm test"). A finished group names what was done, with counts
-  and diff totals. Failed and stopped calls are marked on the group.
-- A finished turn with two or more groups folds behind one control ("Worked
-  for 2m 14s · edited 1 file, ran 4 commands"). Replies stay visible. A turn
-  that is running, failed or stopped stays open.
+- A turn reads as the person's message, one quiet line of work and the answer
+  (ADR-073). Every adjacent reasoning and tool block is one group; the groups
+  and the replies written between them fold behind one control ("Worked for
+  2m 14s · edited 1 file, ran 4 commands"), 13px muted, the chevron next to the
+  label. What follows the last group is the answer and stays in the chat. A
+  finished turn never folds its last reply. A reply that failed, was stopped,
+  carries a file or has an author or a note stays in the chat. Reasoning is a
+  row inside its group, never a control of its own.
+- A turn that is working is one line: a spinner and the action with its detail
+  ("Running a command · pnpm test"); "Working" shows under the person's
+  message until anything arrives. The control stays closed; opened, it lists the
+  groups so far, the replies between them and the live group. A finished
+  control names what was done, with counts, diff totals and failed calls. A
+  turn that ended in an error, a failed or a stopped call opens its control.
+- A control with one group lists the calls when opened, with no second header;
+  with several it lists each group as a closed line and the replies between them
+  as muted text.
+- The time and the actions of a message show on hover or keyboard focus, and
+  always on the chat's last answer and where there is no hover. An action's
+  error stays in view.
 - An opened group is capped at `min(420px, 55vh)` and scrolls inside the
   transcript. A new kind of call gets an icon in `toolIcons.ts` and its
   phrases in `toolKinds.ts`; an unknown tool stays generic.

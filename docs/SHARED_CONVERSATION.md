@@ -9,7 +9,13 @@ chat, history and run inspection. It supplies native history reads, the trusted
 plugin registry and the existing sandboxed plugin frame. The display is
 `shared/conversation/ConversationTranscript.svelte`; activity grouping, reasoning
 rows, tool rows, Markdown, diffs and Fusion brief cards remain the existing
-components.
+components. Every owner gets the same feed (ADR-073): a turn's work and the
+replies written between its steps fold behind one control, the answer after the
+last step stays in the chat, and the time and actions of a message (owner
+supplied `messageControls` included) show on hover or focus and always on the
+last answer. The native owner tells the transcript whether the agent works; the
+owner contract has no such field, so for an island only a streaming block makes
+the control live. Print shows every block and no control.
 `ApprovalCard.svelte` similarly keeps workspace-store dispatch and native
 run/Fusion restrictions while rendering the shared `ApprovalRequest.svelte`.
 

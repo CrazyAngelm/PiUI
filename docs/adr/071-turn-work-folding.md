@@ -1,6 +1,7 @@
 # ADR-071 — A turn's work folds behind one control
 
-Status: accepted, 2026-11-16.
+Status: accepted, 2026-11-16. The fold rules below were revised by ADR-073
+(2026-11-17): every turn folds, with the replies between its groups.
 
 ## Context
 

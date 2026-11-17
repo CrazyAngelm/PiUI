@@ -57,7 +57,7 @@
 {#if error || localError}<p class="message-error" role="alert">{$t(error || localError)}</p>{/if}
 
 <style>
-  .message-controls { display: flex; align-items: center; flex-wrap: wrap; gap: var(--piui-space-2); color: var(--piui-text-muted); padding: var(--piui-space-1) 0; }
+  .message-controls { display: flex; align-items: center; flex-wrap: wrap; gap: var(--piui-space-2); color: var(--piui-text-muted); }
   time, .usage { font-size: var(--piui-text-xs); }
   .message-error { color: var(--piui-danger); font-size: var(--piui-text-sm); margin: var(--piui-space-1) 0; }
 </style>

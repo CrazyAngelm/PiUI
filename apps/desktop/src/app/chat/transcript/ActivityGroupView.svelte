@@ -17,8 +17,10 @@
     /** Remembered disclosure state across re-renders, keyed by block id. */
     openState: Record<string, boolean>;
     onOpenChange: (id: string, open: boolean) => void;
+    /** The process holds only this group: its rows show at once, with no header of their own. */
+    flat?: boolean;
   }
-  let { group, language, openState, onOpenChange }: Props = $props();
+  let { group, language, openState, onOpenChange, flat = false }: Props = $props();
 
   const summary = $derived(activitySummary(group.blocks, language));
   const diffStats = $derived(activityDiffTotals(group.blocks));
@@ -64,21 +66,23 @@
 </script>
 
 <div class="group">
-  <button type="button" class="group__head" aria-expanded={groupOpen} onclick={() => onOpenChange(group.id, !groupOpen)}>
-    <span class="group__lead" class:group__lead--live={live}>
-      {#if live}<Spinner size={12} />{:else}<Icon size={14} />{/if}
-    </span>
-    <span class="group__summary">{now ? now.label : summary}</span>
-    {#if now?.detail}<span class="group__current" class:group__current--text={!activity.live}>· {now.detail}</span>{/if}
-    {#if diffStats}<DiffStats totals={diffStats} />{/if}
-    {#if activity.failed > 0}
-      <span class="group__status group__status--failed"><span class="group__icon" aria-hidden="true"><CircleAlert size={13} /></span>{$t('{0} failed', [activity.failed])}</span>
-    {/if}
-    {#if activity.stopped && !activity.live}<span class="group__status group__status--stopped">{$t('Stopped')}</span>{/if}
-    <span class="chevron" class:chevron--open={groupOpen}><ChevronRight size={12} /></span>
-  </button>
-  {#if groupOpen}
-    <div class="group__rows" use:follow={live}>
+  {#if !flat}
+    <button type="button" class="group__head" aria-expanded={groupOpen} onclick={() => onOpenChange(group.id, !groupOpen)}>
+      <span class="group__lead" class:group__lead--live={live}>
+        {#if live}<Spinner size={12} />{:else}<Icon size={14} />{/if}
+      </span>
+      <span class="group__summary">{now ? now.label : summary}</span>
+      {#if now?.detail}<span class="group__current" class:group__current--text={!activity.live}>· {now.detail}</span>{/if}
+      {#if diffStats}<DiffStats totals={diffStats} />{/if}
+      {#if activity.failed > 0}
+        <span class="group__status group__status--failed"><span class="group__icon" aria-hidden="true"><CircleAlert size={13} /></span>{$t('{0} failed', [activity.failed])}</span>
+      {/if}
+      {#if activity.stopped && !activity.live}<span class="group__status group__status--stopped">{$t('Stopped')}</span>{/if}
+      <span class="chevron" class:chevron--open={groupOpen}><ChevronRight size={12} /></span>
+    </button>
+  {/if}
+  {#if flat || groupOpen}
+    <div class="group__rows" class:group__rows--flat={flat} use:follow={live}>
       <div class="group__list">
         {#each group.blocks as block (block.id)}
           <ToolRow
@@ -94,7 +98,7 @@
 
 <style>
   .group {
-    margin: 0 0 var(--piui-space-3);
+    margin: 0 0 var(--piui-activity-gap, var(--piui-space-3));
   }
   .group__head {
     display: inline-flex;
@@ -108,7 +112,7 @@
     border-radius: var(--piui-radius-sm);
     background: transparent;
     color: var(--piui-text-muted);
-    font-size: var(--piui-chat-font-size);
+    font-size: var(--piui-text-md);
     text-align: left;
   }
   .group__head:hover {
@@ -179,5 +183,13 @@
     display: grid;
     gap: 1px;
     padding-left: 10px;
+  }
+  /* The process around a lone group already draws the rule and the indent. */
+  .group__rows--flat {
+    margin: 0;
+    border-left: 0;
+  }
+  .group__rows--flat .group__list {
+    padding-left: 0;
   }
 </style>
