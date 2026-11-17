@@ -9,6 +9,7 @@
   import TeammateAvatar from '../team/TeammateAvatar.svelte';
   import { teammates } from '../team/teammatesStore.svelte';
   import type { BoardActorV1, BoardProposalV1, PendingStartV1 } from '../../host-api/boardClient';
+  import { remoteMode } from '../nano/remoteMode';
   import { boards, type BoardStore } from './boardStore.svelte';
   import { operationCopy, STATUS_LABEL } from './boardModel';
 
@@ -17,7 +18,7 @@
    * Accept/Reject and runs waiting for the person to start them.
    */
   const store = useWorkspace();
-  const projectIds = $derived(store.catalog.workspaces.filter((item) => !item.personal && !item.missing).map((item) => item.id));
+  const projectIds = $derived(store.catalog.workspaces.filter((item) => !item.personal && !item.missing && (!remoteMode || item.trust === 'trusted')).map((item) => item.id));
   $effect(() => {
     const ids = projectIds;
     untrack(() => {
@@ -97,8 +98,10 @@
           <button type="button" class="row__title" onclick={() => openCard(item.workspaceId, item.proposal.cardId)}>{describe(item.store, item.proposal)}</button>
           <span class="muted">{actorText(item.proposal.actor, item.workspaceId)} · {projectName(item.workspaceId)}{item.proposal.cardId ? ` · ${cardLabel(item.store, item.proposal.cardId)}` : ''}</span>
         </div>
-        <Button size="sm" variant="primary" disabled={busy !== undefined || store.safeMode} loading={busy === `a:${item.proposal.id}`} onclick={() => void act(`a:${item.proposal.id}`, () => item.store.resolveProposal(item.proposal.id, true), 'Could not accept the proposal')}>{$t('Accept')}</Button>
-        <Button size="sm" variant="ghost" disabled={busy !== undefined || store.safeMode} onclick={() => void act(`r:${item.proposal.id}`, () => item.store.resolveProposal(item.proposal.id, false), 'Could not reject the proposal')}>{$t('Reject')}</Button>
+        {#if !remoteMode}
+          <Button size="sm" variant="primary" disabled={busy !== undefined || store.safeMode} loading={busy === `a:${item.proposal.id}`} onclick={() => void act(`a:${item.proposal.id}`, () => item.store.resolveProposal(item.proposal.id, true), 'Could not accept the proposal')}>{$t('Accept')}</Button>
+          <Button size="sm" variant="ghost" disabled={busy !== undefined || store.safeMode} onclick={() => void act(`r:${item.proposal.id}`, () => item.store.resolveProposal(item.proposal.id, false), 'Could not reject the proposal')}>{$t('Reject')}</Button>
+        {/if}
       </li>
     {/each}
   </ul>
@@ -117,10 +120,12 @@
           </button>
           <span class="muted">{projectName(item.workspaceId)}</span>
         </div>
-        <Button size="sm" variant="primary" disabled={busy !== undefined || store.safeMode} loading={busy === `s:${item.pending.id}`} onclick={() => void act(`s:${item.pending.id}`, () => item.store.resolvePendingStart(item.pending.id, true), 'Could not start the run')}>
-          {#snippet leading()}<Play size={13} />{/snippet}{$t('Start')}
-        </Button>
-        <Button size="sm" variant="ghost" disabled={busy !== undefined || store.safeMode} onclick={() => void act(`d:${item.pending.id}`, () => item.store.resolvePendingStart(item.pending.id, false), 'Could not dismiss the start')}>{$t('Dismiss')}</Button>
+        {#if !remoteMode}
+          <Button size="sm" variant="primary" disabled={busy !== undefined || store.safeMode} loading={busy === `s:${item.pending.id}`} onclick={() => void act(`s:${item.pending.id}`, () => item.store.resolvePendingStart(item.pending.id, true), 'Could not start the run')}>
+            {#snippet leading()}<Play size={13} />{/snippet}{$t('Start')}
+          </Button>
+          <Button size="sm" variant="ghost" disabled={busy !== undefined || store.safeMode} onclick={() => void act(`d:${item.pending.id}`, () => item.store.resolvePendingStart(item.pending.id, false), 'Could not dismiss the start')}>{$t('Dismiss')}</Button>
+        {/if}
       </li>
     {/each}
   </ul>

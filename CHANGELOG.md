@@ -4,6 +4,12 @@ All notable changes to Nano Desktop (formerly PiUI) are documented here.
 
 Nano Desktop is currently a developer preview. Versions before 1.0 may change without a stable migration promise; changes to typed host contracts remain versioned under `contracts/`.
 
+## [0.3.4] - 2026-11-18
+
+### Added
+
+- Pair Nano Web with this computer to open project pipelines and follow their runs from a phone or another computer. Previously remembered browsers need approval on the computer for the expanded access. Older desktop versions continue to offer their chat workspace.
+
 ## [0.3.2] - 2026-11-17
 
 ### Added

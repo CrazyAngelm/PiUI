@@ -1,5 +1,7 @@
 /** Russian UI copy for teammates (ADR-041). Keys are the English source strings. */
 export const teamRu: Readonly<Record<string, string>> = {
+  'Add teammates on your computer to see them here.': 'Добавьте участников на компьютере, чтобы они появились здесь.',
+  'No assigned cards': 'Назначенных карточек нет',
   // Team screen
   'Open team': 'Открыть команду',
   'New teammate': 'Новый участник',

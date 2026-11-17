@@ -22,6 +22,7 @@ path = "tests/native_prime_scheduler.rs"
 required-features = ["native-prime-scheduler-test"]
 
 [features]
+native-remote-workbench-test = []
 e2e-webview-automation = []
 native-prime-scheduler-test = []
 
@@ -81,3 +82,9 @@ tauri = { version = "=2.11.5", features = ["test"] }
 piui-runtime = { path = "../../../crates/piui-runtime", features = ["test-support"] }
 # Paused clocks for the Fusion broker tests.
 tokio = { workspace = true, features = ["test-util"] }
+
+
+[[test]]
+name = "native_remote_workbench"
+path = "tests/native_remote_workbench.rs"
+required-features = ["native-remote-workbench-test"]

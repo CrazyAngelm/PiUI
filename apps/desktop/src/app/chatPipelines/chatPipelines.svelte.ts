@@ -8,7 +8,7 @@
  * result reaches the chat's agent only inside the person's next message.
  */
 import { SvelteSet } from 'svelte/reactivity';
-import { remoteMode } from '../nano/remoteMode';
+import { hostSupports, remoteMode } from '../nano/remoteMode';
 import type { HarnessKind, PermissionMode, WorkspaceModel } from '../../../../../contracts/workspace-v15';
 import {
   orchestrationError,
@@ -112,8 +112,7 @@ export class ChatPipelinesStore {
 
   /** Saved pipelines of a project with their chat readiness, plus its library. */
   async loadProject(workspaceId: string): Promise<void> {
-    // A remote browser has no pipelines: chats stay direct and the host is not asked.
-    if (remoteMode || !workspaceId || this.loadingProjects.has(workspaceId)) return;
+    if (!hostSupports('orchestration_catalog_v6') || !workspaceId || this.loadingProjects.has(workspaceId)) return;
     this.loadingProjects.add(workspaceId);
     try {
       const [catalog] = await Promise.all([
@@ -127,6 +126,8 @@ export class ChatPipelinesStore {
       const { [workspaceId]: _cleared, ...errors } = this.commandErrors;
       this.commandErrors = errors;
       this.commands = { ...this.commands, [workspaceId]: catalog.launchCommands };
+      // Remote team details use catalog names only. Starting a chat pipeline is local.
+      if (remoteMode) return;
       await Promise.all(catalog.launchCommands.map((command) => this.detail(workspaceId, command.id, true).catch(() => undefined)));
     } finally {
       this.loadingProjects.delete(workspaceId);

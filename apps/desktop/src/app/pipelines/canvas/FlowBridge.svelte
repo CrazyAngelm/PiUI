@@ -17,11 +17,30 @@
 
   interface Props {
     container: HTMLElement | null;
+    firstVisibleStep?: string;
     onready: (api: FlowApi) => void;
   }
-  let { container, onready }: Props = $props();
+  let { container, onready, firstVisibleStep }: Props = $props();
   const flow = useSvelteFlow();
   const store = useStore();
+
+  let framedStep: string | undefined;
+  $effect(() => {
+    if (!firstVisibleStep) {
+      framedStep = undefined;
+      return;
+    }
+    if (firstVisibleStep === framedStep || !store.nodesInitialized || !store.viewportInitialized || !store.nodeLookup.has(firstVisibleStep)) return;
+    const id = firstVisibleStep;
+    const { domNode, width, height } = store;
+    // The CSS breakpoint can change before Svelte Flow's ResizeObserver reports the new viewport.
+    const frame = requestAnimationFrame(() => {
+      if (!domNode || !width || !height || domNode.clientWidth !== width || domNode.clientHeight !== height) return;
+      framedStep = id;
+      void flow.fitView({ nodes: [{ id }], padding: 0.2, maxZoom: 1.1 });
+    });
+    return () => cancelAnimationFrame(frame);
+  });
 
   onMount(() => {
     onready({

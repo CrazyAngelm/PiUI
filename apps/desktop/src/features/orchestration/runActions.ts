@@ -4,6 +4,8 @@ import {
   type StartRunRequestV7, type RunMutationRequest, type RetryUncertainTaskRequest, type ReconcileUncertainTaskRequest,
 } from '../../host-api/orchestrationClient';
 import { checkedRunSnapshot } from './runUpdates';
+import { nanoRemoteRunId } from '../../../../../contracts/nano-remote-v1';
+import { hostRemote } from '../../host-api/transport';
 
 export type RunAction =
   | { readonly type: 'cancelTask'; readonly request: import('../../../../../contracts/orchestration-host-v6').CancelTaskRequest }
@@ -28,7 +30,8 @@ export function uncertainTaskMutation(workspaceId: string, run: OrchestrationRun
 /** One requested command, followed only by read-only recovery on failure. Never replay native work. */
 export async function performRunAction(client: OrchestrationClient, action: RunAction, safeMode: boolean): Promise<RunActionResult> {
   if (safeMode) return { type: 'unconfirmed', error: new OrchestrationOperationError('denied', 'Safe mode keeps runs read-only.'), recovery: 'blocked' };
-  const { workspaceId, runId } = action.request;
+  const { workspaceId } = action.request;
+  const runId = hostRemote && action.type === 'start' ? await nanoRemoteRunId(action.request.runId) : action.request.runId;
   const minimumRevision = action.type === 'start' ? 0 : action.request.expectedRunRevision;
   try {
     let result: OrchestrationRunV6;

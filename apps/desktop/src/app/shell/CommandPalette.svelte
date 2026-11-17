@@ -29,7 +29,7 @@
   import PluginPaletteGroup from '../plugins/PluginPaletteGroup.svelte';
   import NativeCommandsPaletteGroup from './NativeCommandsPaletteGroup.svelte';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
-  import { remoteMode } from '../nano/remoteMode';
+  import { remoteMode, hostSupports, pipelineSectionAvailable } from '../nano/remoteMode';
   import { openNanoCloud } from '../nano/openCloud';
   import { useWorkspace } from './context';
 
@@ -127,13 +127,17 @@
                 <Command.Item class="palette__item" value="action:inbox" keywords={[$t('Open inbox'), 'inbox', 'approvals']} onSelect={() => run(() => store.navigate({ name: 'inbox' }))}>
                   <InboxIcon size={15} /><span>{$t('Open inbox')}</span>
                 </Command.Item>
-                {#if !remoteMode}
+                {#if pipelineSectionAvailable('systems')}
                 <Command.Item class="palette__item" value="action:pipelines" keywords={[$t('Open pipelines'), 'pipeline', 'graph', 'agents']} onSelect={() => run(() => store.navigate({ name: 'pipelines', section: 'systems' }))}>
                   <Workflow size={15} /><span>{$t('Open pipelines')}</span>
                 </Command.Item>
+                {/if}
+                {#if pipelineSectionAvailable('runs')}
                 <Command.Item class="palette__item" value="action:runs" keywords={[$t('Open runs'), 'runs', 'history']} onSelect={() => run(() => store.navigate({ name: 'pipelines', section: 'runs' }))}>
                   <History size={15} /><span>{$t('Open runs')}</span>
                 </Command.Item>
+                {/if}
+                {#if pipelineSectionAvailable('schedules')}
                 <Command.Item class="palette__item" value="action:automations" keywords={[$t('Open automations'), 'automations', 'automation', 'schedules', 'triggers']} onSelect={() => run(() => store.navigate({ name: 'pipelines', section: 'schedules' }))}>
                   <Clock size={15} /><span>{$t('Open automations')}</span>
                 </Command.Item>
@@ -143,19 +147,23 @@
                     <ScrollText size={15} /><span>{$t('Open session history')}</span>
                   </Command.Item>
                 {/if}
-                {#if boardWorkspaceId && !remoteMode}
+                {#if boardWorkspaceId && hostSupports('board_command_v1', 'teammates_command_v1')}
                   <Command.Item class="palette__item" value="action:board" keywords={[$t('Open board'), 'board', 'kanban', 'cards', 'доска']} onSelect={() => run(() => openBoard(false))}>
                     <KanbanSquare size={15} /><span>{$t('Open board')}</span>
                   </Command.Item>
+                  {#if !remoteMode}
                   <Command.Item class="palette__item" value="action:new-card" keywords={[$t('New card'), 'card', 'task', 'issue', 'карточка']} onSelect={() => run(() => openBoard(true))}>
                     <SquarePlus size={15} /><span>{$t('New card')}</span>
                   </Command.Item>
+                  {/if}
                   <Command.Item class="palette__item" value="action:team" keywords={[$t('Open team'), 'team', 'teammates', 'команда']} onSelect={() => run(() => openTeam(false))}>
                     <UsersRound size={15} /><span>{$t('Open team')}</span>
                   </Command.Item>
+                  {#if !remoteMode}
                   <Command.Item class="palette__item" value="action:new-teammate" keywords={[$t('New teammate'), 'teammate', 'agent', 'handle']} onSelect={() => run(() => openTeam(true))}>
                     <UserPlus size={15} /><span>{$t('New teammate')}</span>
                   </Command.Item>
+                  {/if}
                 {/if}
                 {#if !remoteMode}
                 <Command.Item

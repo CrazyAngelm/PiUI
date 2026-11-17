@@ -466,8 +466,8 @@ server-side limits.
 - Evidence so far is synthetic (the dev server and fixtures). Real-provider
   behavior is reported separately once the production server ships the API.
 - Remote access (section 15) follow-ups: end-to-end encryption of frames between
-  the browser and the desktop, image attachments and file mentions, pipelines,
-  runs and the board, and more channels and commands (advertised in `welcome`,
+  the browser and the desktop, image attachments and file mentions, and more
+  channels and commands (advertised in `welcome`,
   additive within `nano-remote.v1`). Presence lives in one server process, so a
   server restart ends every link until the desktop reconnects.
 
@@ -488,7 +488,7 @@ Decision: ADR-062. Protocol and limits: [NANO_DESKTOP_API.md](NANO_DESKTOP_API.m
 section 4.9. Contract: `contracts/nano-remote-v1.ts` with its fixture
 `contracts/fixtures/nano-remote-v1.json`.
 
-Remote access lets a browser the person approved continue chats from Nano Web.
+Remote access lets a browser the person approved continue chats and open project workbenches from Nano Web.
 It is off by default and the person switches it on in Settings. It is remote
 control of agents that run as the user, with the powers the keyboard has in
 chats; it is not a sandbox and no screen says it is.
@@ -506,7 +506,8 @@ no listener on this computer: the loopback relay stays the only one.
 
 **Pairing.** A browser sends its public key and signs a challenge that names
 this device and its relay session. The host verifies the signature itself. A
-remembered key is welcomed without a prompt. An unknown key brings the main
+remembered key with workbench approval is welcomed without a prompt. A browser
+remembered by the chat-only host needs a new decision on the computer. An unknown key brings the main
 window forward with a 6-digit code that the browser shows too, the browser's
 label and a short fingerprint of its key; the person chooses Deny, Allow once or
 Always allow this browser. One prompt at a time, 120 seconds; three denials or
@@ -515,18 +516,19 @@ eight browsers are remembered, as public keys only, and each can be forgotten in
 Settings. A browser that fails the signature or sends a message out of order is
 dropped.
 
-**What a paired browser may do.** Sixteen commands and five event channels, the
-same lists in `contracts/nano-remote-v1.ts`, `nano/remote_dispatch.rs` and the
-fixture. Chats: the project and chat lists, the native history and transcripts,
-new chat, prompt, steer, follow-up, cancel, close, rename, approvals, model and
-reasoning picks, session modes, text-only queued messages. The harness registry
-is list-only and a composer send with attachments is refused. Everything else
-is refused with `remote-not-allowed`: settings, project add, trust and removal,
-plugins, pipelines, runs, automations, board, review, worktrees, attachments
-and file mentions, dictation, avatars, harness sign-in, Nano account actions,
-deleting a chat, and every `nano_remote_*` command. Admitted commands run the
-same functions as the WebView's IPC, bypassing `guarded_commands` (a guard for
-the WebView's origin) in favour of the allowlist.
+**What a paired browser may do.** The `welcome` command list exposes the
+features supported by this computer. Chats support native history, prompting,
+steering, cancellation, approvals and model selection. The workbench shows
+project pipelines, runs and their outputs, teams, boards and schedules. In a
+trusted project an approved browser can create and edit agent graphs, start a
+  saved launch command, and control runs started from a paired browser. Scheduled
+  systems and commands used by teammates or nested pipelines are edited locally.
+  The host admits agent and
+LLM steps with read-only profiles, with network, extra resources and spawn
+grants disabled. Executable steps, editing the board or schedules, installing
+plugins, device administration, file selection and native settings stay on the
+computer. Older desktops continue to offer chats. See ADR-062 for the graph
+rules and the typed command list in `contracts/nano-remote-v1.ts`.
 
 **Indicator and kick.** While a browser is connected the shell shows who and
 how (once or always) and a button that disconnects it at once. Settings lists
@@ -538,7 +540,8 @@ that makes the browser read that session again), two browsers per device, eight 
 browser, 75 s of silence ends the link, one pairing prompt at a time.
 
 **Disclosure.** The Nano server relays the frames in memory and keeps none; it
-does see the chat list and the content of all open chats, in transit, over TLS
+sees the requested project definitions and run results as well as the chat list
+and the content of all open chats, in transit, over TLS
 on both legs: the shell loads the snapshots of every open session and the host
 forwards the events of every session to each connected browser, not only the
 chats that browser opens. Frames are not end-to-end encrypted in version 1.
@@ -578,9 +581,12 @@ WebView, мост и Pi их не видят.
 аудио никуда не отправляется.
 
 Удалённый доступ (ADR-062) выключен по умолчанию. Включённый, он держит одно
-исходящее соединение с сервером Nano и пускает только браузер, который человек
-подтвердил на этом компьютере: браузер доказывает владение ключом, неизвестный
-ключ ждёт решения с 6-значным кодом, а допустимые команды ограничены белым
-списком чатов. Это не песочница: сопряжённый браузер может в чатах то же, что
-клавиатура. Сервер Nano пересылает кадры в памяти и не хранит их, но видит
-открытые чаты при передаче.
+исходящее соединение с сервером Нано. При первом подключении браузер доказывает
+владение ключом, а владелец сверяет шестизначный код и подтверждает доступ на
+компьютере. После обновления с версии, в которой были доступны только чаты,
+компьютер снова запрашивает согласие на доступ к рабочему пространству.
+Из браузера можно работать с чатами, просматривать конвейеры, запуски, доску,
+команду и расписания. В доверенном проекте можно редактировать и запускать
+совместимые конвейеры. Раздел 15 описывает разрешённые шаги и операции. Сервер
+Нано пересылает содержимое открытых чатов, запрошенные данные проекта и результаты
+запусков в памяти без записи на диск.

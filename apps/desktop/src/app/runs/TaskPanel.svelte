@@ -9,6 +9,8 @@
   import Code from '@lucide/svelte/icons/code';
   import { RUNTIME_LABEL } from '../pipelines/executors';
   import ScriptEditor from '../pipelines/code/ScriptEditor.svelte';
+  import { hostSupports, remoteMode } from '../nano/remoteMode';
+  import { remoteRunSupported } from '../pipelines/remotePolicy';
   import { t } from '../../features/locale/language';
   import { onDestroy } from 'svelte';
   import { readWorkspaceHistory } from '../../host-api/workspaceHistory';
@@ -219,7 +221,7 @@
 
   {#if live}
     <div class="actions">
-      {#if view.state === 'awaitingApproval'}
+      {#if view.state === 'awaitingApproval' && hostSupports('orchestration_control_flow_v6') && (!remoteMode || remoteRunSupported(run))}
         <Button size="sm" variant="primary" loading={busyKey === `decide:${view.stepId}`} disabled={!!busyKey || runs.safeMode} onclick={() => void runs.decide(view.stepId, true)}>
           {#snippet leading()}<Check />{/snippet}
           {limitReached ? $t('Accept last result') : $t('Approve result')}
@@ -232,25 +234,25 @@
         {/if}
         <Button size="sm" variant="danger" disabled={!!busyKey || runs.safeMode} onclick={() => void runs.decide(view.stepId, false)}>{$t('Reject')}</Button>
       {/if}
-      {#if view.state === 'uncertain' && view.sessionId}
+      {#if view.state === 'uncertain' && view.sessionId && hostSupports('orchestration_retry_uncertain_task_v6')}
         <Button size="sm" variant="primary" disabled={!!busyKey || runs.safeMode} onclick={() => (confirmRetry = true)}>
           {#snippet leading()}<RotateCcw />{/snippet}
           {$t('Retry step')}
         </Button>
       {/if}
-      {#if view.state === 'uncertain' && (view.sessionId || script || pluginNode || subpipeline)}
+      {#if view.state === 'uncertain' && (view.sessionId || script || pluginNode || subpipeline) && hostSupports('orchestration_reconcile_uncertain_task_v6')}
         <Button size="sm" disabled={!!busyKey || runs.safeMode} onclick={() => (reconcileOpen = true)}>
           {#snippet leading()}<ClipboardCheck />{/snippet}
           {$t('Record outcome…')}
         </Button>
       {/if}
-      {#if canRepeat(view.task) && run.status !== 'cancelled' && !limitReached}
+      {#if canRepeat(view.task) && run.status !== 'cancelled' && !limitReached && hostSupports('orchestration_control_flow_v6') && (!remoteMode || remoteRunSupported(run))}
         <Button size="sm" variant="ghost" disabled={!!busyKey || runs.safeMode} onclick={() => (confirmRepeat = true)}>
           {#snippet leading()}<RotateCcw />{/snippet}
           {$t('Run again from here')}
         </Button>
       {/if}
-      {#if canCancelTask(view.task) && view.state !== 'onCall'}
+      {#if canCancelTask(view.task) && view.state !== 'onCall' && hostSupports('orchestration_cancel_task_v6') && (!remoteMode || remoteRunSupported(run))}
         <Button size="sm" variant="ghost" loading={busyKey === `cancel:${view.stepId}`} disabled={!!busyKey || runs.safeMode} onclick={() => void runs.cancelTask(view.stepId)}>
           {#snippet leading()}<Ban />{/snippet}
           {$t('Cancel step')}

@@ -35,7 +35,7 @@
   import { chatTree } from './chatTree';
   import { dictationSource } from '../nano/dictationSource.svelte';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
-  import { remoteMode } from '../nano/remoteMode';
+  import { remoteMode, hostSupports, pipelineSectionAvailable } from '../nano/remoteMode';
   import { remoteShell } from '../nano/remoteShell.svelte';
   import { chipFor, creditsText } from '../nano/nanoView';
   import Mark from '../marks/Mark.svelte';
@@ -138,8 +138,7 @@
   let boards = $state.raw<BoardRegistry | undefined>();
   // Loaded once: project updates (a streaming chat) must not keep postponing it.
   $effect(() => {
-    // A remote browser has no boards: the chunk is never fetched.
-    if (remoteMode) return;
+    if (!hostSupports('board_command_v1', 'teammates_command_v1')) return;
     const timer = setTimeout(() => {
       void import('../board/boardStore.svelte')
         .then((module) => {
@@ -150,7 +149,7 @@
     return () => clearTimeout(timer);
   });
   $effect(() => {
-    const ids = projects.filter((workspace) => !workspace.missing).map((workspace) => workspace.id);
+    const ids = projects.filter((workspace) => !workspace.missing && (!remoteMode || workspace.trust === 'trusted')).map((workspace) => workspace.id);
     const registry = boards;
     if (registry !== undefined) untrack(() => registry.ensure(ids));
   });
@@ -159,7 +158,7 @@
   function boardItems(workspace: WorkspaceSummary): MenuEntry[] {
     const open = (): void => go(() => { store.selectWorkspace(workspace.id); store.navigate({ name: 'board', workspaceId: workspace.id }); });
     const registry = boards;
-    const board: MenuEntry = registry?.enabled(workspace.id)
+    const board: MenuEntry = remoteMode || registry?.enabled(workspace.id)
       ? { label: $t('Board'), icon: KanbanSquare, onSelect: open }
       : {
           label: $t('Enable board'),
@@ -393,7 +392,11 @@
             {/snippet}
           </Menu>
         {:else}
-          <Menu align="end" items={[historyItem(workspace)]}>
+          <Menu align="end" items={[
+            ...(!workspace.personal && workspace.trust === 'trusted' && hostSupports('board_command_v1', 'teammates_command_v1') ? boardItems(workspace) : []),
+            ...(!workspace.personal && pipelineSectionAvailable('systems') ? [{ label: $t('Pipelines'), icon: Workflow, onSelect: () => go(() => { store.selectWorkspace(workspace.id); store.navigate({ name: 'pipelines', section: 'systems' }); }) }] : []),
+            historyItem(workspace),
+          ]}>
             {#snippet trigger(props)}
               <button type="button" class="tiny-action" aria-label={$t('Options for {0}', [name])} {...props}><Ellipsis size={14} /></button>
             {/snippet}
@@ -592,6 +595,10 @@
   .project__row:hover .project__actions,
   .project__row:focus-within .project__actions {
     opacity: 1;
+  }
+  @media (hover: none) {
+    .project__row .project__actions { opacity: 1; }
+    .project__actions .tiny-action { min-width: 44px; min-height: 44px; }
   }
   .project__toggle {
     display: flex;

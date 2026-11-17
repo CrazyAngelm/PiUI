@@ -13,6 +13,7 @@
     "test:remote": "pnpm build:remote && playwright test --config playwright.remote.config.ts"
   },
   "dependencies": {
+    "@lucide/svelte": "1.48.0",
     "svelte": "5.57.1"
   },
   "devDependencies": {

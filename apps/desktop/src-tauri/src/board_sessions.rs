@@ -19,6 +19,11 @@ use piui_runtime::workspace_runtime::{HostTool, NativeNoticeCode};
 use serde_json::Value;
 use tauri::{AppHandle, Manager, Runtime};
 
+/// A managed session only receives board authority from a known local run.
+pub(crate) fn local_board_run(run: Option<&piui_orchestration::Run>) -> bool {
+    run.is_some_and(|run| !crate::orchestration_api::paired_browser_run(run.id()))
+}
+
 /// The board hooks of this host.
 pub(crate) struct BoardSessions<R: Runtime> {
     app: AppHandle<R>,
@@ -146,6 +151,15 @@ impl<R: Runtime> BoardSessionHooks for BoardSessions<R> {
         if host.safe_mode || host.is_personal_workspace(&binding.workspace_id) {
             return BoardSessionSetup::default();
         }
+        if let Some(run_id) = binding.run_id.as_deref() {
+            let run = self
+                .app
+                .try_state::<OrchestrationApiState>()
+                .and_then(|state| state.get_run(&binding.workspace_id, run_id).ok().flatten());
+            if !local_board_run(run.as_ref()) {
+                return BoardSessionSetup::default();
+            }
+        }
         let Some(service) = self.app.try_state::<BoardService>() else {
             return BoardSessionSetup::default();
         };
@@ -186,8 +200,13 @@ impl<R: Runtime> BoardSessionHooks for BoardSessions<R> {
             Ok(snapshot) => snapshot,
             Err(_) => return error_value(BoardError::Io),
         };
-        let (actor, permissions, causing_depth) =
-            agent_identity(binding, &board, snapshot.workspace(&binding.workspace_id));
+        let workspace = snapshot.workspace(&binding.workspace_id);
+        if let Some(id) = binding.run_id.as_deref()
+            && !local_board_run(workspace.and_then(|ws| ws.runs.iter().find(|r| r.id() == id)))
+        {
+            return error_value(BoardError::Disabled);
+        }
+        let (actor, permissions, causing_depth) = agent_identity(binding, &board, workspace);
         let teammates = crate::teammates_api::teammate_refs_for(
             orchestration.inner(),
             service.inner(),

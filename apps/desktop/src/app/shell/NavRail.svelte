@@ -10,7 +10,7 @@
   import { t } from '../../features/locale/language';
   import { IconButton, Menu, StatusDot, type MenuEntry } from '../../lib/ui';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
-  import { remoteMode } from '../nano/remoteMode';
+  import { remoteMode, pipelineSectionAvailable } from '../nano/remoteMode';
   import { useWorkspace } from './context';
   import { railCurrent, type RailItem } from './navRail';
 
@@ -28,6 +28,7 @@
   $effect(() => nanoAccount.startLater());
 
   /** Bumped to retry the lazy work-location chunk after a failed load. */
+  let accessOpen = $state(false);
   let locationAttempt = $state(0);
   const current = $derived(railCurrent(store.route));
   const inboxCount = $derived(store.inboxApprovals.length);
@@ -47,8 +48,7 @@
     shortcut: string | undefined;
     run: () => void;
   }
-  /** A remote browser (Nano Web, ADR-062) sees chats and projects only. */
-  const REMOTE_ITEMS: ReadonlySet<RailItem> = new Set(['home', 'search', 'inbox']);
+
   const allItems = $derived<Entry[]>([
     { id: 'home', label: $t('New chat'), icon: SquarePen, shortcut: 'Mod+N', run: () => go(() => store.goHome()) },
     { id: 'search', label: $t('Search'), icon: Search, shortcut: 'Mod+K', run: onSearch },
@@ -63,23 +63,32 @@
     { id: 'runs', label: $t('Runs'), icon: History, shortcut: undefined, run: () => go(() => store.navigate({ name: 'pipelines', section: 'runs' })) },
     { id: 'automations', label: $t('Automations'), icon: Clock, shortcut: undefined, run: () => go(() => store.navigate({ name: 'pipelines', section: 'schedules' })) },
   ]);
-  const items = $derived(remoteMode ? allItems.filter((item) => REMOTE_ITEMS.has(item.id)) : allItems);
+  const items = $derived(allItems.filter(({ id }) => {
+    if (id === 'pipelines') return pipelineSectionAvailable('systems');
+    if (id === 'runs') return pipelineSectionAvailable('runs');
+    if (id === 'automations') return pipelineSectionAvailable('schedules');
+    return true;
+  }));
 
   const more = $derived.by<MenuEntry[]>(() => {
-    const entries: MenuEntry[] = [
-      { label: $t('Agents'), onSelect: () => go(() => store.navigate({ name: 'pipelines', section: 'agents' })) },
-      { label: $t('Teams'), onSelect: () => go(() => store.navigate({ name: 'pipelines', section: 'teams' })) },
-      { label: $t('Step lists'), onSelect: () => go(() => store.navigate({ name: 'pipelines', section: 'pipelines' })) },
-    ];
+    const entries: MenuEntry[] = (['agents', 'teams', 'pipelines'] as const).filter(pipelineSectionAvailable).map((section) => ({
+      label: $t({ agents: 'Agents', teams: 'Teams', pipelines: 'Step lists' }[section]),
+      onSelect: () => go(() => store.navigate({ name: 'pipelines', section })),
+    }));
     const workspaceId = historyWorkspaceId;
     if (workspaceId) {
-      entries.push({ type: 'separator' }, { label: $t('Session history'), onSelect: () => go(() => store.navigate({ name: 'history', workspaceId })) });
+      if (entries.length) entries.push({ type: 'separator' });
+      entries.push({ label: $t('Session history'), onSelect: () => go(() => store.navigate({ name: 'history', workspaceId })) });
+    }
+    if (remoteMode) {
+      if (entries.length) entries.push({ type: 'separator' });
+      entries.push({ label: $t('Remote access details'), onSelect: () => (accessOpen = true) });
     }
     return entries;
   });
 </script>
 
-<nav class="rail" aria-label={$t('Main navigation')}>
+<nav class="rail" class:rail--remote={remoteMode} aria-label={$t('Main navigation')}>
   {#if sidebarHidden}
     <span class="rail__cell">
       <IconButton size="lg" label={$t('Show sidebar')} shortcut="Mod+B" tooltipSide="right" onclick={() => onShowSidebar?.()}>
@@ -106,7 +115,7 @@
       {/if}
     </span>
   {/each}
-  {#if !remoteMode}
+  {#if more.length}
     <Menu side="right" align="end" items={more}>
       {#snippet trigger(props)}
         <IconButton size="lg" label={$t('More')} tooltip={false} title={$t('More')} {...props}><Ellipsis /></IconButton>
@@ -127,6 +136,12 @@
   {/if}
 </nav>
 
+{#if accessOpen}
+  {#await import('../nano/RemoteAccessDetails.svelte') then details}
+    <details.default bind:open={accessOpen} />
+  {/await}
+{/if}
+
 <style>
   .rail {
     display: flex;
@@ -140,6 +155,15 @@
     scrollbar-width: none;
     background: var(--piui-bg-raised);
     border-right: 1px solid var(--piui-border-subtle);
+  }
+  @media (max-width: 640px) {
+    .rail.rail--remote {
+      grid-column: 1; grid-row: 2; height: auto; flex-direction: row;
+      align-items: center; justify-content: space-evenly; gap: 0;
+      overflow-x: auto; overflow-y: hidden; border-right: 0; border-top: 1px solid var(--piui-border-subtle);
+      padding: var(--piui-space-1) env(safe-area-inset-right) max(var(--piui-space-1), env(safe-area-inset-bottom)) env(safe-area-inset-left);
+    }
+    .rail--remote :global(.icon-btn) { min-width: 40px; min-height: 44px; }
   }
   .rail__cell {
     position: relative;

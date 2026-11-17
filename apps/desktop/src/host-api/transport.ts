@@ -20,6 +20,8 @@ export const desktopAvailable = typeof window !== 'undefined' && '__TAURI_INTERN
 
 /** True only in the Nano Web remote bundle, where this module is replaced (packages/nano-ui). */
 export const hostRemote: boolean = false;
+/** Native clients own the complete command catalog. The web build negotiates it per connection. */
+export const hostSupports = (..._commands: string[]): boolean => true;
 
 const desktopTransport: HostTransport = {
   invoke: (command, args) => invoke(command, args),

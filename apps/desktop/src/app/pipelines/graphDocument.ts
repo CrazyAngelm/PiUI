@@ -9,6 +9,7 @@ import type {
   LaunchCommandReference,
   OrchestrationClient,
   PipelineDefinition,
+  RunDefinitionSnapshot,
   SaveDefinitionRequest,
   StoredDefinition,
   TeamDefinition,
@@ -30,6 +31,8 @@ export interface OpenedGraph {
   revisions: Revisions;
   /** No saved canvas positions (e.g. created by the assistant, CLI or another device). */
   needsLayout: boolean;
+  /** Original assignments cannot round-trip through the editable canvas model. */
+  sourceDefinition?: RunDefinitionSnapshot;
 }
 
 export class GraphDocumentError extends Error {
@@ -38,6 +41,8 @@ export class GraphDocumentError extends Error {
     this.name = 'GraphDocumentError';
   }
 }
+
+class GraphShapeError extends GraphDocumentError {}
 
 const positionKey = (workspaceId: string, graphId: string) => `piui.graph.${workspaceId}.${graphId}`;
 
@@ -79,7 +84,7 @@ export interface GraphDefinitions {
  * Pinned data (v6.4) stays on its node. Shapes the canvas cannot edit
  * without losing assignments are refused with a `GraphDocumentError`.
  */
-export function graphFromDefinitions({ command, team, pipeline, profiles }: GraphDefinitions): AgentGraph {
+export function graphFromDefinitions({ command, team, pipeline, profiles }: GraphDefinitions, preview = false): AgentGraph {
   const nodes: GraphNode[] = pipeline.steps.map((step, index) => {
     const kind = step.router ? 'router' : 'agent';
     // Program routers and scripts have no team member, only a placeholder profile.
@@ -96,7 +101,7 @@ export function graphFromDefinitions({ command, team, pipeline, profiles }: Grap
       ...(step.pinnedOutput ? { pinnedOutput: step.pinnedOutput } : {}),
       id: step.id,
       profile:
-        profile ??
+        (preview && profile ? { ...profile, name: step.name || profile.name } : profile) ??
         placeholderProfile(
           step.name ||
             (script ? `Script ${index + 1}` : plugin ? `Plugin node ${index + 1}` : subpipeline ? `Sub-pipeline ${index + 1}` : `Router ${index + 1}`),
@@ -120,8 +125,8 @@ export function graphFromDefinitions({ command, team, pipeline, profiles }: Grap
   const reusesMembers =
     new Set(agentNodes.map((node) => node.profile.id)).size !== agentNodes.length ||
     team.members.some((member) => !pipeline.steps.some((step) => step.id === member.id && step.assignedMemberId === member.id));
-  if (reusesMembers) {
-    throw new GraphDocumentError('This definition uses reusable members. Open it in Library to preserve its assignments.');
+  if (reusesMembers && !preview) {
+    throw new GraphShapeError('This definition uses reusable members. Open it in Library to preserve its assignments.');
   }
 
   const edges: GraphEdge[] = [
@@ -131,12 +136,13 @@ export function graphFromDefinitions({ command, team, pipeline, profiles }: Grap
         .map((dependency) => ({ from: dependency, to: step.id, kind: 'result' as const })),
       ...(step.routeGates ?? []).map((gate) => ({ from: gate.routerStepId, to: step.id, kind: 'route' as const, branchId: gate.branchId })),
     ]),
-    ...team.sendEdges.map((edge) => ({ from: edge.fromMemberId, to: edge.toMemberId, kind: 'send' as const })),
-    ...team.observeEdges.map((edge) => ({ from: edge.fromMemberId, to: edge.toMemberId, kind: 'observe' as const })),
-    ...agentNodes.flatMap((node) =>
+    // A member slot can cover several steps. The preview lists the original team routes separately.
+    ...(preview ? [] : team.sendEdges).map((edge) => ({ from: edge.fromMemberId, to: edge.toMemberId, kind: 'send' as const })),
+    ...(preview ? [] : team.observeEdges).map((edge) => ({ from: edge.fromMemberId, to: edge.toMemberId, kind: 'observe' as const })),
+    ...(preview ? [] : agentNodes).flatMap((node) =>
       node.profile.allowedSpawnProfileIds.map((profileId) => {
         const target = nodes.find((candidate) => candidate.profile.id === profileId);
-        if (!target) throw new GraphDocumentError('This definition delegates to an external profile. Open it in Library.');
+        if (!target) throw new GraphShapeError('This definition delegates to an external profile. Open it in Library.');
         return { from: node.id, to: target.id, kind: 'spawn' as const };
       }),
     ),
@@ -158,7 +164,7 @@ export function graphFromDefinitions({ command, team, pipeline, profiles }: Grap
 }
 
 /** Rebuilds the canvas graph for a saved launch command. */
-export async function openGraph(client: OrchestrationClient, workspaceId: string, commandId: string): Promise<OpenedGraph> {
+export async function openGraph(client: OrchestrationClient, workspaceId: string, commandId: string, allowPreview = false): Promise<OpenedGraph> {
   const command = await client.orchestration_get_launch_command_v6({ workspaceId, id: commandId });
   if (!command) throw new GraphDocumentError('This system is no longer available.');
   const [team, pipeline, catalog] = await Promise.all([
@@ -171,12 +177,21 @@ export async function openGraph(client: OrchestrationClient, workspaceId: string
   const profiles = new Map(
     stored.filter((profile): profile is StoredDefinition<AgentProfile> => profile !== null).map((profile) => [profile.value.id, profile]),
   );
-  const graph = graphFromDefinitions({
+  const definitions: GraphDefinitions = {
     command: { id: commandId, name: command.value.name },
     team: team.value,
     pipeline: pipeline.value,
     profiles: new Map([...profiles].map(([id, profile]) => [id, profile.value])),
-  });
+  };
+  let graph: AgentGraph;
+  let sourceDefinition: RunDefinitionSnapshot | undefined;
+  try {
+    graph = graphFromDefinitions(definitions);
+  } catch (error) {
+    if (!allowPreview || !(error instanceof GraphShapeError)) throw error;
+    graph = graphFromDefinitions(definitions, true);
+    sourceDefinition = { launchCommand: command.value, team: team.value, pipeline: pipeline.value, profiles: [...definitions.profiles.values()] };
+  }
   const agentNodes = graph.nodes.filter((node) => !nodeHasNoMember(node));
   const positions = readPositions(workspaceId, commandId);
   const needsLayout = graph.nodes.length > 1 && !graph.nodes.some((node) => positions.has(node.id));
@@ -196,7 +211,7 @@ export async function openGraph(client: OrchestrationClient, workspaceId: string
       .filter((node) => profiles.has(node.profile.id))
       .map((node) => [node.profile.id, profiles.get(node.profile.id)!.revision] as [string, number]),
   ]);
-  return { graph, revisions, needsLayout };
+  return { graph, revisions, needsLayout, sourceDefinition };
 }
 
 /** Saves the whole graph atomically; returns the revisions to use next time. */

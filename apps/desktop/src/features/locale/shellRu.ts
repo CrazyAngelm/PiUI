@@ -608,6 +608,8 @@ export const shellRu: Readonly<Record<string, string>> = {
   "Missing pipeline": "Конвейер не найден",
   "New automation": "Новая автоматизация",
   "Next": "Следующий",
+  "All automations are paused on your computer.": "Все автоматизации приостановлены на компьютере.",
+  "Schedules created on your computer appear here.": "Здесь появятся расписания, созданные на компьютере.",
   "No automations yet": "Автоматизаций пока нет",
   "Once": "Один раз",
   "Open run": "Открыть запуск",
