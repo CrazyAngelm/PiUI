@@ -28,7 +28,7 @@
   import Transcript from '../chat/transcript/Transcript.svelte';
   import { openLinkInHost } from '../chat/openChatLink';
   import { ChatFilesStore } from '../chat/files/chatFiles.svelte';
-  import { placeChatFiles } from '../chat/files/placeChatFiles';
+  import { createChatFilePlacer } from '../chat/files/placeChatFiles';
   import { errorMessage } from '../workspaceStore.svelte';
   import { sessionActivity } from '../chat/activity/sessionActivity';
   import SearchIcon from '@lucide/svelte/icons/search';
@@ -115,7 +115,10 @@
     untrack(() => chatFiles?.scheduleRefresh());
   });
   onDestroy(() => chatFiles?.dispose());
-  const fileCards = $derived(chatFiles ? placeChatFiles(shownBlocks, chatFiles.files, $t) : []);
+  const running = $derived(session ? ['starting', 'running', 'stopping'].includes(session.status) : false);
+  // Recomputed only when the turns, a block's status, the registry or the language change, not on every streamed token.
+  const placeFiles = createChatFilePlacer();
+  const fileCards = $derived(chatFiles ? placeFiles(shownBlocks, chatFiles.files, $t, running) : []);
   async function fileAction(action: 'open' | 'reveal' | 'save', id: string): Promise<void> {
     if (!chatFiles) return;
     try {
@@ -128,7 +131,6 @@
     }
   }
   const workspace = $derived(store.catalog.workspaces.find((item) => item.id === session?.workspaceId));
-  const running = $derived(session ? ['starting', 'running', 'stopping'].includes(session.status) : false);
   // Project chats (not pipeline members) can have an active board card (ADR-041).
   // A remote browser has no board: the card chip and activity stay out of its chats.
   const boardProject = $derived(!remoteMode && workspace !== undefined && !workspace.personal && !workspace.missing && !session?.runId ? workspace.id : undefined);
@@ -439,6 +441,7 @@
             onMessageAction={messageAction}
             attachments={fileCards}
             resolveAttachment={chatFiles?.resolve}
+            mediaGate={chatFiles?.gate}
             onOpenAttachment={chatFiles ? (id) => fileAction('open', id) : undefined}
             onDownloadAttachment={chatFiles ? (id) => fileAction('save', id) : undefined}
             onRevealAttachment={chatFiles ? (id) => fileAction('reveal', id) : undefined}
@@ -446,6 +449,7 @@
             sessionKey={snapshot.session.id}
             historySessionId={snapshot.session.id}
             agentLabel={harnessMeta(snapshot.session.harness).label}
+            answerHarness={snapshot.session.harness}
             {running}
             bind:searchOpen
             inserts={runInserts}

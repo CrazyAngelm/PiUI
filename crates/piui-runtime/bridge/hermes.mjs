@@ -329,6 +329,7 @@ main()
       boundNativeId = result?._meta?.hermes?.sessionProvenance?.currentHermesSessionId ?? boundNativeId;
       emit({ type: 'binding', nativeId: boundNativeId, nativePath });
       if (outcome === 'failed') showTurnError('Hermes could not complete this turn. Check the native provider response.');
+      toolFacts.clear();
       emit({ type: 'turnCompleted', outcome });
       finishTurn();
     }).catch(error => {
@@ -336,6 +337,7 @@ main()
         for (const block of blocks.values()) if (block.status === 'streaming') put({ ...block, status: 'failed' });
         showTurnError(error?.safeMessage ?? 'Hermes could not complete this turn.');
       }
+      toolFacts.clear();
       emit({ type: 'turnCompleted', outcome: 'failed' });
       finishTurn();
     });
@@ -362,7 +364,11 @@ main()
     'audio/wav', 'audio/x-wav', 'audio/mpeg', 'audio/mp3', 'audio/ogg', 'audio/webm', 'audio/mp4', 'audio/aac', 'audio/flac',
   ]);
   const notedFiles = new Set();
-  // ACP updates are partial: what a tool call announced earlier stays valid.
+  // ACP updates are partial: what a tool call announced earlier stays valid
+  // while the call is in flight. A call's facts are dropped when it ends (and
+  // those of any call still open when the turn ends), so only calls in flight
+  // count against the cap, however long the chat is.
+  const MAX_TOOL_FACTS = 256;
   const toolFacts = new Map();
   const imageTypeOfPath = value => {
     const extension = String(value).split('.').pop().toLowerCase();
@@ -400,8 +406,12 @@ main()
     if (typeof u.kind === 'string') facts.kind = u.kind;
     if (Array.isArray(u.locations)) facts.locations = u.locations.slice(0, 50);
     if (Array.isArray(u.content)) facts.content = u.content.slice(0, 50);
-    if (!toolFacts.has(blockId) && toolFacts.size >= 256) return;
-    toolFacts.set(blockId, facts);
+    if (u.status !== 'completed' && u.status !== 'failed') {
+      if (!toolFacts.has(blockId) && toolFacts.size >= MAX_TOOL_FACTS) return;
+      toolFacts.set(blockId, facts);
+      return;
+    }
+    toolFacts.delete(blockId);
     if (u.status !== 'completed') return;
     for (const item of facts.content) {
       if (item?.type === 'diff') noteFile(blockId, item.path, 'written');

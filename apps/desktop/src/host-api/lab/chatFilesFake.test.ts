@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import type { ChatFileV1, ChatFilesResult } from './labContracts';
+import { describe, expect, it, vi } from 'vitest';
+import { CHAT_FILES_EVENT, type ChatFileV1, type ChatFilesResult } from './labContracts';
 import type { LabHost } from './labHost';
 import { LAB_CHAT_FILES_SESSION_TITLE } from './chatFilesFake';
 import { labUuid } from './labRandom';
-import { labHost, rejection } from './labTestKit';
+import { labHost, record, rejection, settle } from './labTestKit';
 
 function files<T extends ChatFilesResult>(host: LabHost, command: Record<string, unknown>): Promise<T> {
   return host.invoke<T>('workspace_chat_files_v1', { command });
@@ -29,7 +29,7 @@ describe('UI Lab chat files', () => {
     const id = sessionId(host, LAB_CHAT_FILES_SESSION_TITLE);
     const block = host.state.sessions.get(id)?.blocks.find((candidate) => candidate.toolName === 'fileChange');
     const all = await listed(host, id);
-    expect(all.map((file) => file.name)).toEqual(['transport-diagram.png', 'narration.wav', 'transport.ts', 'install-helper.exe']);
+    expect(all.map((file) => file.name)).toEqual(['transport-diagram.png', 'narration.wav', 'transport-notes.md', 'install-helper.exe']);
     expect(all.every((file) => file.blockId === block?.id && file.id.length === 36)).toBe(true);
     const [image, audio, source, program] = all;
     expect([image?.kind, image?.previewable]).toEqual(['image', true]);
@@ -99,5 +99,29 @@ describe('UI Lab chat files', () => {
     const first = [...safe.state.sessions.values()][0]?.id ?? labUuid('none');
     expect(await code(files(safe, { type: 'list', sessionId: first }))).toBe('SAFE_MODE');
     expect(await code(files(safe, { type: 'resolve', sessionId: first, name: 'a.png' }))).toBe('SAFE_MODE');
+  });
+
+  it('tells the page the chat\'s files may have changed when a turn ends, as the host does', async () => {
+    vi.useFakeTimers();
+    try {
+      const host = labHost();
+      const id = sessionId(host, LAB_CHAT_FILES_SESSION_TITLE);
+      await host.invoke('workspace_command_v15', { command: { type: 'openSession', sessionId: id } });
+      const events = await record<{ protocol: number; type: string; sessionId: string }>(host, CHAT_FILES_EVENT);
+      await host.invoke('workspace_composer_v19', { command: { type: 'send', sessionId: id, requestId: labUuid('files:turn'), text: 'Draw the diagram', mode: 'prompt' } });
+      await settle(host, id);
+      expect(events.items.length).toBeGreaterThanOrEqual(1);
+      expect(events.items.every((event) => event.protocol === 1 && event.type === 'changed' && event.sessionId === id)).toBe(true);
+      // A chat that reports no files stays quiet.
+      const before = events.items.length;
+      const other = sessionId(host, 'Fix flaky scheduler test');
+      await host.invoke('workspace_command_v15', { command: { type: 'openSession', sessionId: other } });
+      await host.invoke('workspace_composer_v19', { command: { type: 'send', sessionId: other, requestId: labUuid('files:other'), text: 'Hi', mode: 'prompt' } });
+      await settle(host, other);
+      expect(events.items).toHaveLength(before);
+      events.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

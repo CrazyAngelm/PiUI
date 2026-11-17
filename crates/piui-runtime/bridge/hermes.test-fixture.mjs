@@ -94,6 +94,24 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       send({ id: m.id, result: { stopReason: 'end_turn' } });
       continue;
     }
+    if (text === 'many-tools') {
+      // More finished calls than the in-flight cap, then an edit announced early and finished late.
+      for (let index = 0; index < 300; index += 1) {
+        notify({ sessionUpdate: 'tool_call', toolCallId: `m-${index}`, title: 'Search', kind: 'search', status: 'in_progress' });
+        notify({ sessionUpdate: 'tool_call_update', toolCallId: `m-${index}`, status: 'completed' });
+      }
+      notify({ sessionUpdate: 'tool_call', toolCallId: 'm-edit', title: 'Edit', kind: 'edit', status: 'in_progress', locations: [{ path: 'late.ts' }] });
+      notify({ sessionUpdate: 'tool_call_update', toolCallId: 'm-edit', status: 'completed' });
+      // Still open when the turn ends.
+      notify({ sessionUpdate: 'tool_call', toolCallId: 'm-open', title: 'Edit', kind: 'edit', status: 'in_progress', locations: [{ path: 'open.ts' }] });
+      send({ id: m.id, result: { stopReason: 'end_turn' } });
+      continue;
+    }
+    if (text === 'late-update') {
+      notify({ sessionUpdate: 'tool_call_update', toolCallId: 'm-open', status: 'completed' });
+      send({ id: m.id, result: { stopReason: 'end_turn' } });
+      continue;
+    }
     if (text === 'bad-permission') {
       promptId = m.id;
       send({ id: 'bad-permission', method: 'session/request_permission' });

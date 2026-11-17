@@ -144,6 +144,20 @@ export function pairKey(pair: FusionPairV1): string {
 }
 
 /** The pair a project remembers between starts, with each role's model, reasoning and speed. */
+export const FUSION_PAIR_MEMORY_KEY = 'piui.fusion.pair.v1';
+
+export function rememberFusionPair(pair: FusionPairV1, storage: Pick<Storage, 'setItem'> | undefined = undefined): void {
+  try {
+    (storage ?? localStorage).setItem(FUSION_PAIR_MEMORY_KEY, rememberablePair(pair));
+  } catch {
+    // Remembering is a convenience only.
+  }
+}
+
+export function sidekickModelRequiresRestart(next: FusionRoleV1, current: WorkspaceModel | undefined): boolean {
+  return (next.harness === 'codex' || next.harness === 'nano') && next.model?.provider !== current?.provider;
+}
+
 export function rememberablePair(pair: FusionPairV1): string {
   const role = (value: FusionRoleV1): FusionRoleV1 => ({
     harness: value.harness,
@@ -364,6 +378,30 @@ export function fusionErrorText(error: unknown): string {
       return 'Sign in to the harness first, then try again.';
     case 'NANO_SIGN_IN_REQUIRED':
       return 'Sign in to your Nano account to use Nano.';
+    case 'FUSION_ROUND_OPEN':
+      return 'Finish or stop the open sidekick round first.';
+    case 'FUSION_ROUND_UNCERTAIN':
+      return 'Reconcile or abandon the uncertain sidekick round first.';
+    case 'FUSION_REPORT_PENDING':
+      return 'Deliver the pending sidekick report first.';
+    case 'FUSION_REPORT_UNCERTAIN':
+      return 'Check, redeliver or dismiss the uncertain sidekick report first.';
+    case 'FUSION_SIDEKICK_ATTACHED':
+      return 'Stop the pair or detach the current sidekick before replacing it.';
+    case 'FUSION_SIDEKICK_BUSY':
+      return 'Wait for the current sidekick operation to finish.';
+    case 'FUSION_CONTEXT_LOSS':
+      return 'This change needs a fresh sidekick conversation. Review and confirm again.';
+    case 'FUSION_MODEL_MISSING':
+      return 'This model is missing from the current catalog. Choose another model.';
+    case 'FUSION_SIDEKICK_NOT_ADMITTED':
+      return "This sidekick does not fit the lead's permissions.";
+    case 'FUSION_SIDEKICK_START_FAILED':
+      return 'The new sidekick could not start. Check the harness and try again.';
+    case 'RUNTIME_FAILED':
+      return 'The harness could not apply the sidekick settings.';
+    case 'NOT_TRUSTED':
+      return 'Trust this project before changing the sidekick.';
     case 'unknown':
       return 'The Fusion action could not be completed.';
     default:

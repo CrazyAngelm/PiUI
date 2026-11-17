@@ -8,7 +8,7 @@ use super::{
     BlockOrigin, BoundedScanError, GenericBlockKind, GenericBlockStatus, GenericTimelineBlock,
     OriginItem, ParseState, ScanReport, SessionDiscoveryLimits, UnknownEntrySummary,
     bounded_display, display_content, display_limit, is_session_jsonl, lf_frames,
-    open_session_file_no_follow, redact_display_paths, scan_bytes_for_display_with_origins, sha256,
+    open_session_file_no_follow, redact_display_paths, scan_bytes_for_display_with_origins_on, sha256,
     string_field, trim_old_display,
 };
 use piui_platform::{ProjectDirectory, ProjectDirectoryError};
@@ -89,6 +89,8 @@ struct AssistantHistoryText {
     /// The `timeline-N` id this block had before blocks took their native
     /// identity. References stored under it keep resolving.
     legacy_id: String,
+    /// Ids an earlier release gave this answer; they still resolve to it.
+    aliases: Vec<String>,
     sha256: String,
     text: String,
 }
@@ -201,7 +203,11 @@ impl WorkspaceHistoryProjection {
             && let Some(candidate) = self
                 .assistant_texts
                 .iter()
-                .find(|candidate| candidate.block_id == block_id || candidate.legacy_id == block_id)
+                .find(|candidate| {
+                    candidate.block_id == block_id
+                        || candidate.legacy_id == block_id
+                        || candidate.aliases.iter().any(|alias| alias == block_id)
+                })
             && valid_hash.is_none_or(|hash| candidate.sha256.eq_ignore_ascii_case(hash))
         {
             return Some(candidate.text.as_str());
@@ -402,14 +408,22 @@ fn parse_and_validate_header(
 /// The ids the Pi bridge gives the same blocks when they are live: an answer
 /// or thinking part by its message timestamp and rank
 /// (`pi-assistant-*`, `pi-thinking-*`), a tool call by its id (`pi-tool-*`) and
-/// anything else by its entry id (`pi-entry-*`). A block the transcript gives no
-/// identity (or whose identity is already taken) keeps its position id.
-fn pi_native_block_ids(blocks: &[GenericTimelineBlock], origins: &[BlockOrigin]) -> Vec<String> {
+/// anything else by its entry id (`pi-entry-*`). Where the transcript gives no
+/// timestamp (or the id is already taken) the bridge hashes
+/// `entryId:kind:rank` (`entryId:tool:callId` for a tool call); this uses the
+/// same formula. The hash of the bare entry id an earlier release gave an
+/// answer is kept as its alias. A block with no identity keeps its position id.
+/// Returns each block's id and the earlier ids that still name it.
+fn pi_native_block_ids(
+    blocks: &[GenericTimelineBlock],
+    origins: &[BlockOrigin],
+) -> Vec<(String, Vec<String>)> {
     let mut used = HashSet::<String>::new();
     let mut ids = Vec::with_capacity(blocks.len());
     for (index, block) in blocks.iter().enumerate() {
         let origin = origins.get(index);
         let mut candidates = Vec::new();
+        let mut aliases = Vec::new();
         if let Some(origin) = origin {
             let stamped = |prefix: &str, rank: usize| {
                 origin
@@ -417,22 +431,57 @@ fn pi_native_block_ids(blocks: &[GenericTimelineBlock], origins: &[BlockOrigin])
                     .filter(|timestamp| *timestamp > 0)
                     .map(|timestamp| opaque_id(prefix, &format!("{timestamp}:{rank}")))
             };
+            let entry_id = origin.entry_id.as_deref();
             match &origin.item {
                 Some(OriginItem::Text { rank }) => {
-                    candidates.extend(stamped("pi-assistant", *rank))
+                    candidates.extend(stamped("pi-assistant", *rank));
+                    if let Some(entry_id) = entry_id {
+                        candidates.push(opaque_id(
+                            "pi-entry",
+                            &format!("{entry_id}:assistant:{rank}"),
+                        ));
+                    }
                 }
                 Some(OriginItem::Thinking { rank }) => {
                     candidates.extend(stamped("pi-thinking", *rank));
+                    if let Some(entry_id) = entry_id {
+                        candidates.push(opaque_id(
+                            "pi-entry",
+                            &format!("{entry_id}:thinking:{rank}"),
+                        ));
+                    }
                 }
                 Some(OriginItem::ToolCall {
                     call_id: Some(call_id),
                     ..
-                }) => candidates.push(opaque_id("pi-tool", call_id)),
+                }) => {
+                    candidates.push(opaque_id("pi-tool", call_id));
+                    if let Some(entry_id) = entry_id {
+                        candidates.push(opaque_id(
+                            "pi-entry",
+                            &format!("{entry_id}:tool:{call_id}"),
+                        ));
+                    }
+                }
                 _ => {}
             }
-            if let Some(entry_id) = &origin.entry_id {
-                candidates.push(opaque_id("pi-entry", entry_id));
-                candidates.push(opaque_id("pi-entry", &format!("{entry_id}:{index}")));
+            if let Some(entry_id) = entry_id {
+                // A user message, a compaction or an entry without a part
+                // identity is named by its entry id, as the bridge does.
+                let bare = opaque_id("pi-entry", entry_id);
+                if matches!(
+                    origin.item,
+                    None | Some(OriginItem::ToolCall { call_id: None, .. })
+                ) {
+                    candidates.push(bare);
+                } else if block.kind == GenericBlockKind::Assistant {
+                    aliases.push(bare);
+                }
+                let positional = opaque_id("pi-entry", &format!("{entry_id}:{index}"));
+                if block.kind == GenericBlockKind::Assistant {
+                    aliases.push(positional.clone());
+                }
+                candidates.push(positional);
             }
         }
         candidates.push(block.id.clone());
@@ -440,12 +489,75 @@ fn pi_native_block_ids(blocks: &[GenericTimelineBlock], origins: &[BlockOrigin])
             .into_iter()
             .find(|candidate| used.insert(candidate.clone()))
             .unwrap_or_else(|| format!("timeline-{index}"));
-        ids.push(id);
+        aliases.retain(|alias| *alias != id);
+        ids.push((id, aliases));
     }
     ids
 }
 
-/// The files Pi's `write` and `edit` tool calls name.
+/// Pi writes a session as a tree: every entry names its `parentId` and the
+/// chat is on the branch from the newest entry back to the root. An
+/// abandoned branch stays in the file but is not part of the conversation
+/// (the bridge's `activeBranch` reads the same chain). Returns the header and
+/// the entries of that branch, oldest first, or `None` where the file has no
+/// tree (an older Pi): then every entry in file order is the conversation.
+fn pi_active_branch(bytes: &[u8]) -> Option<Vec<u8>> {
+    #[derive(serde::Deserialize)]
+    struct Link {
+        id: Option<String>,
+        #[serde(rename = "parentId")]
+        parent_id: Option<String>,
+    }
+    let (frames, _) = lf_frames(bytes);
+    let mut by_id = HashMap::<String, usize>::new();
+    let mut links = Vec::<(Option<String>, Option<String>)>::with_capacity(frames.len());
+    let mut tree = false;
+    for (position, (_, frame)) in frames.iter().enumerate() {
+        let link = if position == 0 {
+            None
+        } else {
+            serde_json::from_slice::<Link>(frame).ok()
+        };
+        let (id, parent) = link.map_or((None, None), |link| (link.id, link.parent_id));
+        tree |= parent.is_some();
+        if let Some(id) = &id {
+            by_id.insert(id.clone(), position);
+        }
+        links.push((id, parent));
+    }
+    if !tree {
+        return None;
+    }
+    let leaf = links.iter().rposition(|(id, _)| id.is_some())?;
+    let mut chain = Vec::new();
+    let mut seen = HashSet::new();
+    let mut cursor = Some(leaf);
+    while let Some(position) = cursor {
+        let Some(id) = links[position].0.as_ref() else {
+            break;
+        };
+        if !seen.insert(id.clone()) {
+            break;
+        }
+        chain.push(position);
+        cursor = links[position]
+            .1
+            .as_ref()
+            .and_then(|parent| by_id.get(parent).copied());
+    }
+    chain.reverse();
+    let mut branch = Vec::with_capacity(bytes.len());
+    for position in std::iter::once(0).chain(chain) {
+        branch.extend_from_slice(frames[position].1);
+        branch.push(b'\n');
+    }
+    Some(branch)
+}
+
+/// The files Pi's tool calls name, by the rules of the bridge's
+/// `noteToolFiles`: what `write` and `edit` wrote and the image (png, jpeg,
+/// gif, webp) a `read` looked at. A leading `@` of the path is dropped. Only a
+/// call that ended successfully counts (`finalize_chat_files` checks it).
 fn pi_chat_files(
     blocks: &[GenericTimelineBlock],
     origins: &[BlockOrigin],
@@ -458,18 +570,36 @@ fn pi_chat_files(
             path: Some(path),
             ..
         }) = &origin.item
-            && matches!(name.to_ascii_lowercase().as_str(), "write" | "edit")
-            && let Some(path) = history_file_path(path, root)
         {
-            files.push(HistoryChatFile {
-                block_id: block.id.clone(),
-                path: Some(path),
-                inline: None,
-                origin: HistoryChatFileOrigin::Written,
-            });
+            let name = name.to_ascii_lowercase();
+            let origin = match name.as_str() {
+                "write" | "edit" => HistoryChatFileOrigin::Written,
+                "read" if pi_image_extension(path) => HistoryChatFileOrigin::Read,
+                _ => continue,
+            };
+            if let Some(path) = history_file_path(path.strip_prefix('@').unwrap_or(path), root) {
+                files.push(HistoryChatFile {
+                    block_id: block.id.clone(),
+                    path: Some(path),
+                    inline: None,
+                    origin,
+                });
+            }
         }
     }
     files
+}
+
+/// The bridge's `imageTypeOfPath`: the text after the last dot names an image.
+fn pi_image_extension(path: &str) -> bool {
+    path.rsplit('.')
+        .next()
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "gif" | "webp"
+            )
+        })
 }
 
 fn project_pi_history(
@@ -478,8 +608,19 @@ fn project_pi_history(
     display_project_root: &Path,
     bridge_ids: bool,
 ) -> Result<WorkspaceHistoryProjection, WorkspaceHistoryError> {
-    let (mut report, origins) =
-        scan_bytes_for_display_with_origins(source_name, bytes, Some(display_project_root));
+    // Only the Pi format has the tree; Prime numbers its blocks by position.
+    let branch = if bridge_ids {
+        pi_active_branch(bytes)
+    } else {
+        None
+    };
+    let conversation = branch.as_deref().unwrap_or(bytes);
+    let (mut report, origins) = scan_bytes_for_display_with_origins_on(
+        source_name,
+        bytes,
+        conversation,
+        Some(display_project_root),
+    );
     if report.partial_tail_bytes != 0 {
         return Err(WorkspaceHistoryError::PartialTail);
     }
@@ -488,30 +629,34 @@ fn project_pi_history(
             line: diagnostic.line,
         });
     }
-    let exact = exact_pi_assistant_texts(bytes)?;
+    let exact = exact_pi_assistant_texts(conversation)?;
     let native_ids = if bridge_ids {
         pi_native_block_ids(&report.timeline_blocks, &origins)
     } else {
         report
             .timeline_blocks
             .iter()
-            .map(|block| block.id.clone())
+            .map(|block| (block.id.clone(), Vec::new()))
             .collect()
     };
     let mut legacy_ids = Vec::new();
-    for (block, native) in report.timeline_blocks.iter_mut().zip(native_ids) {
+    let mut aliases = Vec::new();
+    for (block, (native, earlier)) in report.timeline_blocks.iter_mut().zip(native_ids) {
         legacy_ids.push(std::mem::replace(&mut block.id, native));
+        aliases.push(earlier);
     }
     let assistant_texts = report
         .timeline_blocks
         .iter()
         .zip(&legacy_ids)
-        .filter(|(block, _)| block.kind == GenericBlockKind::Assistant)
+        .zip(aliases)
+        .filter(|((block, _), _)| block.kind == GenericBlockKind::Assistant)
         .zip(exact)
-        .map(|((block, legacy_id), text)| AssistantHistoryText {
+        .map(|(((block, legacy_id), aliases), text)| AssistantHistoryText {
             sha256: sha256(text.as_bytes()),
             block_id: block.id.clone(),
             legacy_id: legacy_id.clone(),
+            aliases,
             text,
         })
         .collect();
@@ -772,6 +917,7 @@ impl<'a> CodexProjectionBuilder<'a> {
             self.assistants.push(AssistantHistoryText {
                 block_id: id,
                 legacy_id,
+                aliases: Vec::new(),
                 sha256: sha256(text.as_bytes()),
                 text: text.clone(),
             });
@@ -3698,8 +3844,14 @@ mod tests {
                 "pi-thinking-e644171f4b2c7abae83604c0",
                 "pi-assistant-e644171f4b2c7abae83604c0",
                 "pi-tool-74196fe72e4cdc135c1033e0",
-                "pi-entry-449777124b1466a8ed667d0d",
+                // The bridge's fallback formula: sha256("e4:assistant:0").
+                "pi-entry-48379e39891c65428eb50db4",
             ]
+        );
+        // The earlier release named it by the bare entry id: still resolves.
+        assert_eq!(
+            projection.final_assistant_text(Some("pi-entry-449777124b1466a8ed667d0d"), None),
+            Some("Again.")
         );
         // Answers resolve by their new id, and by the position id of before.
         assert_eq!(
@@ -3715,6 +3867,109 @@ mod tests {
         assert_eq!(files[0].block_id, "pi-tool-74196fe72e4cdc135c1033e0");
         assert_eq!(files[0].path, Some(directory.path().join("out.txt")));
         assert_eq!(files[0].origin, HistoryChatFileOrigin::Written);
+    }
+
+    #[test]
+    fn pi_without_a_message_timestamp_uses_the_bridges_fallback_ids() {
+        let directory = TemporaryDirectory::new();
+        let source = pi_source(
+            &directory,
+            &[
+                serde_json::json!({"type":"message","id":"e1","parentId":null,
+                    "message":{"role":"user","content":"Go"}}),
+                serde_json::json!({"type":"message","id":"e2","parentId":"e1",
+                    "message":{"role":"assistant","content":[
+                        {"type":"thinking","thinking":"Plan"},
+                        {"type":"text","text":"Writing."},
+                        {"type":"toolCall","id":"call_1","name":"write","arguments":{"path":"a.txt"}}]}}),
+            ],
+        );
+        let projection = project_native_workspace_history(&source, &project(&directory))
+            .expect("history projects");
+        // sha256 of "e1", "e2:thinking:0", "e2:assistant:0" and the call id.
+        assert_eq!(
+            ids(&projection),
+            [
+                "pi-entry-8b5cc4df7eec7d32a7814eca",
+                "pi-entry-734efa01122abcacde1c44d8",
+                "pi-entry-3dd5e1ae021b43731a89fbb3",
+                "pi-tool-74196fe72e4cdc135c1033e0",
+            ]
+        );
+        // The bare entry id an earlier release used still names the answer.
+        assert_eq!(
+            projection.final_assistant_text(Some("pi-entry-ac0f09c0f8bf5e7a4b063d86"), None),
+            Some("Writing.")
+        );
+    }
+
+    #[test]
+    fn pi_shows_only_the_branch_the_chat_is_on() {
+        let directory = TemporaryDirectory::new();
+        let source = pi_source(
+            &directory,
+            &[
+                serde_json::json!({"type":"message","id":"a1","parentId":null,
+                    "message":{"role":"user","content":"Question"}}),
+                serde_json::json!({"type":"message","id":"a2","parentId":"a1",
+                    "message":{"role":"assistant","content":[
+                        {"type":"text","text":"Abandoned answer"},
+                        {"type":"toolCall","id":"call_old","name":"write","arguments":{"path":"old.txt"}}]}}),
+                serde_json::json!({"type":"message","id":"a3","parentId":"a2",
+                    "message":{"role":"toolResult","toolCallId":"call_old","content":[{"type":"text","text":"ok"}]}}),
+                serde_json::json!({"type":"message","id":"b2","parentId":"a1",
+                    "message":{"role":"assistant","content":[{"type":"text","text":"Kept answer"}]}}),
+            ],
+        );
+        let projection = project_native_workspace_history(&source, &project(&directory))
+            .expect("history projects");
+        let previews = projection
+            .timeline_blocks()
+            .iter()
+            .map(|block| block.preview.clone().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(previews, ["Question", "Kept answer"]);
+        assert_eq!(projection.final_assistant_text(None, None), Some("Kept answer"));
+        assert!(projection.chat_files().is_empty(), "the abandoned branch wrote nothing here");
+    }
+
+    #[test]
+    fn pi_restores_the_images_a_read_looked_at() {
+        let directory = TemporaryDirectory::new();
+        let call = |id: &str, path: &str| {
+            serde_json::json!({"type":"toolCall","id":id,"name":"read","arguments":{"path":path}})
+        };
+        let result = |id: &str, call: &str, error: bool| {
+            serde_json::json!({"type":"message","id":id,"message":{"role":"toolResult",
+                "toolCallId":call,"isError":error,"content":[{"type":"text","text":"done"}]}})
+        };
+        let source = pi_source(
+            &directory,
+            &[
+                serde_json::json!({"type":"message","id":"e1","message":{"role":"user","content":"Look"}}),
+                serde_json::json!({"type":"message","id":"e2","message":{"role":"assistant","timestamp":1700000000001_i64,
+                    "content":[call("c1", "shots/a.PNG"), call("c2", "@shots/b.webp"), call("c3", "notes.txt"),
+                               call("c4", "shots/failed.png"), call("c5", "shots/unfinished.png")]}}),
+                result("e3", "c1", false),
+                result("e4", "c2", false),
+                result("e5", "c3", false),
+                result("e6", "c4", true),
+            ],
+        );
+        let projection = project_native_workspace_history(&source, &project(&directory))
+            .expect("history projects");
+        let files = projection
+            .chat_files()
+            .iter()
+            .map(|file| (file.path.clone(), file.origin))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            files,
+            [
+                (Some(directory.path().join("shots/a.PNG")), HistoryChatFileOrigin::Read),
+                (Some(directory.path().join("shots/b.webp")), HistoryChatFileOrigin::Read),
+            ]
+        );
     }
 }
 

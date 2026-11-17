@@ -2,6 +2,7 @@ import { get } from 'svelte/store';
 import type { ConversationOwner } from '../../../../../contracts/conversation-presentation-v1';
 import { renderFormula } from '../../components/formula';
 import { language, t } from '../../features/locale/language';
+import type { MediaGate } from '../chat/files/mediaGate';
 import { createInteractiveFiles, type InteractiveFileSource, type InteractiveFiles } from './files';
 import { composeReply } from './reply';
 import type { IntelligentUiHost, IntelligentUiScope } from './renderer.js';
@@ -35,6 +36,8 @@ export interface InteractiveDecorationOptions {
   app?: (target: InteractiveAppTarget) => Promise<boolean>;
   /** The files of this chat an answer may show by name. Without it a `file` shows as missing. */
   files?: InteractiveFileSource;
+  /** The chat's media budget and transfer queue, shared with its file cards (ADR-074); a private one when omitted. */
+  gate?: MediaGate;
   /** Short status text for the person (a copied link, a failed open). */
   notify?: (message: string) => void;
 }
@@ -50,7 +53,7 @@ export function interactiveDecoration(options: InteractiveDecorationOptions): In
     let loaded: typeof import('./load') | undefined;
     let loading = false;
     let disposed = false;
-    const files: InteractiveFiles | undefined = options.files === undefined ? undefined : createInteractiveFiles(options.files);
+    const files: InteractiveFiles | undefined = options.files === undefined ? undefined : createInteractiveFiles(options.files, options.gate);
     const sendBlock = (): string | null => {
       const blocked = options.replyBlock?.();
       if (blocked !== undefined) return get(t)(BLOCK_TEXT[blocked]);
@@ -89,7 +92,7 @@ export function interactiveDecoration(options: InteractiveDecorationOptions): In
           return run !== undefined && isAppTarget(target) ? run(target) : false;
         },
       }),
-      ...(files === undefined ? {} : { resolveFile: (name: string) => files.resolve(name) }),
+      ...(files === undefined ? {} : { resolveFile: (name: string) => files.resolve(name), releaseFile: (name: string) => { files.release(name); } }),
       ...(options.notify === undefined ? {} : { notify: options.notify }),
     };
     function enhance(): void {

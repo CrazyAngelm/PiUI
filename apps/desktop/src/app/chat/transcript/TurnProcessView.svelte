@@ -51,7 +51,7 @@
         {#if part.type === 'activity-group'}
           <ActivityGroupView group={part} {language} {openState} {onOpenChange} {flat} />
         {:else}
-          {@const note = part.block.text ? answerText(part.block, answers.full(part.block.id)) : (part.block.safeSummary ?? '')}
+          {@const note = part.block.text ? answerText(part.block, answers.full(part.block.id), answers.harness) : (part.block.safeSummary ?? '')}
           {#if note.trim() !== ''}
             <div class="turn__note" data-timeline-block={part.block.id}>
               <MarkdownContent source={note} compact={true} streaming={part.block.status === 'streaming'} />

@@ -1937,13 +1937,17 @@ enum OriginItem {
     },
 }
 
-fn scan_bytes_for_display_with_origins(
+/// The report (counts, diagnostics, partial tail) comes from `bytes`, the
+/// timeline blocks from `blocks_from`: the same transcript reduced to the
+/// entries the chat is on (a Pi branch), so an abandoned branch never shows.
+fn scan_bytes_for_display_with_origins_on(
     source_name: &str,
     bytes: &[u8],
+    blocks_from: &[u8],
     project_root: Option<&Path>,
 ) -> (ScanReport, Vec<BlockOrigin>) {
     let mut report = scan_bytes(source_name, bytes);
-    let (blocks, origins) = semantic_blocks_with_origins(bytes, project_root);
+    let (blocks, origins) = semantic_blocks_with_origins(blocks_from, project_root);
     report.timeline_blocks = blocks;
     (report, origins)
 }

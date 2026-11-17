@@ -82,7 +82,7 @@ function demoFiles(state: LabState, sessionId: string): LabFile[] {
   return [
     make('transport-diagram.png', { kind: 'image', mediaType: 'image/png', size: 156, origin: 'generated', openable: true, previewable: true }, LAB_SCREENSHOT_PNG),
     make('narration.wav', { kind: 'audio', mediaType: 'audio/wav', size: 844, origin: 'generated', openable: true, previewable: true }, silentWav()),
-    make('transport.ts', { kind: 'text', mediaType: 'text/plain', size: 2048, origin: 'written', openable: true, previewable: false }),
+    make('transport-notes.md', { kind: 'text', mediaType: 'text/markdown', size: 2048, origin: 'written', openable: true, previewable: false }),
     make('install-helper.exe', { kind: 'file', mediaType: 'application/octet-stream', size: 4096, origin: 'written', openable: false, previewable: false }),
   ];
 }
@@ -181,6 +181,10 @@ function chatFiles(runtime: LabSessions, command: ChatFilesCommand): ChatFilesRe
 }
 
 export function chatFilesHandlers(runtime: LabSessions): LabHandlers {
+  // A turn that ends may have produced files: tell the page, as the host does when it records one.
+  runtime.onIdle((record) => {
+    if (record.title === LAB_CHAT_FILES_SESSION_TITLE && !runtime.state.safeMode) runtime.publishChatFilesChanged(record);
+  });
   return {
     workspace_chat_files_v1: (args) => chatFiles(runtime, decodeArgument<ChatFilesCommand>(args, 'command', chatFilesCommandSchema)),
   };

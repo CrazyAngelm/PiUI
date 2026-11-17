@@ -2951,17 +2951,36 @@ const fileWaitFastMs = 1000;
 const fileWaitSlowMs = 3000;
 const fileWaitFastAttempts = 10;
 const fileWaitAttempts = 70;
+/** How far past its scroller's edge a place still counts as near: it loads inside this band and lets go outside it. */
+const mediaNearMargin = "1200px 0px";
+/** Frames to wait for a place to be mounted before it loads without being watched. */
+const mediaMountFrames = 90;
+function scrollParent(node) {
+    for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        const overflow = getComputedStyle(parent).overflowY;
+        if (overflow === "auto" || overflow === "scroll" || overflow === "overlay") {
+            return parent;
+        }
+    }
+    return null;
+}
 /**
  * Source of an image or player. "file" is the name of a file of this chat (a path relative to the
  * project, or just the file name): the host resolves it to a blob: URL, and while the file is not
  * there yet the place waits and looks again, then says it is missing. "src" is a remote address:
- * this app loads nothing from the network, so it shows a note with the address to open or copy.
+ * this app loads nothing from the network, so it shows a note with the address to open or copy
+ * (so does an embedded player's address, which is never embedded).
  * Both may be expressions: the source follows the state.
+ *
+ * Media memory is the chat's, not the place's (ADR-074): a place loads its file when it is near the
+ * view, and when it is scrolled far away or collapsed it lets the URL go (`host.releaseFile`), so the
+ * bytes behind it are freed, keeps its height so the answer does not jump, and loads the file again
+ * when it is near once more.
  */
 function bindMediaSource(runtime, source, scope, holder, assign, hint) {
     const read = typeof source === "function"
         ? source
-        : () => ({ file: resolveValue(source.file, scope), src: resolveValue(source.src, scope) });
+        : () => ({ file: resolveValue(source.file, scope), src: resolveValue(source.src ?? source.embedUrl, scope) });
     const note = el("div", "hui-media__note");
     note.hidden = true;
     note.setAttribute("role", "status");
@@ -2971,10 +2990,23 @@ function bindMediaSource(runtime, source, scope, holder, assign, hint) {
     let timer = 0;
     let round = 0;
     let broken = false;
+    /** The file this place shows; it is loaded while the place is near the view. */
+    let wanted = "";
+    /** A look-up for `wanted` is running, waiting for the file, or has delivered. */
+    let started = false;
+    /** The file whose blob: URL is on the element: given back to the host when the place lets it go. */
+    let held = "";
+    /** The place is near the view. Without an observer (no layout, a test) it always is. */
+    let near = typeof IntersectionObserver !== "function";
+    let observer = null;
+    let frame = 0;
     const show = (state, text, actions) => {
         holder.classList.remove("hui-media--waiting", "hui-media--missing", "hui-media--remote");
         if (state) {
             holder.classList.add(`hui-media--${state}`);
+        }
+        if (state === "missing" || state === "remote") {
+            holder.style.minHeight = "";
         }
         note.replaceChildren();
         note.hidden = state === null;
@@ -2992,8 +3024,112 @@ function bindMediaSource(runtime, source, scope, holder, assign, hint) {
             timer = 0;
         }
     };
-    runtime.onDispose(stop);
+    const release = () => {
+        if (held) {
+            const name = held;
+            held = "";
+            runtime.host?.releaseFile?.(name);
+        }
+    };
+    runtime.onDispose(() => {
+        stop();
+        if (frame) {
+            cancelAnimationFrame(frame);
+        }
+        observer?.disconnect();
+        release();
+    });
     const subject = (fallback) => (typeof hint === "string" && hint.trim() ? hint.trim() : fallback);
+    const begin = () => {
+        const name = wanted;
+        const mine = round;
+        let attempts = 0;
+        started = true;
+        show("waiting", label(runtime.host, "Waiting for the file: {0}", [name]));
+        const attempt = async () => {
+            timer = 0;
+            let url = null;
+            let failed = false;
+            try {
+                url = await runtime.host.resolveFile(name);
+            }
+            catch {
+                failed = true;
+            }
+            if (mine !== round) {
+                // Let go or replaced while it was looked up: give the URL straight back.
+                if (typeof url === "string" && url) {
+                    runtime.host.releaseFile?.(name);
+                }
+                return;
+            }
+            if (typeof url === "string" && url) {
+                held = name;
+                assign(url);
+                show(null);
+                return;
+            }
+            attempts++;
+            if (failed || attempts >= fileWaitAttempts) {
+                show("missing", label(runtime.host, "File not found: {0}", [name]));
+                return;
+            }
+            timer = window.setTimeout(attempt, attempts < fileWaitFastAttempts ? fileWaitFastMs : fileWaitSlowMs);
+        };
+        void attempt();
+    };
+    // Far out of view or collapsed: stop looking, drop the element's URL and hand it back.
+    const evict = () => {
+        if (!wanted || !started) {
+            return;
+        }
+        if (held) {
+            holder.style.minHeight = `${Math.ceil(holder.getBoundingClientRect().height)}px`;
+        }
+        stop();
+        assign(null);
+        release();
+        started = false;
+        show(null);
+    };
+    const watch = tries => {
+        frame = 0;
+        if (typeof IntersectionObserver !== "function") {
+            return;
+        }
+        if (!holder.isConnected) {
+            if (tries < mediaMountFrames) {
+                frame = requestAnimationFrame(() => watch(tries + 1));
+            }
+            else {
+                // Never mounted where it can be watched: show the file without it.
+                near = true;
+                if (wanted && !started && typeof runtime.host?.resolveFile === "function") {
+                    begin();
+                }
+            }
+            return;
+        }
+        observer = new IntersectionObserver(entries => {
+            const latest = entries[entries.length - 1];
+            if (!latest) {
+                return;
+            }
+            near = latest.isIntersecting;
+            if (near) {
+                if (wanted && !started && typeof runtime.host?.resolveFile === "function") {
+                    begin();
+                }
+            }
+            else {
+                evict();
+            }
+        }, { root: scrollParent(holder), rootMargin: mediaNearMargin });
+        observer.observe(holder);
+    };
+    if (!near) {
+        frame = requestAnimationFrame(() => watch(0));
+    }
     runtime.effect(() => {
         const { file, src } = read() ?? {};
         const name = typeof file === "string" ? file.trim() : "";
@@ -3006,6 +3142,10 @@ function bindMediaSource(runtime, source, scope, holder, assign, hint) {
         currentName = name;
         broken = false;
         stop();
+        release();
+        wanted = "";
+        started = false;
+        holder.style.minHeight = "";
         assign(null);
         show(null);
         if (address) {
@@ -3027,35 +3167,13 @@ function bindMediaSource(runtime, source, scope, holder, assign, hint) {
             show("missing", label(runtime.host, "Files are not available here: {0}", [name]));
             return;
         }
-        const mine = round;
-        let attempts = 0;
-        show("waiting", label(runtime.host, "Waiting for the file: {0}", [name]));
-        const attempt = async () => {
-            timer = 0;
-            let url = null;
-            let failed = false;
-            try {
-                url = await runtime.host.resolveFile(name);
-            }
-            catch {
-                failed = true;
-            }
-            if (mine !== round) {
-                return;
-            }
-            if (typeof url === "string" && url) {
-                assign(url);
-                show(null);
-                return;
-            }
-            attempts++;
-            if (failed || attempts >= fileWaitAttempts) {
-                show("missing", label(runtime.host, "File not found: {0}", [name]));
-                return;
-            }
-            timer = window.setTimeout(attempt, attempts < fileWaitFastAttempts ? fileWaitFastMs : fileWaitSlowMs);
-        };
-        void attempt();
+        wanted = name;
+        if (near) {
+            begin();
+        }
+        else {
+            show("waiting", label(runtime.host, "Waiting for the file: {0}", [name]));
+        }
     });
     return {
         /** The element could not decode what the host gave it. */
@@ -3063,8 +3181,9 @@ function bindMediaSource(runtime, source, scope, holder, assign, hint) {
             broken = true;
             show("missing", label(runtime.host, "The file could not be opened: {0}", [currentName]));
         },
-        /** The element showed the file: forget an earlier failure. */
+        /** The element showed the file: forget an earlier failure, and the height kept while it was let go. */
         ok() {
+            holder.style.minHeight = "";
             if (broken) {
                 broken = false;
                 show(null);
@@ -3338,7 +3457,7 @@ function renderPlayer(runtime, node, scope, kind, depth) {
         figure.append(title);
     }
     const hasPlaylist = node.playlist !== undefined;
-    if (!hasPlaylist && node.file === undefined && node.src === undefined) {
+    if (!hasPlaylist && node.file === undefined && node.src === undefined && node.embedUrl === undefined) {
         return null;
     }
     const media = el(kind, "hui-player__media");

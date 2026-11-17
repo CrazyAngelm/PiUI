@@ -24,24 +24,52 @@ history stays native; a signed-out app and safe mode make no call.
   room) with the blocks that touched them. One file has one id however many
   blocks touched it. A file id of another chat, or one the host did not hand
   out, is `CHAT_FILE_UNAVAILABLE`.
-- **Every call re-checks the file.** Not a link, a regular file, the same
-  canonical path as when it was first seen; the bytes come from the one
-  handle that was validated. UNC, device (`\\.\`) and alternate-stream paths
-  are refused so a request cannot reach a network share.
+- **Every call re-checks the file, on the opened handle.** The host opens the
+  file first (no link, a regular file), then asks the operating system for the
+  final path of that very handle (`GetFinalPathNameByHandleW` on Windows; on
+  Unix the canonical path and the device/inode pair), compares it with the
+  path first seen and with the scope below, and reads, saves, opens and
+  reveals through that verified handle and path. A link swapped in between the
+  check and the read cannot redirect any of them. UNC, device (`\\.\`) and
+  alternate-stream paths are refused so a request cannot reach a network share.
+- **Scope: what a chat may serve.** A registered path is served only while its
+  final path is inside (a) the chat's verified working directory (its own
+  worktree when it has one, else the project folder), (b) the host's inline
+  store, (c) a harness's known output folder that the host resolves itself
+  (Codex: `<CODEX_HOME or ~/.codex>/generated_images`; the folder of other
+  harnesses is not known, so there is none), or (d) it is a file the chat's own
+  agent wrote or generated, wherever that is. A file the agent only read
+  outside (a) to (c) is never kept and never served: a read of `~/.ssh` or of
+  another project gives the chat no preview, card or action. The check runs when
+  the file is registered and again on every list, preview, save, open, reveal
+  and resolve, so a file that moved out (a link, a replaced folder) stops
+  being served. The scope is rebuilt per call from the session's current
+  folder; the WebView never supplies it.
 - **The kind comes from the bytes.** Magic-byte sniffing sets image, audio,
   video, PDF, text or other; the name is only a label. A PNG named `.txt` is an
   image. SVG is a card, never an image (it can carry script or links).
 - **Previews are bytes, shown as `blob:` URLs.** `preview` returns base64 for
   an image up to 20 MiB, audio or video up to 64 MiB. The WebView makes one
-  `blob:` URL per file, two transfers at a time, and revokes every URL when the
-  chat closes. The window's policy gains `img-src ... blob:` and
+  `blob:` URL per file, three transfers at a time, and revokes every URL when the
+  chat closes. One memory budget per chat (192 MiB) is shared by the gallery,
+  the widgets and the cards: a file's listed size is reserved before its bytes
+  are requested, a chat over its budget refuses the next preview instead of
+  growing, and a preview that scrolls far out of view or is collapsed gives its
+  bytes back and is fetched again when it is shown once more. The window's policy gains `img-src ... blob:` and
   `media-src 'self' blob:`; scripts, styles, connections and frames get no
   `blob:`. A card loads its preview when it scrolls into view.
-- **Open is for documents, not programs.** The host opens a file with the
-  system's default application only when it is not a program, script,
-  shortcut or installer (by extension, by magic bytes, and by the exec bit on
-  Unix): `CHAT_FILE_OPEN_REFUSED` otherwise. Save as and Open containing folder
-  stay available for those. Open containing folder uses Explorer
+- **Open is an allowlist of documents and media.** The host opens a file with
+  the system's default application only when its extension is one of png, jpg,
+  jpeg, gif, webp, wav, mp3, ogg, flac, m4a, mp4, m4v, mov, webm, pdf (the
+  sniffed bytes must be that same type) or txt, log, md, markdown, csv, json
+  (the bytes must be text), it is not a program by magic bytes and it has no
+  exec bit on Unix. Everything else, including `.msix`, `.appx`,
+  `.appinstaller`, scripts, shortcuts, archives, Office documents (macros,
+  linked content, DDE), SVG, HTML and XML, is `CHAT_FILE_OPEN_REFUSED`: a file
+  an agent wrote carries no mark-of-the-web, so the default application would
+  run it trusted. Save as and Open containing folder stay available for those.
+  The `openable` flag in the listing says the same thing, so the card shows
+  Open only where it will work. Open containing folder uses Explorer
   `/select,"<path>"` (one raw argument, so spaces, commas and `&` are safe),
   `open -R` on macOS and the file manager's folder on Linux.
 - **Save as is a copy through the host's save dialog.** The path comes from
@@ -85,11 +113,22 @@ history stays native; a signed-out app and safe mode make no call.
 - A closed chat fills its registry from its native history when the chat is
   opened (`HistoryChatFile`, not in safe mode); the same file or the same
   inline bytes of one block keep one id across reopenings.
-- **Not done:** the live producer. A running chat's files come from the
-  runtime's file events (`record_report`, wired at the event forwarder in
-  `workspace_api.rs`), which the bridges do not send yet; until they do, a live
-  chat shows cards only after it is closed and reopened, or for a name the
-  Intelligent UI resolves. There is no tool-row chip beside the card, and no
+- **Live refresh.** When the registry changes (a runtime file event, inline
+  bytes that finish writing on the blocking pool, a history load) the host
+  emits `piui://chat-files-v1` with `{protocol: 1, type: "changed", sessionId}`,
+  at most once per 250 ms per chat. It carries no file and no path, is
+  presentation-only and is not part of the revisioned workspace event stream.
+  The chat re-lists (after 400 ms of quiet), so a file that finishes writing
+  after its block shows up without another message. The event is local (no
+  network, no account). The Lab fake publishes it after a turn that reports files.
+- **A turn is split by the transcript's rules.** A turn that was interrupted
+  and followed by a new user message is its own turn, so its files keep their
+  answer; placement is memoized and does not run again on every streamed token.
+- **Not done:** the bridges send file events only for what they report today;
+  a harness that reports none shows cards after the chat is reopened, or for a
+  name the Intelligent UI resolves. The thread-to-session mapping of the Codex
+  output folder is not verified, so (c) admits the whole `generated_images`
+  folder of that harness. There is no tool-row chip beside the card, and no
   Nano web (`owner`) reveal port.
 - Synthetic evidence only (Rust unit tests, vitest, Lab e2e). Opening or
   revealing a real file in Explorer is not exercised by automation.

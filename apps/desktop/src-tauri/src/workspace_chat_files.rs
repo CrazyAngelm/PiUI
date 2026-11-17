@@ -6,12 +6,23 @@
 //! The WebView never names a path. It sends a session id and an opaque file
 //! id the host handed out. The host keeps, per session, a registry of the
 //! files that session's own native events or native history reported (at most
-//! 200), re-checks a file on every call (no link, a regular file, the same
-//! canonical path as when it was first seen) and reads the bytes from the one
-//! handle it validated. A file's kind comes from its magic bytes, never from
-//! its name. Bytes the agent only returned inline (a read image, an MCP
-//! result) are stored by the host under its app data, capped per session, and
-//! cleared at startup. Nothing is written into a project.
+//! 200). Every call opens the file first, names the file that handle really
+//! is (`GetFinalPathNameByHandleW`; on Unix the canonical path whose device
+//! and inode match the handle), and checks that final path: not a link, a
+//! regular file, the same path as when it was first seen, and inside this
+//! session's scope (below). The bytes are read from that one handle. A file's
+//! kind comes from its magic bytes, never from its name. Bytes the agent only
+//! returned inline (a read image, an MCP result) are stored by the host under
+//! its app data, capped per session, and cleared at startup. Nothing is
+//! written into a project.
+//!
+//! Scope (ADR-074): a registered path is served only when its final path is
+//! inside (a) the session's verified working folder (its own worktree when it
+//! has one), (b) the host's own inline store for the session, (c) a folder the
+//! host resolves for the session's harness (Codex's generated images), or
+//! (d) the agent itself wrote or generated it (origin `written` or
+//! `generated`). A file the agent only read outside (a) to (c) is never
+//! served. The check runs when a file is reported and on every operation.
 
 use super::attachments::{display_path, sniff_image};
 use super::*;
@@ -22,6 +33,14 @@ use std::ffi::OsString;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Component;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+/// The host event that tells the WebView a session's files changed
+/// (`contracts/chat-files-v1.ts`); it carries no file, only the session.
+pub const CHAT_FILES_EVENT: &str = "piui://chat-files-v1";
+/// Changes within this window reach the WebView as one event.
+const CHANGE_COALESCE: Duration = Duration::from_millis(250);
 
 pub const CHAT_FILES_PROTOCOL: u8 = 1;
 pub(crate) const CHAT_FILES_DIRECTORY: &str = "chat-files-v1";
@@ -41,54 +60,6 @@ const MAX_PATH_BYTES: usize = 4_096;
 const MAX_NAME_BYTES: usize = 512;
 /// Bytes read to identify a file.
 const HEAD_BYTES: u64 = 4_096;
-
-/// Extensions the host never hands to the system's default application:
-/// programs, scripts, shortcuts and installers. Reveal and Save stay allowed.
-const NEVER_OPENED: &[&str] = &[
-    "exe",
-    "bat",
-    "cmd",
-    "ps1",
-    "lnk",
-    "msi",
-    "scr",
-    "com",
-    "vbs",
-    "js",
-    "jar",
-    "hta",
-    "reg",
-    "dll",
-    "url",
-    "vbe",
-    "jse",
-    "wsf",
-    "wsh",
-    "msc",
-    "cpl",
-    "pif",
-    "msp",
-    "mst",
-    "scf",
-    "inf",
-    "ps2",
-    "psm1",
-    "psc1",
-    "ps1xml",
-    "gadget",
-    "application",
-    "appref-ms",
-    "sh",
-    "bash",
-    "command",
-    "desktop",
-    "appimage",
-    "run",
-    "app",
-    "pkg",
-    "py",
-    "pyw",
-];
 
 #[derive(Debug, Deserialize)]
 #[serde(
@@ -373,8 +344,41 @@ fn extension_of(name: &str) -> Option<String> {
     Some(extension.to_ascii_lowercase())
 }
 
-fn extension_never_opened(extension: Option<&str>) -> bool {
-    extension.is_some_and(|extension| NEVER_OPENED.contains(&extension))
+/// Whether the system's default application may be started for this file.
+/// An allowlist: only a document or media type whose extension AND bytes agree
+/// (a `.png` that is a PNG, a `.txt` that is text). Programs, scripts,
+/// shortcuts, installers and packages (`.exe`, `.msix`, `.appinstaller`,
+/// `.lnk`, `.jar`, ...), web pages and SVG (they can run script) and Office
+/// files (macros, linked content, DDE; an agent-written file carries no
+/// "downloaded" mark) are never started: Save as and Open containing folder
+/// stay.
+pub(crate) fn open_allowed(extension: Option<&str>, sniffed: &Sniffed) -> bool {
+    let Some(extension) = extension else {
+        return false;
+    };
+    if sniffed.executable {
+        return false;
+    }
+    let mime = match extension {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "wav" => "audio/wav",
+        "mp3" => "audio/mpeg",
+        "ogg" => "audio/ogg",
+        "flac" => "audio/flac",
+        "m4a" => "audio/mp4",
+        "mp4" | "m4v" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        "pdf" => "application/pdf",
+        "txt" | "log" | "md" | "markdown" | "csv" | "json" => {
+            return sniffed.kind == ChatFileKind::Text;
+        }
+        _ => return false,
+    };
+    sniffed.mime == mime
 }
 
 fn preview_limit(kind: ChatFileKind) -> Option<u64> {
@@ -403,24 +407,156 @@ pub(crate) enum ChatFileInput {
     },
 }
 
+/// Where a session's files may be served from (see the module notes).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FileScope {
+    /// The session's canonical working folder (its worktree when it has one).
+    working: Option<PathBuf>,
+    /// Canonical folders any path file may live in whatever its origin: the
+    /// working folder and the folders the host resolves for the harness.
+    roots: Vec<PathBuf>,
+    /// The canonical folder of the host's inline store for this session.
+    inline: Option<PathBuf>,
+}
+
+impl FileScope {
+    fn contains(&self, canonical: &Path) -> bool {
+        self.roots.iter().any(|root| within(canonical, root))
+    }
+
+    fn contains_inline(&self, canonical: &Path) -> bool {
+        self.inline
+            .as_ref()
+            .is_some_and(|root| within(canonical, root))
+    }
+
+    /// The canonical working folder, when the session has a usable one.
+    fn working(&self) -> Option<&Path> {
+        self.working.as_deref()
+    }
+}
+
+/// Whether `path` is `root` or below it (Windows ignores case). Both are
+/// absolute; the verbatim prefix is dropped first.
+fn within(path: &Path, root: &Path) -> bool {
+    let (path, root) = (display_path(path), display_path(root));
+    if cfg!(windows) {
+        Path::new(&path.to_lowercase()).starts_with(root.to_lowercase())
+    } else {
+        Path::new(&path).starts_with(&root)
+    }
+}
+
+/// The user's home folder, where the host looks for a harness's own folders.
+fn home_directory() -> Option<PathBuf> {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+}
+
+/// Folders a harness writes its own generated files to, resolved by the host
+/// (never by the WebView or an event). Codex saves the images its
+/// `imageGeneration` tool makes under `<Codex home>/generated_images/<thread>/`;
+/// no other harness has such a folder.
+pub(crate) fn output_roots(harness: HarnessKind) -> Vec<PathBuf> {
+    match harness {
+        HarnessKind::Codex => std::env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .filter(|home| home.is_absolute())
+            .or_else(|| home_directory().map(|home| home.join(".codex")))
+            .map(|home| home.join("generated_images"))
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Payload of [`CHAT_FILES_EVENT`]: the session whose files changed. The
+/// WebView then asks `workspace_chat_files_v1` for the listing again.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatFilesChanged {
+    pub protocol: u8,
+    pub session_id: String,
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+}
+
+impl ChatFilesChanged {
+    pub(crate) fn new(session_id: &str) -> Self {
+        Self {
+            protocol: CHAT_FILES_PROTOCOL,
+            session_id: session_id.to_owned(),
+            kind: "changed",
+        }
+    }
+}
+
+pub(crate) type ChatFilesPublisher = Arc<dyn Fn(ChatFilesChanged) + Send + Sync>;
+
+/// Coalesces "this session's files changed" into one host event per window.
+/// Cheap to clone; safe to call from any thread inside the runtime.
+#[derive(Clone)]
+pub(crate) struct ChangeNotifier {
+    inner: Arc<NotifierInner>,
+}
+
+struct NotifierInner {
+    pending: AtomicBool,
+    publish: Box<dyn Fn() + Send + Sync>,
+}
+
+impl ChangeNotifier {
+    pub(crate) fn new(publish: impl Fn() + Send + Sync + 'static) -> Self {
+        Self {
+            inner: Arc::new(NotifierInner {
+                pending: AtomicBool::new(false),
+                publish: Box::new(publish),
+            }),
+        }
+    }
+
+    /// Something in the registry changed: one event follows shortly after.
+    pub(crate) fn changed(&self) {
+        if self.inner.pending.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let inner = Arc::clone(&self.inner);
+        tokio::spawn(async move {
+            tokio::time::sleep(CHANGE_COALESCE).await;
+            inner.pending.store(false, Ordering::Release);
+            (inner.publish)();
+        });
+    }
+}
+
 /// Records a reported file without blocking the event forwarder: inline
-/// bytes are written on the blocking pool, a path is only noted.
+/// bytes are written on the blocking pool, a path is only noted. A kept file
+/// tells `notifier`, so the WebView lists again once the registry has it.
 /// Called by the session event forwarder in `workspace_api.rs`.
 pub(crate) fn record_report(
     registry: &Arc<ChatFileRegistry>,
     session_id: &str,
     report: ChatFileReport,
     base: Option<PathBuf>,
+    scope: &FileScope,
+    notifier: &ChangeNotifier,
 ) {
     match report.source {
         ChatFileInput::Path(_) => {
-            let _ = registry.record(session_id, report, base.as_deref());
+            if registry.record(session_id, report, base.as_deref(), scope) {
+                notifier.changed();
+            }
         }
         ChatFileInput::Inline { .. } => {
             let registry = Arc::clone(registry);
             let session_id = session_id.to_owned();
+            let scope = scope.clone();
+            let notifier = notifier.clone();
             tokio::task::spawn_blocking(move || {
-                let _ = registry.record(&session_id, report, None);
+                if registry.record(&session_id, report, None, &scope) {
+                    notifier.changed();
+                }
             });
         }
     }
@@ -433,6 +569,7 @@ pub(crate) fn record_history(
     session_id: &str,
     base: &Path,
     files: &[HistoryChatFile],
+    scope: &FileScope,
 ) {
     for file in files {
         let origin = match file.origin {
@@ -442,7 +579,7 @@ pub(crate) fn record_history(
         };
         match (&file.path, &file.inline) {
             (Some(path), _) => {
-                registry.register_path(session_id, &file.block_id, path, origin, Some(base));
+                registry.register_path(session_id, &file.block_id, path, origin, Some(base), scope);
             }
             (None, Some((mime, bytes))) => {
                 registry.register_inline(session_id, &file.block_id, mime, bytes, origin);
@@ -494,7 +631,17 @@ struct Entry {
     digest: Option<[u8; 32]>,
 }
 
+/// Written or generated by the session's own agent.
+fn agent_origin(origin: ChatFileOrigin) -> bool {
+    matches!(origin, ChatFileOrigin::Written | ChatFileOrigin::Generated)
+}
+
 impl Entry {
+    /// The agent itself wrote or generated this file in some block.
+    fn agent_made(&self) -> bool {
+        self.blocks.iter().any(|(_, origin)| agent_origin(*origin))
+    }
+
     fn touch(&mut self, block_id: &str, origin: ChatFileOrigin) {
         if let Some(existing) = self.blocks.iter_mut().find(|(id, _)| id == block_id) {
             existing.1 = origin;
@@ -645,6 +792,33 @@ impl ChatFileRegistry {
         })
     }
 
+    /// The scope of a session: its working folder, the folders the host
+    /// resolved for its harness (`outputs`) and its own inline store. Folders
+    /// that do not exist are left out, so they admit nothing.
+    pub(crate) fn scope(
+        &self,
+        session_id: &str,
+        working: Option<&Path>,
+        outputs: &[PathBuf],
+    ) -> FileScope {
+        let working = working.and_then(|path| fs::canonicalize(path).ok());
+        let mut roots: Vec<PathBuf> = working.iter().cloned().collect();
+        roots.extend(
+            outputs
+                .iter()
+                .filter_map(|path| fs::canonicalize(path).ok()),
+        );
+        let inline = Uuid::parse_str(session_id)
+            .ok()
+            .and_then(|_| fs::canonicalize(&self.root).ok())
+            .map(|root| root.join(session_id));
+        FileScope {
+            working,
+            roots,
+            inline,
+        }
+    }
+
     /// Records one reported file for `session_id`. `base` resolves a relative
     /// path (the session's folder). Returns whether the file was kept.
     pub(crate) fn record(
@@ -652,6 +826,7 @@ impl ChatFileRegistry {
         session_id: &str,
         report: ChatFileReport,
         base: Option<&Path>,
+        scope: &FileScope,
     ) -> bool {
         let ChatFileReport {
             block_id,
@@ -660,7 +835,7 @@ impl ChatFileRegistry {
         } = report;
         match source {
             ChatFileInput::Path(path) => {
-                self.register_path(session_id, &block_id, &path, origin, base)
+                self.register_path(session_id, &block_id, &path, origin, base, scope)
             }
             ChatFileInput::Inline { mime, bytes } => {
                 self.register_inline(session_id, &block_id, &mime, &bytes, origin)
@@ -668,6 +843,9 @@ impl ChatFileRegistry {
         }
     }
 
+    /// Registers a reported path. A file the agent did not itself write or
+    /// generate is kept only when it lies inside `scope`; the check is
+    /// repeated, on the opened handle, on every operation.
     pub(crate) fn register_path(
         &self,
         session_id: &str,
@@ -675,6 +853,7 @@ impl ChatFileRegistry {
         path: &Path,
         origin: ChatFileOrigin,
         base: Option<&Path>,
+        scope: &FileScope,
     ) -> bool {
         if !valid_block_id(block_id) || session_id.is_empty() {
             return false;
@@ -685,6 +864,12 @@ impl ChatFileRegistry {
         let Some(name) = display_file_name(&absolute) else {
             return false;
         };
+        // Outside the agent's own output only the session's folders count.
+        // The path is resolved first, so a link cannot smuggle a file in.
+        let inside = agent_origin(origin) || {
+            let probe = fs::canonicalize(&absolute).unwrap_or_else(|_| absolute.clone());
+            scope.contains(&probe)
+        };
         let Ok(mut sessions) = self.sessions.lock() else {
             return false;
         };
@@ -694,10 +879,16 @@ impl ChatFileRegistry {
             .iter()
             .position(|entry| !entry.owned && same_path(&entry.path, &absolute))
         {
+            if !inside && !files.entries[position].agent_made() {
+                return false;
+            }
             let mut entry = files.entries.remove(position);
             entry.touch(block_id, origin);
             files.entries.push(entry);
             return true;
+        }
+        if !inside {
+            return false;
         }
         let evicted = push_entry(
             files,
@@ -913,20 +1104,79 @@ fn remove_stored(paths: &[PathBuf]) {
 /// A file that passed every check, held open.
 struct OpenedFile {
     file: fs::File,
+    /// The final path of the opened handle itself (not a name looked up again).
     canonical: PathBuf,
     len: u64,
     #[cfg(unix)]
     executable_bit: bool,
 }
 
-/// Re-checks `entry` and opens it: not a link, still the path first seen,
-/// a regular file. The bytes are then read from this handle only.
-fn open_entry(entry: &Entry) -> Result<OpenedFile, ChatFilesError> {
+/// The path of the file `file` really is. Windows asks the handle
+/// (`GetFinalPathNameByHandleW`), so a path swapped after the open changes
+/// nothing. Elsewhere the canonical path of `path` counts only when its device
+/// and inode are the handle's.
+#[cfg(windows)]
+fn final_path(file: &fs::File, _path: &Path) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
+    };
+
+    let handle = file.as_raw_handle();
+    let mut buffer = vec![0_u16; 1_024];
+    loop {
+        // SAFETY: `handle` stays valid while `file` is borrowed; the buffer
+        // pointer and its length in UTF-16 units describe one live allocation.
+        let length = unsafe {
+            GetFinalPathNameByHandleW(
+                handle,
+                buffer.as_mut_ptr(),
+                u32::try_from(buffer.len()).ok()?,
+                FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+            )
+        } as usize;
+        if length == 0 || length > 32_768 {
+            return None;
+        }
+        if length < buffer.len() {
+            buffer.truncate(length);
+            return Some(PathBuf::from(OsString::from_wide(&buffer)));
+        }
+        buffer.resize(length + 1, 0);
+    }
+}
+
+#[cfg(unix)]
+fn final_path(file: &fs::File, path: &Path) -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let canonical = fs::canonicalize(path).ok()?;
+    let opened = file.metadata().ok()?;
+    let named = fs::metadata(&canonical).ok()?;
+    (opened.dev() == named.dev() && opened.ino() == named.ino()).then_some(canonical)
+}
+
+#[cfg(not(any(windows, unix)))]
+fn final_path(_file: &fs::File, _path: &Path) -> Option<PathBuf> {
+    None
+}
+
+/// Opens `entry` and checks the opened handle: the file is not a link, is a
+/// regular file, is the path first seen, and its final path is inside `scope`.
+/// The bytes are then read from this handle only. The open comes first, so a
+/// path replaced between a check and a read cannot change what is served.
+fn open_entry(entry: &Entry, scope: &FileScope) -> Result<OpenedFile, ChatFilesError> {
     let link = fs::symlink_metadata(&entry.path).map_err(|_| ChatFilesError::Unavailable)?;
     if link.file_type().is_symlink() {
         return Err(ChatFilesError::Unavailable);
     }
-    let canonical = fs::canonicalize(&entry.path).map_err(|_| ChatFilesError::Unavailable)?;
+    let file = fs::File::open(&entry.path).map_err(|_| ChatFilesError::Unavailable)?;
+    let metadata = file.metadata().map_err(|_| ChatFilesError::Unavailable)?;
+    if !metadata.is_file() {
+        return Err(ChatFilesError::Unavailable);
+    }
+    let canonical = final_path(&file, &entry.path).ok_or(ChatFilesError::Unavailable)?;
     if entry
         .pinned
         .as_ref()
@@ -934,9 +1184,12 @@ fn open_entry(entry: &Entry) -> Result<OpenedFile, ChatFilesError> {
     {
         return Err(ChatFilesError::Unavailable);
     }
-    let file = fs::File::open(&canonical).map_err(|_| ChatFilesError::Unavailable)?;
-    let metadata = file.metadata().map_err(|_| ChatFilesError::Unavailable)?;
-    if !metadata.is_file() {
+    let allowed = if entry.owned {
+        scope.contains_inline(&canonical)
+    } else {
+        entry.agent_made() || scope.contains(&canonical)
+    };
+    if !allowed {
         return Err(ChatFilesError::Unavailable);
     }
     Ok(OpenedFile {
@@ -975,7 +1228,14 @@ fn inspect_opened(entry: &Entry, opened: &OpenedFile) -> Result<Inspected, ChatF
     let program = opened.executable_bit;
     #[cfg(not(unix))]
     let program = false;
-    let openable = !sniffed.executable && !program && !extension_never_opened(extension.as_deref());
+    // What opens is the file the handle is: its own name decides, not the label.
+    let opened_extension = opened
+        .canonical
+        .file_name()
+        .and_then(|name| extension_of(&name.to_string_lossy()));
+    let openable = !program
+        && opened_extension == extension
+        && open_allowed(opened_extension.as_deref(), &sniffed);
     Ok(Inspected {
         sniffed,
         size: opened.len,
@@ -1025,21 +1285,21 @@ fn describe(
     }
 }
 
-fn inspect(entry: &Entry) -> Result<Inspected, ChatFilesError> {
-    let opened = open_entry(entry)?;
+fn inspect(entry: &Entry, scope: &FileScope) -> Result<Inspected, ChatFilesError> {
+    let opened = open_entry(entry, scope)?;
     inspect_opened(entry, &opened)
 }
 
 /// Every file of a session with one entry per reporting block. Also returns
 /// the canonical paths to pin.
-fn list_files(entries: &[Entry]) -> (Vec<ChatFile>, Vec<(String, PathBuf)>) {
+fn list_files(entries: &[Entry], scope: &FileScope) -> (Vec<ChatFile>, Vec<(String, PathBuf)>) {
     let mut files = Vec::new();
     let mut pins = Vec::new();
     for entry in entries {
         if entry.blocks.is_empty() {
             continue;
         }
-        let inspected = inspect(entry);
+        let inspected = inspect(entry, scope);
         if let Ok(inspected) = &inspected
             && entry.pinned.is_none()
         {
@@ -1053,8 +1313,11 @@ fn list_files(entries: &[Entry]) -> (Vec<ChatFile>, Vec<(String, PathBuf)>) {
 }
 
 /// The preview bytes of a file, read from the validated handle.
-fn preview_bytes(entry: &Entry) -> Result<(&'static str, Vec<u8>), ChatFilesError> {
-    let mut opened = open_entry(entry)?;
+fn preview_bytes(
+    entry: &Entry,
+    scope: &FileScope,
+) -> Result<(&'static str, Vec<u8>), ChatFilesError> {
+    let mut opened = open_entry(entry, scope)?;
     let inspected = inspect_opened(entry, &opened)?;
     let limit = preview_limit(inspected.sniffed.kind).ok_or(ChatFilesError::NotPreviewable)?;
     if !is_previewable(inspected.sniffed.kind, inspected.size) {
@@ -1083,8 +1346,8 @@ fn preview_bytes(entry: &Entry) -> Result<(&'static str, Vec<u8>), ChatFilesErro
 
 /// Copies the validated file to `destination` through a sibling temporary
 /// file, so a failed copy or a destination that is the source never loses data.
-fn copy_to(entry: &Entry, destination: &Path) -> Result<(), ChatFilesError> {
-    let mut opened = open_entry(entry)?;
+fn copy_to(entry: &Entry, scope: &FileScope, destination: &Path) -> Result<(), ChatFilesError> {
+    let mut opened = open_entry(entry, scope)?;
     let parent = destination.parent().ok_or(ChatFilesError::Failed)?;
     let name = destination.file_name().ok_or(ChatFilesError::Failed)?;
     let mut temporary_name: OsString = name.to_os_string();
@@ -1391,14 +1654,21 @@ enum Resolution {
     Workspace(PathBuf),
 }
 
-fn files_session(host: &HostState, session_id: &str) -> Result<PathBuf, WorkspaceError> {
+/// The session's scope, built from the verified project, its worktree and its
+/// harness on every call, so a trust change or a removed worktree takes effect
+/// at once.
+fn files_scope(host: &HostState, session_id: &str) -> Result<FileScope, WorkspaceError> {
     validate_session_id(session_id)?;
     let record = host.workspace.record(session_id)?;
-    Ok(
-        verified_project_directory(host, &record.workspace_id, true)?
-            .canonical_path()
-            .to_path_buf(),
-    )
+    let project = verified_project_directory(host, &record.workspace_id, true)?;
+    let working = host
+        .workspace
+        .session_cwd(session_id, project.canonical_path());
+    Ok(host.workspace.inner.chat_files.scope(
+        session_id,
+        working.as_deref(),
+        &output_roots(record.harness),
+    ))
 }
 
 fn known_entry(
@@ -1423,12 +1693,12 @@ async fn blocking<T: Send + 'static>(
         .map_err(WorkspaceError::from)
 }
 
-fn resolved_file(entry: &Entry) -> Option<ChatFile> {
+fn resolved_file(entry: &Entry, scope: &FileScope) -> Option<ChatFile> {
     let origin = entry
         .blocks
         .last()
         .map_or(ChatFileOrigin::Returned, |(_, origin)| *origin);
-    let inspected = inspect(entry);
+    let inspected = inspect(entry, scope);
     inspected
         .as_ref()
         .ok()
@@ -1448,9 +1718,9 @@ pub(crate) async fn run_chat_files(
     let registry = Arc::clone(&host.workspace.inner.chat_files);
     match command {
         ChatFilesCommand::List { session_id } => {
-            files_session(host, &session_id)?;
+            let scope = files_scope(host, &session_id)?;
             let entries = registry.entries(&session_id);
-            let (files, pins) = blocking(move || Ok(list_files(&entries))).await?;
+            let (files, pins) = blocking(move || Ok(list_files(&entries, &scope))).await?;
             for (file_id, canonical) in pins {
                 registry.pin(&session_id, &file_id, canonical);
             }
@@ -1464,9 +1734,9 @@ pub(crate) async fn run_chat_files(
             session_id,
             file_id,
         } => {
-            files_session(host, &session_id)?;
+            let scope = files_scope(host, &session_id)?;
             let entry = known_entry(&registry, &session_id, &file_id)?;
-            let (media_type, bytes) = blocking(move || preview_bytes(&entry)).await?;
+            let (media_type, bytes) = blocking(move || preview_bytes(&entry, &scope)).await?;
             Ok(ChatFilesResult::Preview {
                 protocol: CHAT_FILES_PROTOCOL,
                 session_id,
@@ -1479,12 +1749,12 @@ pub(crate) async fn run_chat_files(
             session_id,
             file_id,
         } => {
-            files_session(host, &session_id)?;
+            let scope = files_scope(host, &session_id)?;
             let entry = known_entry(&registry, &session_id, &file_id)?;
-            // Refuse a missing file before the dialog opens.
+            // Refuse a missing or out-of-scope file before the dialog opens.
             {
-                let entry = entry.clone();
-                blocking(move || open_entry(&entry).map(|_| ())).await?;
+                let (entry, scope) = (entry.clone(), scope.clone());
+                blocking(move || open_entry(&entry, &scope).map(|_| ())).await?;
             }
             let suggested = entry.name.clone();
             // The dialog is modal to the person, not to other host operations.
@@ -1493,8 +1763,9 @@ pub(crate) async fn run_chat_files(
                 .map_err(|_| WorkspaceError::runtime())?;
             let saved = match chosen {
                 Some(destination) => {
-                    // The dialog took time: check the file again before copying.
-                    blocking(move || copy_to(&entry, &destination)).await?;
+                    // The dialog took time: check the file again, scope included,
+                    // before copying.
+                    blocking(move || copy_to(&entry, &scope, &destination)).await?;
                     true
                 }
                 None => false,
@@ -1510,13 +1781,15 @@ pub(crate) async fn run_chat_files(
             session_id,
             file_id,
         } => {
-            files_session(host, &session_id)?;
+            let scope = files_scope(host, &session_id)?;
             let entry = known_entry(&registry, &session_id, &file_id)?;
             if entry.owned {
                 return Err(ChatFilesError::Failed.into());
             }
+            // The path handed to the file manager is the final path of the
+            // handle that passed the checks.
             let canonical =
-                blocking(move || open_entry(&entry).map(|opened| opened.canonical)).await?;
+                blocking(move || open_entry(&entry, &scope).map(|opened| opened.canonical)).await?;
             blocking(move || actions.reveal(&canonical)).await?;
             Ok(ChatFilesResult::Revealed {
                 protocol: CHAT_FILES_PROTOCOL,
@@ -1528,10 +1801,10 @@ pub(crate) async fn run_chat_files(
             session_id,
             file_id,
         } => {
-            files_session(host, &session_id)?;
+            let scope = files_scope(host, &session_id)?;
             let entry = known_entry(&registry, &session_id, &file_id)?;
             blocking(move || {
-                let inspected = inspect(&entry)?;
+                let inspected = inspect(&entry, &scope)?;
                 if !inspected.openable {
                     return Err(ChatFilesError::OpenRefused);
                 }
@@ -1545,32 +1818,38 @@ pub(crate) async fn run_chat_files(
             })
         }
         ChatFilesCommand::Resolve { session_id, name } => {
-            let root = files_session(host, &session_id)?;
+            let scope = files_scope(host, &session_id)?;
             let components = mention_components(&name).map_err(WorkspaceError::from)?;
             let entries = registry.entries(&session_id);
-            let found = blocking(move || {
-                let last = components.last().cloned().unwrap_or_default();
-                let with_folders = components.len() > 1;
-                // The registry first: the latest file with this name wins.
-                for entry in entries.iter().rev() {
-                    let matches = if with_folders {
-                        path_ends_with(entry, &components)
-                    } else {
-                        name_matches(&entry.name, &last)
-                    };
-                    if matches && let Some(file) = resolved_file(entry) {
-                        return Ok(Some(Resolution::Registered(file)));
+            let found = {
+                let scope = scope.clone();
+                blocking(move || {
+                    let last = components.last().cloned().unwrap_or_default();
+                    let with_folders = components.len() > 1;
+                    // The registry first: the latest file with this name wins.
+                    for entry in entries.iter().rev() {
+                        let matches = if with_folders {
+                            path_ends_with(entry, &components)
+                        } else {
+                            name_matches(&entry.name, &last)
+                        };
+                        if matches && let Some(file) = resolved_file(entry, &scope) {
+                            return Ok(Some(Resolution::Registered(file)));
+                        }
                     }
-                }
-                Ok(workspace_file(&root, &components).map(Resolution::Workspace))
-            })
-            .await?;
+                    Ok(scope
+                        .working()
+                        .and_then(|root| workspace_file(root, &components))
+                        .map(Resolution::Workspace))
+                })
+                .await?
+            };
             let file = match found {
                 None => None,
                 Some(Resolution::Registered(file)) => Some(file),
                 Some(Resolution::Workspace(path)) => {
                     match registry.register_mention(&session_id, &path) {
-                        Some(entry) => blocking(move || Ok(resolved_file(&entry))).await?,
+                        Some(entry) => blocking(move || Ok(resolved_file(&entry, &scope))).await?,
                         None => None,
                     }
                 }

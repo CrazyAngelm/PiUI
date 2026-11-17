@@ -16,6 +16,8 @@ export interface IntelligentUiHost {
    * waits and asks again); a rejection means it can never be shown.
    */
   resolveFile?: (name: string) => Promise<string | null>;
+  /** A place stopped showing the URL `resolveFile(name)` gave it (scrolled far away, collapsed); the host may free it. */
+  releaseFile?: (name: string) => void;
   /** Typesets TeX into the element (the element already shows the source as text). */
   renderFormula?: (element: HTMLElement, tex: string, display: boolean) => void;
   /** Short status text for the person (a copied or failed link). */

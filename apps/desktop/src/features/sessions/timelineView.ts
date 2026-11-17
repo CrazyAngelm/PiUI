@@ -185,7 +185,7 @@ function isPendingSteer(block: TimelineBlock): boolean {
  * turn. While the agent works (`running` is not known to be false), a pending
  * steer joins the turn in progress instead of ending it.
  */
-function splitTurns(blocks: readonly TimelineBlock[], running: boolean | 'unknown'): TimelineBlock[][] {
+export function splitTurns(blocks: readonly TimelineBlock[], running: boolean | 'unknown'): TimelineBlock[][] {
   const turns: TimelineBlock[][] = [];
   for (const block of blocks) {
     if ((block.kind === 'user' && !(running !== false && isPendingSteer(block))) || turns.length === 0) turns.push([]);

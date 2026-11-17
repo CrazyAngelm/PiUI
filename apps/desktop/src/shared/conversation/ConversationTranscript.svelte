@@ -69,6 +69,8 @@
     decorateMessageHeader?: ConversationOwner['decorateMessageHeader'];
     printMode?: boolean;
     announceMessages?: boolean;
+    /** The harness of the chat; only a Codex answer has its service markup removed. */
+    answerHarness?: string | undefined;
     messageControls?: readonly ConversationMessageControls[];
     onMessageAction?: (id: string, action: ConversationMessageAction) => Promise<void>;
     busyMessageActions?: Readonly<Record<string, boolean>>;
@@ -104,6 +106,7 @@
     decorateMessageHeader,
     printMode = false,
     announceMessages = false,
+    answerHarness = undefined,
     messageControls,
     onMessageAction,
     busyMessageActions = {},
@@ -492,7 +495,7 @@
       const text = await loadFull(block);
       if (disposed) return;
       if (copy) {
-        await navigator.clipboard.writeText(summarizeInteractiveBlocks(stripServiceMarkup(text)));
+        await navigator.clipboard.writeText(summarizeInteractiveBlocks(stripServiceMarkup(text, false, answerHarness)));
         if (!disposed) presentation.notify('success', $t('Answer copied'));
       }
     } catch {
@@ -509,6 +512,7 @@
     busy: (id) => busyAnswers[id] === true,
     canLoad: () => !!readHistory,
     load: (block) => answerAction(block, false),
+    get harness() { return answerHarness; },
   });
 
   function time(value: string | undefined): string {
@@ -636,7 +640,7 @@
                     <pre>{block.text}</pre>
                   </details>
                 {:else if block.text}
-                  {@const shown = answerText(block, fullAnswers[block.id])}
+                  {@const shown = answerText(block, fullAnswers[block.id], answerHarness)}
                   {#if shown !== ''}
                     <div class="message-markdown" use:decorate={block}>
                       {#if appearance?.literal}<p class="literal">{shown}</p>{:else}<MarkdownContent source={shown} streaming={block.status === 'streaming'} rich={richMarkdown ?? !!decorator} widgets={!!decorator} {printMode} />{/if}

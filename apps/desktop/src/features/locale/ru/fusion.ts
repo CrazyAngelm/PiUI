@@ -173,6 +173,31 @@ export const fusionRu: Readonly<Record<string, string>> = {
   'The sidekick conversation is read-only: the lead gives it work through briefs.':
     'Беседа напарника доступна только для чтения: ведущий даёт ему работу через поручения.',
 
+  // Sidekick settings
+  'Detach sidekick': 'Отключить напарника',
+  'Stop the running round or detach the idle sidekick. Stop pair also stops the lead. Reset retires the sidekick conversation.':
+    'Остановите текущий раунд или отключите свободного напарника. Остановка пары также останавливает ведущего. Сброс закрывает беседу напарника.',
+  'Sidekick settings': 'Настройки напарника',
+  'Change sidekick model': 'Сменить модель напарника',
+  'Replace sidekick': 'Сменить напарника',
+  'Start fresh sidekick': 'Запустить нового напарника',
+  'Apply model settings': 'Применить настройки модели',
+  'This starts a fresh sidekick conversation with no earlier context. The old conversation stays readable.':
+    'Откроется новая беседа напарника без прежнего контекста. Старую беседу можно будет читать.',
+  'Finish or stop the open sidekick round first.': 'Сначала завершите или остановите текущий раунд напарника.',
+  'Reconcile or abandon the uncertain sidekick round first.': 'Сначала сверьте или закройте раунд с неизвестным результатом.',
+  'Deliver the pending sidekick report first.': 'Сначала доставьте ожидающий отчёт напарника.',
+  'Check, redeliver or dismiss the uncertain sidekick report first.': 'Сначала проверьте, отправьте повторно или отклоните отчёт с неизвестным статусом доставки.',
+  'Stop the pair or detach the current sidekick before replacing it.': 'Перед заменой остановите пару или отключите текущего напарника.',
+  'Wait for the current sidekick operation to finish.': 'Дождитесь завершения текущей операции с напарником.',
+  'This change needs a fresh sidekick conversation. Review and confirm again.': 'Для изменения нужна новая беседа напарника. Проверьте выбор и подтвердите его ещё раз.',
+  'This model is missing from the current catalog. Choose another model.': 'Этой модели нет в текущем каталоге. Выберите другую модель.',
+  'Choose a reasoning level offered by this model.': 'Выберите уровень рассуждения, доступный для этой модели.',
+  "This sidekick does not fit the lead's permissions.": 'Права этого напарника выходят за пределы прав ведущего.',
+  'The new sidekick could not start. Check the harness and try again.': 'Новый напарник не запустился. Проверьте среду агента и повторите попытку.',
+  'The harness could not apply the sidekick settings.': 'Среда агента не смогла применить настройки напарника.',
+  'Trust this project before changing the sidekick.': 'Подтвердите доверие к проекту перед изменением напарника.',
+
   // Confirmations
   'Abandon this round?': 'Отказаться от этого раунда?',
   'The round is closed without a verified report. Files the sidekick already changed stay as they are. This cannot be undone.':

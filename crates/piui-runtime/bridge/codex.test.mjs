@@ -7,7 +7,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve, toNamespacedPath, win32 } from "node:path";
 import test from "node:test";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import { createCodexAdapter } from "./codex.mjs";
 import { runBridge } from "./runner.mjs";
 
@@ -1129,6 +1129,147 @@ test("a Fusion sidekick proves its subagent switches off, tolerates a CLI that k
   }
 });
 
+test("Fusion verifies the effective workspace sandbox reported by Codex 0.169.0", async () => {
+  const sandbox = { type: "workspaceWrite", writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true };
+  const spawnFeatures = () => {
+    const child = new EventEmitter();
+    Object.assign(child, { stdout: new PassThrough(), stderr: new PassThrough() });
+    queueMicrotask(() => {
+      child.stdout.write("apps stable false\nplugins stable false\nmulti_agent deprecated false\nmulti_agent_v2 stable false\nunified_exec stable true\n");
+      child.emit("close", 0);
+    });
+    return child;
+  };
+  const open = (effectiveSandbox) => {
+    const openChild = () => {
+      const child = new EventEmitter();
+      const stdout = new PassThrough();
+      const stdin = new Writable({
+        write(frame, _encoding, done) {
+          const request = JSON.parse(frame);
+          const replies = {
+            initialize: { codexHome: process.cwd(), userAgent: "piui/0.169.0" },
+            "config/read": { config: {} },
+            "thread/start": {
+              thread: { id: "fixture", turns: [] }, cwd: process.cwd(), sandbox: effectiveSandbox,
+              approvalPolicy: "never", activePermissionProfile: null,
+            },
+          };
+          if (request.method === "thread/start") {
+            assert.equal(request.params.sandbox, "workspace-write");
+            assert.equal(request.params.permissions, undefined);
+            assert.equal(request.params.approvalPolicy, "never");
+            assert.deepEqual(request.params.config, {
+              "features.multi_agent": false, "features.multi_agent_v2": false,
+              "sandbox_workspace_write.writable_roots": [],
+              "sandbox_workspace_write.network_access": false,
+              "sandbox_workspace_write.exclude_tmpdir_env_var": true,
+              "sandbox_workspace_write.exclude_slash_tmp": true,
+            });
+          }
+          done();
+          if (request.id) queueMicrotask(() => stdout.write(JSON.stringify({ id: request.id, result: replies[request.method] }) + "\n"));
+        },
+      });
+      const exited = () => queueMicrotask(() => child.emit("close", 0));
+      stdin.once("finish", exited);
+      return Object.assign(child, { stdin, stdout, stderr: new PassThrough(), kill: exited });
+    };
+    return createCodexAdapter({
+      ...config, permissionMode: "workspace-write", nativeSubagents: false, backgroundTasks: false,
+      runtimeArgs: [fixture, "--in-process-fusion-sandbox-test"],
+    }, () => {}, undefined, openChild, undefined, undefined, { spawn: spawnFeatures });
+  };
+  const adapter = await open(sandbox);
+  await adapter.dispose();
+  for (const unsafe of [
+    { ...sandbox, excludeTmpdirEnvVar: false, excludeSlashTmp: false },
+    { ...sandbox, networkAccess: true },
+    { ...sandbox, writableRoots: [resolve(process.cwd(), "..")] },
+    { ...sandbox, writableRoots: undefined },
+  ]) {
+    await assert.rejects(open(unsafe), { bridgeCode: "unsupported-permission-mode" });
+  }
+});
+
+test("a workspace-write Fusion sidekick asks for and proves a folder-only sandbox, and refuses a wider one", async () => {
+  const sidekick = { ...config, nativeSubagents: false, backgroundTasks: false, permissionMode: "workspace-write", runtimeArgs: [fixture, "--expect-permission", "workspace-write"] };
+  const adapter = await createCodexAdapter(sidekick, () => {});
+  try {
+    await adapter.prompt({ text: "sandboxed", mode: "prompt" });
+    await waitFor(() => adapter.snapshot().title?.startsWith("sandbox:"));
+    assert.deepEqual(JSON.parse(adapter.snapshot().title.slice("sandbox:".length)), {
+      type: "workspaceWrite", writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true,
+    });
+  } finally {
+    await adapter.dispose();
+  }
+  await assert.rejects(
+    createCodexAdapter({ ...sidekick, runtimeArgs: [...sidekick.runtimeArgs, "--ignore-sidekick-sandbox"] }, () => {}),
+    { bridgeCode: "unsupported-permission-mode" },
+  );
+});
+
+test("a Fusion sidekick turn stays running while background terminals run, and a stop terminates them", async () => {
+  process.env.PIUI_TEST_BACKGROUND_POLL_MS = "20";
+  const sidekick = { ...config, nativeSubagents: false, backgroundTasks: false, permissionMode: "read-only" };
+  const events = [];
+  const adapter = await createCodexAdapter({ ...sidekick, runtimeArgs: [fixture, "--expect-permission", "read-only", "--background-terminals=3"] }, (event) => events.push(event));
+  try {
+    await adapter.prompt({ text: "background", mode: "prompt" });
+    await waitFor(() => events.some((event) => event.type === "turnCompleted"));
+    // Three listings showed a running terminal before the turn was reported over.
+    assert.deepEqual(events.filter((event) => event.type === "turnCompleted"), [{ type: "turnCompleted", outcome: "succeeded" }]);
+    assert.equal(adapter.snapshot().status, "idle");
+  } finally {
+    await adapter.dispose();
+  }
+  const stopped = [];
+  const held = await createCodexAdapter({ ...sidekick, runtimeArgs: [fixture, "--expect-permission", "read-only", "--background-terminals=100000"] }, (event) => stopped.push(event));
+  try {
+    await held.prompt({ text: "background", mode: "prompt" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(stopped.some((event) => event.type === "turnCompleted"), false);
+    assert.equal(held.snapshot().status, "running");
+    await assert.rejects(held.prompt({ text: "next", mode: "prompt" }), { bridgeCode: "turn-active" });
+    assert.deepEqual(await held.interrupt(), { interrupted: true });
+    await waitFor(() => stopped.some((event) => event.type === "turnCompleted"));
+    assert.equal(held.snapshot().title, "background:cleaned");
+  } finally {
+    await held.dispose();
+    delete process.env.PIUI_TEST_BACKGROUND_POLL_MS;
+  }
+});
+
+test("a turn still starting reports starting and an interrupt waits for the start before confirming", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--hold-turn", "--slow-turn-start"] }, (event) => events.push(event));
+  try {
+    const admission = adapter.prompt({ text: "slow", mode: "prompt" });
+    await waitFor(() => adapter.snapshot().status === "starting");
+    const interrupted = adapter.interrupt();
+    let confirmed = false;
+    void interrupted.then(() => { confirmed = true; });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(confirmed, false, "the interrupt waits for turn/start");
+    assert.deepEqual(await interrupted, { interrupted: true });
+    await admission;
+    await waitFor(() => events.some((event) => event.type === "turnCompleted"));
+    assert.deepEqual(events.filter((event) => event.type === "turnCompleted"), [{ type: "turnCompleted", outcome: "interrupted" }]);
+  } finally {
+    await adapter.dispose();
+  }
+});
+
+test("a turn/start answered without its turn is an unknown outcome, never a refusal", async () => {
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--turn-start-no-id"] }, () => {});
+  try {
+    await assert.rejects(adapter.prompt({ text: "lost", mode: "prompt" }), { bridgeCode: "native-outcome-unknown" });
+  } finally {
+    await adapter.dispose();
+  }
+});
+
 test("a native-subagent policy that cannot be proven fails closed before the app server starts", async () => {
   for (const mode of ["without:multi_agent", "without:multi_agent_v2", "removed:multi_agent_v2"]) {
     const flags = [fixture, `--features-list=${mode}`];
@@ -2066,16 +2207,28 @@ const olderTurn = (number) => ({ id: `turn-${number}`, status: "completed", item
   { type: "agentMessage", id: `paged-answer-${number}`, text: `Answer ${number}`, phase: null, memoryCitation: null },
 ] });
 
-test("a resumed Codex thread follows the cursor of its newest page and shows the whole history in order", async () => {
+const textsOf = (adapter, kind) => adapter.snapshot().blocks.filter(block => block.kind === kind).map(block => block.text);
+
+test("a resumed Codex thread opens with its newest page and reads older pages afterwards, one bounded event each", async () => {
   const { calls, openChild } = forkTransport({ pages: [undefined, { data: [olderTurn(2)], nextCursor: "page-2" }, { data: [olderTurn(1)], nextCursor: null }] });
-  const adapter = await createCodexAdapter({ ...config, nativeId: "source-fixture", runtimeArgs: [fixture, "--paged-history"] }, () => {}, undefined, openChild);
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, nativeId: "source-fixture", runtimeArgs: [fixture, "--paged-history"] }, event => events.push(event), undefined, openChild);
   try {
+    // Opening is not held for the older pages.
+    assert.deepEqual(textsOf(adapter, "user"), ["Question 3"]);
+    await waitUntil(() => calls.filter(call => call.method === "thread/turns/list").length === 2 && events.filter(event => event.type === "historyPage").length === 2);
     assert.deepEqual(calls.filter(call => call.method === "thread/turns/list").map(call => call.params), [
       { threadId: "source-fixture", sortDirection: "desc", itemsView: "full", cursor: "page-1" },
       { threadId: "source-fixture", sortDirection: "desc", itemsView: "full", cursor: "page-2" },
     ]);
-    assert.deepEqual(adapter.snapshot().blocks.filter(block => block.kind === "user").map(block => block.text), ["Question 1", "Question 2", "Question 3"]);
-    assert.deepEqual(adapter.snapshot().blocks.filter(block => block.kind === "assistant").map(block => block.text), ["Answer 1", "Answer 2", "Answer 3"]);
+    assert.deepEqual(textsOf(adapter, "user"), ["Question 1", "Question 2", "Question 3"]);
+    assert.deepEqual(textsOf(adapter, "assistant"), ["Answer 1", "Answer 2", "Answer 3"]);
+    // Each event holds blocks that go before everything shown, in order.
+    const pages = events.filter(event => event.type === "historyPage");
+    assert.deepEqual(pages.map(page => page.blocks.map(block => block.id)), [
+      ["paged-user-2", "paged-answer-2"],
+      ["paged-user-1", "paged-answer-1"],
+    ]);
   } finally { await adapter.dispose(); }
 });
 
@@ -2083,16 +2236,60 @@ test("Codex history paging is bounded and a page that cannot be read leaves the 
   const endless = forkTransport({ sourcePage: () => ({ data: [], nextCursor: "page-1" }) });
   const bounded = await createCodexAdapter({ ...config, nativeId: "source-fixture", runtimeArgs: [fixture, "--paged-history"] }, () => {}, undefined, endless.openChild);
   try {
+    await waitUntil(() => endless.calls.filter(call => call.method === "thread/turns/list").length === 49);
+    await new Promise(resolveWait => setTimeout(resolveWait, 50));
     assert.equal(endless.calls.filter(call => call.method === "thread/turns/list").length, 49, "50 pages in total, the first one came with the resume");
-    assert.deepEqual(bounded.snapshot().blocks.filter(block => block.kind === "user").map(block => block.text), ["Question 3"]);
+    assert.deepEqual(textsOf(bounded, "user"), ["Question 3"]);
   } finally { await bounded.dispose(); }
 
   const failing = forkTransport({ listError: "PRIVATE_LIST_FAILURE" });
-  const partial = await createCodexAdapter({ ...config, nativeId: "source-fixture", runtimeArgs: [fixture, "--paged-history"] }, () => {}, undefined, failing.openChild);
+  const events = [];
+  const partial = await createCodexAdapter({ ...config, nativeId: "source-fixture", runtimeArgs: [fixture, "--paged-history"] }, event => events.push(event), undefined, failing.openChild);
   try {
+    await waitUntil(() => failing.calls.filter(call => call.method === "thread/turns/list").length === 1);
+    await new Promise(resolveWait => setTimeout(resolveWait, 50));
     assert.equal(failing.calls.filter(call => call.method === "thread/turns/list").length, 1);
-    assert.deepEqual(partial.snapshot().blocks.filter(block => block.kind === "user").map(block => block.text), ["Question 3"]);
+    assert.deepEqual(textsOf(partial, "user"), ["Question 3"]);
+    assert.ok(!events.some(event => event.type === "historyPage"), "a failed optional page adds nothing and the chat stays usable");
+    assert.equal(partial.snapshot().status, "idle");
   } finally { await partial.dispose(); }
+});
+
+test("a huge history is split into frames below the bridge budget and never replaces a block shown live", async () => {
+  const big = "x".repeat(900 * 1024);
+  const manyTurns = Array.from({ length: 30 }, (_, index) => ({ id: `big-turn-${index}`, status: "completed", items: [
+    { type: "agentMessage", id: `big-answer-${index}`, text: big, phase: null, memoryCitation: null },
+  ] }));
+  // The newest page's turn is also in the older page (a cursor that shifted): the shown copy wins.
+  const { openChild } = forkTransport({ pages: [undefined, { data: [...manyTurns, olderTurn(3)], nextCursor: null }] });
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, nativeId: "source-fixture", runtimeArgs: [fixture, "--paged-history"] }, event => events.push(event), undefined, openChild);
+  try {
+    await waitUntil(() => events.some(event => event.type === "historyPage"));
+    const frames = events.filter(event => event.type === "historyPage");
+    assert.ok(frames.length > 1, "a page larger than one frame is split");
+    for (const frame of frames) assert.ok(Buffer.byteLength(JSON.stringify(frame)) < 5 * 1024 * 1024);
+    assert.equal(textsOf(adapter, "assistant").filter(text => text === "Answer 3").length, 1);
+    // The snapshot keeps its newest blocks within one frame behind a marker.
+    const snapshot = adapter.snapshot();
+    assert.ok(Buffer.byteLength(JSON.stringify(snapshot)) < 16 * 1024 * 1024);
+    assert.ok(snapshot.blocks.some(block => block.id === "paged-answer-3"), "the newest blocks stay");
+    assert.equal(snapshot.blocks[0].id, "codex-history-omitted");
+    assert.equal(snapshot.blocks[0].kind, "custom");
+  } finally { await adapter.dispose(); }
+});
+
+test("a live completion that races the resume response wins over the stale history page", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, nativeId: "source-fixture", runtimeArgs: [fixture, "--resume-race"] }, event => events.push(event), undefined);
+  try {
+    const answer = adapter.snapshot().blocks.find(block => block.id === "race-answer");
+    assert.equal(answer.text, "live final answer");
+    assert.equal(answer.status, "complete");
+    assert.equal(adapter.snapshot().status, "idle", "a turn completed live is not restored as the active turn");
+    assert.deepEqual(events.filter(event => event.type === "turnCompleted"), [{ type: "turnCompleted", outcome: "succeeded" }]);
+    await assert.rejects(adapter.interrupt(), { bridgeCode: "no-active-turn" });
+  } finally { await adapter.dispose(); }
 });
 
 test("Codex refuses to branch before a message inside a turn instead of dropping that turn's earlier items", async () => {

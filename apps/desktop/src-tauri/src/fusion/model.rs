@@ -692,6 +692,84 @@ pub(crate) struct FusionStateV1 {
     /// Additive (ADR-076): the person stopped the pair (absent when not).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub paused: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidekick_change_block: Option<SidekickChangeBlock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidekick_replace_block: Option<SidekickChangeBlock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidekick_current_model: Option<WorkspaceModel>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum SidekickChangeKind {
+    Model,
+    Replace,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub(crate) enum SidekickChangeBlock {
+    #[serde(rename = "FUSION_ROUND_OPEN")]
+    RoundOpen,
+    #[serde(rename = "FUSION_ROUND_UNCERTAIN")]
+    RoundUncertain,
+    #[serde(rename = "FUSION_REPORT_PENDING")]
+    ReportPending,
+    #[serde(rename = "FUSION_REPORT_UNCERTAIN")]
+    ReportUncertain,
+    #[serde(rename = "FUSION_SIDEKICK_ATTACHED")]
+    SidekickAttached,
+    #[serde(rename = "FUSION_SIDEKICK_BUSY")]
+    SidekickBusy,
+}
+
+impl SidekickChangeBlock {
+    pub(crate) fn error(self) -> crate::workspace_api::WorkspaceError {
+        let (code, message) = match self {
+            Self::RoundOpen => ("FUSION_ROUND_OPEN", "A sidekick round is still open."),
+            Self::RoundUncertain => (
+                "FUSION_ROUND_UNCERTAIN",
+                "An uncertain sidekick round needs to be resolved.",
+            ),
+            Self::ReportPending => (
+                "FUSION_REPORT_PENDING",
+                "A sidekick report is still undelivered.",
+            ),
+            Self::ReportUncertain => (
+                "FUSION_REPORT_UNCERTAIN",
+                "An uncertain report delivery needs to be resolved.",
+            ),
+            Self::SidekickAttached => (
+                "FUSION_SIDEKICK_ATTACHED",
+                "Stop or detach the existing sidekick before replacing it.",
+            ),
+            Self::SidekickBusy => (
+                "FUSION_SIDEKICK_BUSY",
+                "A sidekick operation is still in progress.",
+            ),
+        };
+        sidekick_change_error(code, message)
+    }
+}
+
+pub(crate) const fn sidekick_change_error(
+    code: &'static str,
+    message: &'static str,
+) -> crate::workspace_api::WorkspaceError {
+    crate::workspace_api::WorkspaceError {
+        code,
+        message,
+        recoverable: true,
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SidekickChange {
+    pub revision: u64,
+    pub kind: SidekickChangeKind,
+    pub sidekick: FusionRole,
+    pub allow_context_loss: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -726,6 +804,10 @@ pub(crate) enum FusionCommandV1 {
     },
     ResetSidekick {
         lead_session_id: String,
+    },
+    ChangeSidekick {
+        lead_session_id: String,
+        change: SidekickChange,
     },
     ReconcileRound {
         lead_session_id: String,

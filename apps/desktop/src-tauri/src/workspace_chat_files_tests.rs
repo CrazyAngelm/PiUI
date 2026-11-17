@@ -109,8 +109,25 @@ fn registry(setup: &Setup) -> Arc<ChatFileRegistry> {
     Arc::clone(&setup.host.workspace.inner.chat_files)
 }
 
+/// The scope the host builds for the session: its folder, no harness output.
+fn scope_of(setup: &Setup) -> FileScope {
+    registry(setup).scope(&setup.session, Some(&setup.workspace), &[])
+}
+
+fn report_as(setup: &Setup, block: &str, path: &Path, origin: ChatFileOrigin) -> bool {
+    registry(setup).register_path(&setup.session, block, path, origin, None, &scope_of(setup))
+}
+
+/// A file the agent wrote: served wherever it is.
 fn report(setup: &Setup, block: &str, path: &Path) -> bool {
-    registry(setup).register_path(&setup.session, block, path, ChatFileOrigin::Written, None)
+    registry(setup).register_path(
+        &setup.session,
+        block,
+        path,
+        ChatFileOrigin::Written,
+        None,
+        &scope_of(setup),
+    )
 }
 
 async fn run_with(
@@ -513,18 +530,97 @@ fn only_a_bounded_image_audio_or_video_is_previewed() {
     }
 }
 
+/// What `open_allowed` says for a file named `name` holding `bytes`.
+fn opens(name: &str, bytes: &[u8]) -> bool {
+    let extension = extension_of(name);
+    open_allowed(
+        extension.as_deref(),
+        &sniff_media(bytes, extension.as_deref()),
+    )
+}
+
 #[test]
-fn programs_and_scripts_are_never_opened() {
-    for extension in [
-        "exe", "bat", "cmd", "ps1", "lnk", "msi", "scr", "com", "vbs", "js", "jar", "hta", "reg",
-        "dll", "url",
+fn only_a_document_or_media_file_whose_bytes_match_its_extension_is_opened() {
+    let mp4 = b"\0\0\0\x18ftypmp42\0\0\0\0mp42isom".to_vec();
+    for (name, bytes) in [
+        ("a.png", PNG.to_vec()),
+        ("A.PNG", PNG.to_vec()),
+        ("a.wav", wav_bytes()),
+        ("clip.mp4", mp4.clone()),
+        ("clip.m4v", mp4.clone()),
+        ("doc.pdf", b"%PDF-1.7\n%%EOF".to_vec()),
+        ("notes.txt", b"hello".to_vec()),
+        ("notes.md", b"# hello".to_vec()),
+        ("table.csv", b"a,b\n1,2".to_vec()),
+        ("data.json", b"{\"a\":1}".to_vec()),
+        ("run.log", b"line".to_vec()),
     ] {
-        assert!(extension_never_opened(Some(extension)), "{extension}");
+        assert!(opens(name, &bytes), "{name}");
     }
-    for extension in ["png", "txt", "pdf", "mp4", "wav", "md", "docx", "json"] {
-        assert!(!extension_never_opened(Some(extension)), "{extension}");
+    // The bytes must agree with the name, whichever way they disagree.
+    assert!(!opens("photo.txt", PNG), "a PNG named .txt");
+    assert!(!opens("photo.png", b"just text"), "text named .png");
+    assert!(!opens("clip.mp4", PNG), "a PNG named .mp4");
+    assert!(!opens("notes.txt", &pe_bytes()), "a program named .txt");
+    assert!(
+        !opens("notes.txt", b"#!/bin/sh\necho hi"),
+        "a script named .txt"
+    );
+    // Programs, scripts, shortcuts, installers and packages, whatever their bytes.
+    for extension in [
+        "exe",
+        "bat",
+        "cmd",
+        "ps1",
+        "lnk",
+        "msi",
+        "scr",
+        "com",
+        "vbs",
+        "js",
+        "jar",
+        "hta",
+        "reg",
+        "dll",
+        "url",
+        "msix",
+        "appx",
+        "msixbundle",
+        "appxbundle",
+        "appinstaller",
+        "jnlp",
+        "iso",
+        "vhd",
+        "dmg",
+        "pkg",
+        "deb",
+        "sh",
+        "py",
+        "wsf",
+        "cpl",
+        "msp",
+        "settingcontent-ms",
+    ] {
+        assert!(
+            !opens(&format!("x.{extension}"), b"plain text"),
+            "{extension}"
+        );
+        assert!(
+            !opens(&format!("x.{extension}"), &pe_bytes()),
+            "{extension}"
+        );
     }
-    assert!(!extension_never_opened(None));
+    // Pages and images that can run script, and Office files, are not opened.
+    for name in [
+        "x.html", "x.htm", "x.svg", "x.xml", "x.docx", "x.xlsx", "x.pptx", "x.docm", "x.zip",
+        "x.rtf", "x.hwp",
+    ] {
+        assert!(!opens(name, b"PK\x03\x04 plain text"), "{name}");
+        assert!(!opens(name, b"<svg></svg>"), "{name}");
+    }
+    // No extension, no Open.
+    assert!(!opens("README", b"hello"));
+    assert!(!opens("x.", b"hello"));
     // Windows ignores trailing dots and spaces, so the host does too.
     assert_eq!(extension_of("Setup.EXE ").as_deref(), Some("exe"));
     assert_eq!(extension_of("run.bat.").as_deref(), Some("bat"));
@@ -641,13 +737,21 @@ fn the_registry_takes_absolute_local_paths_of_plain_names() {
     let directory = test_root("chat-files-registry");
     let registry = ChatFileRegistry::open(&directory).expect("opens registry");
     let session = Uuid::new_v4().to_string();
+    let scope = registry.scope(&session, Some(&directory), &[]);
     let base = directory.join("project");
     let png = write(&base, "a.png", PNG);
 
     // One entry per file: a second block and a second origin join it.
-    assert!(registry.register_path(&session, "b1", &png, ChatFileOrigin::Written, None));
-    assert!(registry.register_path(&session, "b2", &png, ChatFileOrigin::Read, None));
-    assert!(registry.register_path(&session, "b2", &png, ChatFileOrigin::Generated, None));
+    assert!(registry.register_path(&session, "b1", &png, ChatFileOrigin::Written, None, &scope));
+    assert!(registry.register_path(&session, "b2", &png, ChatFileOrigin::Read, None, &scope));
+    assert!(registry.register_path(
+        &session,
+        "b2",
+        &png,
+        ChatFileOrigin::Generated,
+        None,
+        &scope
+    ));
     let entries = registry.entries(&session);
     assert_eq!(entries.len(), 1);
     assert_eq!(
@@ -660,7 +764,7 @@ fn the_registry_takes_absolute_local_paths_of_plain_names() {
     assert_eq!(entries[0].name, "a.png");
     // `.` and `..` are resolved before the path is compared.
     let spelled = base.join("sub").join("..").join(".").join("a.png");
-    assert!(registry.register_path(&session, "b3", &spelled, ChatFileOrigin::Read, None));
+    assert!(registry.register_path(&session, "b3", &spelled, ChatFileOrigin::Read, None, &scope));
     assert_eq!(registry.entries(&session).len(), 1);
 
     // A relative path needs a base; it cannot climb out of the file system.
@@ -669,32 +773,56 @@ fn the_registry_takes_absolute_local_paths_of_plain_names() {
         "b4",
         Path::new("a.png"),
         ChatFileOrigin::Read,
-        None
+        None,
+        &scope
     ));
     assert!(registry.register_path(
         &session,
         "b4",
         Path::new("a.png"),
         ChatFileOrigin::Read,
-        Some(&base)
+        Some(&base),
+        &scope
     ));
     let mut climbing = PathBuf::new();
     for _ in 0..64 {
         climbing.push("..");
     }
     climbing.push("x.png");
-    assert!(!registry.register_path(&session, "b5", &climbing, ChatFileOrigin::Read, Some(&base)));
+    assert!(!registry.register_path(
+        &session,
+        "b5",
+        &climbing,
+        ChatFileOrigin::Read,
+        Some(&base),
+        &scope
+    ));
     // Unusable block ids and names are not kept.
-    assert!(!registry.register_path(&session, "", &png, ChatFileOrigin::Read, None));
-    assert!(!registry.register_path(&session, "bad\nid", &png, ChatFileOrigin::Read, None));
+    assert!(!registry.register_path(&session, "", &png, ChatFileOrigin::Read, None, &scope));
+    assert!(!registry.register_path(
+        &session,
+        "bad\nid",
+        &png,
+        ChatFileOrigin::Read,
+        None,
+        &scope
+    ));
     assert!(!registry.register_path(
         &session,
         "b6",
         &base.join("x\0y.png"),
         ChatFileOrigin::Read,
-        None
+        None,
+        &scope
     ));
-    assert!(!registry.register_path(&session, "b6", Path::new(""), ChatFileOrigin::Read, None));
+    assert!(!registry.register_path(
+        &session,
+        "b6",
+        Path::new(""),
+        ChatFileOrigin::Read,
+        None,
+        &scope
+    ));
     // A block list stays bounded.
     for index in 0..(MAX_BLOCKS_PER_FILE + 10) {
         registry.register_path(
@@ -703,6 +831,7 @@ fn the_registry_takes_absolute_local_paths_of_plain_names() {
             &png,
             ChatFileOrigin::Read,
             None,
+            &scope,
         );
     }
     assert_eq!(
@@ -724,6 +853,7 @@ fn network_and_device_paths_are_not_kept() {
     let directory = test_root("chat-files-network");
     let registry = ChatFileRegistry::open(&directory).expect("opens registry");
     let session = Uuid::new_v4().to_string();
+    let scope = registry.scope(&session, Some(&directory), &[]);
     for path in [
         r"\\server\share\a.png",
         r"\\?\UNC\server\share\a.png",
@@ -733,7 +863,14 @@ fn network_and_device_paths_are_not_kept() {
         r"C:\x\a.txt:evil.exe",
     ] {
         assert!(
-            !registry.register_path(&session, "b1", Path::new(path), ChatFileOrigin::Read, None),
+            !registry.register_path(
+                &session,
+                "b1",
+                Path::new(path),
+                ChatFileOrigin::Written,
+                None,
+                &scope
+            ),
             "{path}"
         );
     }
@@ -741,15 +878,17 @@ fn network_and_device_paths_are_not_kept() {
         &session,
         "b1",
         Path::new(r"C:\x\a.png"),
-        ChatFileOrigin::Read,
-        None
+        ChatFileOrigin::Written,
+        None,
+        &scope
     ));
     assert!(registry.register_path(
         &session,
         "b1",
         Path::new(r"\\?\C:\x\b.png"),
-        ChatFileOrigin::Read,
-        None
+        ChatFileOrigin::Written,
+        None,
+        &scope
     ));
 }
 
@@ -758,10 +897,18 @@ fn a_session_registry_holds_at_most_two_hundred_files() {
     let directory = test_root("chat-files-cap");
     let registry = ChatFileRegistry::open(&directory).expect("opens registry");
     let session = Uuid::new_v4().to_string();
+    let scope = registry.scope(&session, Some(&directory), &[]);
     let base = directory.join("project");
     for index in 0..(MAX_FILES_PER_SESSION + 5) {
         let path = base.join(format!("file-{index}.txt"));
-        assert!(registry.register_path(&session, "b1", &path, ChatFileOrigin::Written, None));
+        assert!(registry.register_path(
+            &session,
+            "b1",
+            &path,
+            ChatFileOrigin::Written,
+            None,
+            &scope
+        ));
     }
     let entries = registry.entries(&session);
     assert_eq!(entries.len(), MAX_FILES_PER_SESSION);
@@ -777,6 +924,7 @@ fn inline_bytes_are_stored_by_the_host_sniffed_and_capped() {
     let directory = test_root("chat-files-inline");
     let registry = ChatFileRegistry::open(&directory).expect("opens registry");
     let session = Uuid::new_v4().to_string();
+    let scope = registry.scope(&session, Some(&directory), &[]);
     assert!(registry.register_inline(&session, "b1", "image/jpeg", PNG, ChatFileOrigin::Read));
     let entries = registry.entries(&session);
     assert_eq!(entries.len(), 1);
@@ -789,7 +937,7 @@ fn inline_bytes_are_stored_by_the_host_sniffed_and_capped() {
             .starts_with(directory.join(CHAT_FILES_DIRECTORY).join(&session))
     );
     assert_eq!(fs::read(&entries[0].path).expect("stored bytes"), PNG);
-    let (files, _) = list_files(&entries);
+    let (files, _) = list_files(&entries, &scope);
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].kind, ChatFileKind::Image);
     assert!(files[0].previewable);
@@ -845,23 +993,36 @@ fn a_replaced_path_is_not_the_file_that_was_seen() {
         inline_bytes: 0,
         digest: None,
     };
-    let opened = open_entry(&entry).expect("opens the file");
+    let registry = ChatFileRegistry::open(&directory).expect("opens registry");
+    let scope = registry.scope(&Uuid::new_v4().to_string(), Some(&directory), &[]);
+    let opened = open_entry(&entry, &scope).expect("opens the file");
     assert_eq!(opened.len, PNG.len() as u64);
+    // The path is the final path of the opened handle, not a name looked up again.
+    assert!(same_path(
+        &opened.canonical,
+        &fs::canonicalize(&first).expect("canonical")
+    ));
     entry.pinned = Some(fs::canonicalize(&second).expect("canonical"));
-    assert_eq!(open_entry(&entry).err(), Some(ChatFilesError::Unavailable));
+    assert_eq!(
+        open_entry(&entry, &scope).err(),
+        Some(ChatFilesError::Unavailable)
+    );
     entry.pinned = Some(opened.canonical.clone());
-    assert!(open_entry(&entry).is_ok());
+    assert!(open_entry(&entry, &scope).is_ok());
     // A folder is not a file.
     entry.path = directory.clone();
     entry.pinned = None;
-    assert_eq!(open_entry(&entry).err(), Some(ChatFilesError::Unavailable));
+    assert_eq!(
+        open_entry(&entry, &scope).err(),
+        Some(ChatFilesError::Unavailable)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_png_named_txt_is_listed_as_an_image_and_previewed() {
     let setup = setup("chat-files-png").await;
-    let path = write(&setup.outside, "photo.txt", PNG);
-    assert!(report(&setup, "block-1", &path));
+    let path = write(&setup.workspace, "photo.txt", PNG);
+    assert!(report_as(&setup, "block-1", &path, ChatFileOrigin::Read));
     let files = listed(&setup).await;
     assert_eq!(files.len(), 1);
     let file = &files[0];
@@ -870,7 +1031,8 @@ async fn a_png_named_txt_is_listed_as_an_image_and_previewed() {
     assert_eq!(file.kind, ChatFileKind::Image);
     assert_eq!(file.media_type.as_deref(), Some("image/png"));
     assert_eq!(file.size, Some(PNG.len() as u64));
-    assert!(file.previewable && file.openable && file.revealable && !file.unavailable);
+    // The name says text and the bytes say image: shown, never handed to an application.
+    assert!(file.previewable && !file.openable && file.revealable && !file.unavailable);
     match run(&setup, preview_command(&setup, &file.id)).await {
         Ok(ChatFilesResult::Preview {
             media_type,
@@ -964,7 +1126,8 @@ async fn forged_and_foreign_ids_are_refused() {
         "block-9",
         &foreign,
         ChatFileOrigin::Written,
-        None
+        None,
+        &scope_of(&setup)
     ));
     let foreign_id = registry(&setup).entries(&other)[0].id.clone();
     assert_eq!(
@@ -1392,6 +1555,7 @@ fn history_reports_register_once_and_the_same_inline_bytes_of_a_block_are_one_fi
     let directory = test_root("chat-files-history");
     let registry = ChatFileRegistry::open(&directory).expect("opens registry");
     let session = Uuid::new_v4().to_string();
+    let scope = registry.scope(&session, Some(&directory), &[]);
     let chart = write(&directory, "chart.png", PNG);
     let reports = || {
         vec![
@@ -1415,7 +1579,7 @@ fn history_reports_register_once_and_the_same_inline_bytes_of_a_block_are_one_fi
             },
         ]
     };
-    record_history(&registry, &session, &directory, &reports());
+    record_history(&registry, &session, &directory, &reports(), &scope);
     let first: Vec<String> = registry
         .entries(&session)
         .iter()
@@ -1424,8 +1588,8 @@ fn history_reports_register_once_and_the_same_inline_bytes_of_a_block_are_one_fi
     assert_eq!(first.len(), 2);
 
     // Opening the chat again reports the same files: nothing new, same ids.
-    record_history(&registry, &session, &directory, &reports());
-    record_history(&registry, &session, &directory, &reports());
+    record_history(&registry, &session, &directory, &reports(), &scope);
+    record_history(&registry, &session, &directory, &reports(), &scope);
     let again: Vec<String> = registry
         .entries(&session)
         .iter()
@@ -1443,4 +1607,359 @@ fn history_reports_register_once_and_the_same_inline_bytes_of_a_block_are_one_fi
     // The same bytes under another block are another file.
     assert!(registry.register_inline(&session, "b4", "image/png", PNG, ChatFileOrigin::Read));
     assert_eq!(registry.entries(&session).len(), 3);
+}
+
+// ---------------------------------------------------------------------------
+// Scope (ADR-074): where a registered path may be served from
+// ---------------------------------------------------------------------------
+
+/// A directory link: a symbolic link where the account may make one, else a
+/// junction (no privilege needed) on Windows.
+fn try_directory_link(target: &Path, link: &Path) -> bool {
+    if try_symlink(target, link, true) {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_file_the_agent_only_read_outside_its_folder_is_never_kept_or_served() {
+    let setup = setup("chat-files-scope").await;
+    let secret = write(&setup.outside, "secret.png", PNG);
+    let notes = write(&setup.outside, "notes.png", PNG);
+    let inside = write(&setup.workspace, "inside.png", PNG);
+
+    // Read or returned outside the folder: not even kept, so never listed.
+    assert!(!report_as(&setup, "b1", &secret, ChatFileOrigin::Read));
+    assert!(!report_as(&setup, "b1", &secret, ChatFileOrigin::Returned));
+    assert!(registry(&setup).entries(&setup.session).is_empty());
+    assert!(listed(&setup).await.is_empty());
+
+    // Read inside the folder is served.
+    assert!(report_as(&setup, "b2", &inside, ChatFileOrigin::Read));
+    let files = listed(&setup).await;
+    assert_eq!(files.len(), 1);
+    assert!(files[0].previewable && !files[0].unavailable);
+    assert!(matches!(
+        run(&setup, preview_command(&setup, &files[0].id)).await,
+        Ok(ChatFilesResult::Preview { .. })
+    ));
+
+    // What the agent itself wrote or generated is its output, wherever it is.
+    assert!(report_as(&setup, "b3", &notes, ChatFileOrigin::Written));
+    let generated = write(&setup.outside, "render.png", PNG);
+    assert!(report_as(
+        &setup,
+        "b4",
+        &generated,
+        ChatFileOrigin::Generated
+    ));
+    let files = listed(&setup).await;
+    assert_eq!(files.len(), 3);
+    assert!(
+        files
+            .iter()
+            .all(|file| file.previewable && !file.unavailable)
+    );
+
+    // A later read of a written file does not take it away, and a read of an
+    // outside file that was never written is still refused.
+    assert!(report_as(&setup, "b5", &notes, ChatFileOrigin::Read));
+    assert!(!report_as(&setup, "b5", &secret, ChatFileOrigin::Read));
+    assert_eq!(registry(&setup).entries(&setup.session).len(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scope_is_checked_again_on_every_operation() {
+    let setup = setup("chat-files-scope-again").await;
+    let inside = write(&setup.workspace, "inside.png", PNG);
+    assert!(report_as(&setup, "b1", &inside, ChatFileOrigin::Read));
+    let entry = registry(&setup).entries(&setup.session).remove(0);
+    // The folder the file lives in stops being the session's folder (a worktree
+    // took its place): the same entry is no longer served.
+    let moved = registry(&setup).scope(&setup.session, Some(&setup.outside), &[]);
+    assert!(open_entry(&entry, &scope_of(&setup)).is_ok());
+    assert_eq!(
+        open_entry(&entry, &moved).err(),
+        Some(ChatFilesError::Unavailable)
+    );
+    assert_eq!(
+        preview_bytes(&entry, &moved).err(),
+        Some(ChatFilesError::Unavailable)
+    );
+    assert_eq!(
+        copy_to(&entry, &moved, &setup.outside.join("copy.png")).err(),
+        Some(ChatFilesError::Unavailable)
+    );
+    assert!(!setup.outside.join("copy.png").exists());
+    let (files, _) = list_files(std::slice::from_ref(&entry), &moved);
+    assert!(files[0].unavailable);
+    // The agent's own output stays served from anywhere.
+    let written = write(&setup.workspace, "made.png", PNG);
+    assert!(report_as(&setup, "b2", &written, ChatFileOrigin::Written));
+    let made = registry(&setup).entries(&setup.session).remove(1);
+    assert!(open_entry(&made, &moved).is_ok());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_folder_link_that_leads_out_of_the_folder_is_not_followed() {
+    let setup = setup("chat-files-scope-link").await;
+    let real = setup.workspace.join("pictures");
+    let picture = write(&real, "pic.png", PNG);
+    assert!(report_as(&setup, "b1", &picture, ChatFileOrigin::Read));
+    let id = listed(&setup).await[0].id.clone();
+
+    // The folder is replaced by a link to a folder outside the project.
+    let elsewhere = write(&setup.outside.join("pictures"), "pic.png", PNG);
+    fs::remove_dir_all(&real).expect("removes the folder");
+    if !try_directory_link(elsewhere.parent().expect("parent"), &real) {
+        eprintln!("skipped: this account cannot create directory links");
+        return;
+    }
+    let files = listed(&setup).await;
+    assert!(
+        files[0].unavailable,
+        "the file now lives outside the folder"
+    );
+    let recorder = Arc::new(Recorder::default());
+    for command in [
+        preview_command(&setup, &id),
+        ChatFilesCommand::Open {
+            session_id: setup.session.clone(),
+            file_id: id.clone(),
+        },
+        ChatFilesCommand::Reveal {
+            session_id: setup.session.clone(),
+            file_id: id.clone(),
+        },
+    ] {
+        let result = run_with(&setup, command, no_dialog(), recorder.clone()).await;
+        assert_eq!(code(result), "CHAT_FILE_UNAVAILABLE");
+    }
+    assert!(recorder.opened.lock().expect("lock").is_empty());
+    assert!(recorder.revealed.lock().expect("lock").is_empty());
+
+    // A link in a reported path is resolved before the file is kept.
+    assert!(!report_as(
+        &setup,
+        "b2",
+        &real.join("pic.png"),
+        ChatFileOrigin::Read
+    ));
+}
+
+#[test]
+fn a_chat_in_a_worktree_serves_its_worktree_and_not_the_project() {
+    let directory = test_root("chat-files-scope-worktree");
+    let registry = ChatFileRegistry::open(&directory).expect("opens registry");
+    let session = Uuid::new_v4().to_string();
+    let project = directory.join("project");
+    let worktree = directory.join("worktrees").join("w1");
+    let in_project = write(&project, "a.png", PNG);
+    let in_worktree = write(&worktree, "a.png", PNG);
+    // The chat's real working folder is its worktree.
+    let scope = registry.scope(&session, Some(&worktree), &[]);
+    assert!(!registry.register_path(
+        &session,
+        "b1",
+        &in_project,
+        ChatFileOrigin::Read,
+        None,
+        &scope
+    ));
+    assert!(registry.register_path(
+        &session,
+        "b1",
+        &in_worktree,
+        ChatFileOrigin::Read,
+        None,
+        &scope
+    ));
+    // A worktree that is gone leaves no working folder: nothing is in scope.
+    let gone = registry.scope(&session, Some(&directory.join("removed")), &[]);
+    assert!(!registry.register_path(
+        &session,
+        "b2",
+        &in_worktree,
+        ChatFileOrigin::Read,
+        None,
+        &gone
+    ));
+    // A mention resolves inside the working folder only.
+    assert_eq!(scope.working(), fs::canonicalize(&worktree).ok().as_deref());
+    assert_eq!(gone.working(), None);
+}
+
+#[test]
+fn a_harness_output_folder_admits_what_the_agent_only_read() {
+    let directory = test_root("chat-files-scope-output");
+    let registry = ChatFileRegistry::open(&directory).expect("opens registry");
+    let session = Uuid::new_v4().to_string();
+    let project = directory.join("project");
+    fs::create_dir_all(&project).expect("creates project");
+    let generated = write(
+        &directory.join("generated_images").join("t1"),
+        "ig_1.png",
+        PNG,
+    );
+    let other = write(&directory.join("elsewhere"), "ig_2.png", PNG);
+    let scope = registry.scope(
+        &session,
+        Some(&project),
+        &[directory.join("generated_images")],
+    );
+    assert!(registry.register_path(
+        &session,
+        "b1",
+        &generated,
+        ChatFileOrigin::Read,
+        None,
+        &scope
+    ));
+    assert!(!registry.register_path(&session, "b1", &other, ChatFileOrigin::Read, None, &scope));
+    // Only Codex has such a folder, and the host names it (not an event).
+    assert!(output_roots(HarnessKind::Pi).is_empty());
+    assert!(output_roots(HarnessKind::ClaudeCode).is_empty());
+    assert!(
+        output_roots(HarnessKind::Codex)
+            .iter()
+            .all(|root| root.ends_with("generated_images") && root.is_absolute())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_installer_package_is_never_opened_even_when_it_looks_like_a_document() {
+    let setup = setup("chat-files-packages").await;
+    let package = write(
+        &setup.workspace,
+        "app.msix",
+        b"PK\x03\x04 not really a package",
+    );
+    let manifest = write(&setup.workspace, "app.appinstaller", b"<AppInstaller/>");
+    let page = write(
+        &setup.workspace,
+        "page.html",
+        b"<html><script>1</script></html>",
+    );
+    for path in [&package, &manifest, &page] {
+        assert!(report_as(&setup, "b1", path, ChatFileOrigin::Written));
+    }
+    let files = listed(&setup).await;
+    assert_eq!(files.len(), 3);
+    let recorder = Arc::new(Recorder::default());
+    for file in &files {
+        assert!(!file.openable && file.revealable, "{}", file.name);
+        let open = ChatFilesCommand::Open {
+            session_id: setup.session.clone(),
+            file_id: file.id.clone(),
+        };
+        let result = run_with(&setup, open, no_dialog(), recorder.clone()).await;
+        assert_eq!(code(result), "CHAT_FILE_OPEN_REFUSED", "{}", file.name);
+    }
+    assert!(recorder.opened.lock().expect("lock").is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// The "files changed" host event
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_changed_event_has_the_contract_shape() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/fixtures/chat-files-v1.json"
+    ))
+    .expect("fixture");
+    let session = "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+    assert_eq!(
+        serde_json::to_value(ChatFilesChanged::new(session)).expect("serializes"),
+        fixture["events"][0]
+    );
+    assert_eq!(CHAT_FILES_EVENT, "piui://chat-files-v1");
+}
+
+#[tokio::test(start_paused = true)]
+async fn many_changes_make_one_event_per_window() {
+    let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = Arc::clone(&count);
+    let notifier = ChangeNotifier::new(move || {
+        seen.fetch_add(1, Ordering::SeqCst);
+    });
+    for _ in 0..5 {
+        notifier.changed();
+    }
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        0,
+        "the event waits for the burst"
+    );
+    tokio::time::sleep(CHANGE_COALESCE + Duration::from_millis(10)).await;
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    notifier.changed();
+    tokio::time::sleep(CHANGE_COALESCE + Duration::from_millis(10)).await;
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inline_bytes_finishing_on_the_blocking_pool_tell_the_webview() {
+    let setup = setup("chat-files-event").await;
+    let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = Arc::clone(&count);
+    let notifier = ChangeNotifier::new(move || {
+        seen.fetch_add(1, Ordering::SeqCst);
+    });
+    let registry = registry(&setup);
+    let scope = scope_of(&setup);
+    let report = |block: &str, source: ChatFileInput, origin: ChatFileOrigin| ChatFileReport {
+        block_id: block.into(),
+        source,
+        origin,
+    };
+    // A path outside the folder that was only read is refused: no event.
+    let secret = write(&setup.outside, "secret.png", PNG);
+    record_report(
+        &registry,
+        &setup.session,
+        report("b1", ChatFileInput::Path(secret), ChatFileOrigin::Read),
+        None,
+        &scope,
+        &notifier,
+    );
+    tokio::time::sleep(CHANGE_COALESCE * 2).await;
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+    // Inline bytes are stored on the blocking pool; the event follows the write.
+    record_report(
+        &registry,
+        &setup.session,
+        report(
+            "b2",
+            ChatFileInput::Inline {
+                mime: "image/png".into(),
+                bytes: PNG.to_vec(),
+            },
+            ChatFileOrigin::Returned,
+        ),
+        None,
+        &scope,
+        &notifier,
+    );
+    tokio::time::sleep(CHANGE_COALESCE * 3).await;
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    assert_eq!(registry.entries(&setup.session).len(), 1);
+    let files = listed(&setup).await;
+    assert_eq!(files.len(), 1);
+    assert!(files[0].previewable && !files[0].unavailable);
 }

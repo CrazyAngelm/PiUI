@@ -35,7 +35,16 @@ export interface ConversationAttachment {
 }
 
 /** An approved, ephemeral display resource resolved by the current owner. */
-export interface ConversationMedia { src: string; mediaType?: string }
+export interface ConversationMedia {
+  src: string;
+  mediaType?: string;
+  /**
+   * Gives the resource back (additive). A card calls it once it stops showing `src` (scrolled far away or
+   * collapsed); the owner then frees the bytes behind it and `resolveAttachment` fetches them again when
+   * the card is shown once more. Idempotent.
+   */
+  release?: () => void;
+}
 export interface ConversationMessagePresentation {
   blockId: string;
   literal?: boolean;

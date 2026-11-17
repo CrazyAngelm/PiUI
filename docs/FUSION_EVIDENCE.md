@@ -202,3 +202,44 @@ multi_agent_v2` оба читаются `false`. `--disable unified_exec` и
 Решение владельца (2026-11-18): «Разрешить чтение вне проекта». Измерение `reads`
 больше не участвует в допуске (ADR-076); Codex-напарник в read-only /
 workspace-write запускается с отключёнными MCP-серверами пользователя.
+
+
+## S13. Codex 0.169.0: workspace-write при открытии треда Fusion
+
+Проверен установленный `codex-cli 0.169.0` на Windows. Рабочий каталог — пустой
+`%TEMP%/piui-fusion-*/project`. Использовался отдельный `CODEX_HOME` с
+`[windows] sandbox = "unelevated"`: доступ к обычному каталогу Codex из
+проверочной среды был запрещён. Временный профиль не содержал учётных данных
+или MCP-серверов. Команды запуска:
+
+```powershell
+codex --version
+codex features list
+codex --disable multi_agent --disable multi_agent_v2 features list
+codex app-server --stdio -c analytics.enabled=false --disable apps --disable plugins --disable remote_plugin --disable recommended_plugins --disable shell_snapshot --disable multi_agent --disable multi_agent_v2 --disable unified_exec
+```
+
+Оба переключателя subagents в листинге дали `false`. В app-server через stdio
+отправлены `initialize` (`clientInfo` — `piui` / `PiUI` / `0.3.2`,
+`experimentalApi: true`, `requestAttestation: false`), `initialized`,
+`config/read` с `includeLayers: false` и путём проекта, затем `thread/start`.
+Запрос запуска, кроме `ephemeral: true`, совпадает с мостом: `cwd` берётся из
+рабочего каталога процесса, `developerInstructions` — инструкции напарника,
+`approvalPolicy: "never"`, `features.multi_agent: false`,
+`features.multi_agent_v2: false`. В `config` переданы
+`sandbox_workspace_write.writable_roots: []`,
+`sandbox_workspace_write.network_access: false`,
+`sandbox_workspace_write.exclude_tmpdir_env_var: true` и
+`sandbox_workspace_write.exclude_slash_tmp: true`.
+
+| Поле запроса | `activePermissionProfile` в ответе | `sandbox.type` | `writableRoots` | `networkAccess` | `excludeTmpdirEnvVar` | `excludeSlashTmp` |
+|---|---|---|---|---|---|---|
+| `permissions: ":workspace"` | `{"id":":workspace","extends":null}` | `workspaceWrite` | `[]` | `false` | `false` | `false` |
+| `sandbox: "workspace-write"` | `null` | `workspaceWrite` | `[]` | `false` | `true` | `true` |
+
+В обоих ответах `cwd` совпал с временным проектом, `approvalPolicy` =
+`never`. Мост использует вторую строку и сверяет её ограничения перед
+допуском. В таком треде `thread/settings/update` с текущей моделью,
+`serviceTier: "default"` и `effort: "low"` вернул успешный ответ.
+`turn/start` не отправлялся, команды в песочнице не выполнялись. App-server
+завершился с кодом 0 после закрытия stdin.

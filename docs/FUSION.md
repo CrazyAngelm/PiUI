@@ -72,8 +72,24 @@ session is stopped); Codex needs a successful `features list` that registers
 `multi_agent` is `deprecated`), else the launch is refused with
 `unsupported-native-subagent-policy`. `unified_exec` (background terminals)
 is passed as `--disable` when registered; Codex 0.169.0 keeps it on despite
-the flag, so there the sidekick instructions and the broker's turn end bound
-the work. Pi and Nano run
+the flag, so the bridge holds a sidekick turn's end while
+`thread/backgroundTerminals/list` shows a running terminal (the round stays
+working and the turn stays `running`), polling every 2 s for at most
+10 minutes, then `thread/backgroundTerminals/clean`; an interrupt (Stop) of
+the sidekick cleans them at once, and a Codex that cannot list them gets the
+clean at turn end. A shell-less Claude Code sidekick (read-only:
+`Read,Glob,Grep,TodoWrite`; workspace-write adds `Edit,Write,NotebookEdit`)
+runs with that `--tools` set, `--strict-mcp-config` without any MCP
+configuration, `--disallowed-tools mcp__*` and `--setting-sources project`
+(the person's user and local settings, where pre-approved permission rules
+live, are not loaded); its init tool list must not offer a shell, network,
+MCP or (read-only) editing tool, else the session is stopped. A Codex
+workspace-write sidekick asks for a folder-only sandbox on the thread using
+`sandbox: "workspace-write"` and `sandbox_workspace_write.*`, and on every turn (`workspaceWrite`, no extra
+roots, `excludeTmpdirEnvVar` and `excludeSlashTmp`, no network); the thread's
+effective `sandbox` must show it (another writable root, a temporary
+directory or network refuses the launch with `unsupported-permission-mode`),
+and a read-only one must show no network. Pi and Nano run
 every command inside the turn. A brief whose `scope` or `leaveAlone` points
 outside the project folder is refused, and its file facts are read from the
 sidekick's own folder.
@@ -101,8 +117,8 @@ runtime starts (`FusionSessionHooks::setup`):
 - **Sidekick:** fixed sidekick instructions (pushback rule fixed at start),
   no board, no plugin MCP servers, native subagents off (Claude Code, Codex).
   Its turns belong to the broker: the WebView cannot message it, change its
-  model, settings or mode, or approve for the rest of the session (the
-  ADR-044 guard). The person can stop a turn and answer its approvals once in
+  model, settings or mode, or approve for the rest of the session through
+  ordinary chat commands (the ADR-044 guard). The person can stop a turn and answer its approvals once in
   the sidekick's own chat.
 
 The sidekick session is created on the first brief and reopened through the
@@ -339,21 +355,31 @@ never acknowledged), `stopSidekick`,
 no brief is admitted and no follow-up is sent; a follow-up already past its
 pause check finishes its send before the pause returns, so the lead interrupt
 that follows reaches it, and the delivery worker re-checks the pause right
-before it claims `sending`. The pair resumes only with `resumePair` or when
-the person starts a new lead turn (a lead tool call from a turn newer than the
-stopped one). A send that was written but never confirmed (timeout, lost
-acknowledgement, dead runtime) is `acceptance-unknown`: a round becomes
+before it claims `sending`. The pair resumes only with `resumePair` or when a
+message the person wrote (Send, the composer queue or a steer) is confirmed by
+the lead's harness and no stop came after it was admitted (a pause epoch
+changed under the lock the pause takes); a lead tool call, the stopped turn's
+end and an auto-delivered report never resume it. If the pause cannot be
+journaled it still holds in this process, the stop still runs and `stopPair`
+returns the I/O error. A send that was written but never confirmed (timeout,
+lost acknowledgement, dead runtime, a bridge's typed `native-outcome-unknown`)
+is `acceptance-unknown`: a round becomes
 `uncertain` and keeps the writer lock until it is reconciled or abandoned; a
 follow-up becomes `followUp/uncertain` and is never resent blindly. Only a
 refusal before the write fails a round. A report whose delivery is uncertain
 is listed by `status`, shown as "report needs checking" on the badge, and the
-panel offers Check lead chat (searches the lead's native history for the
-report's stable id `[PiUI sidekick report <brief> · <round> ·`), Deliver
+panel offers Check lead chat (reads the lead's persisted native history with
+the reader used for closed chats, never the live view, and looks for the
+report's stable id `[PiUI sidekick report <brief> · <round> ·` in a user
+message or tool result), Deliver
 again and Dismiss; `wait(roundId)` says "delivery unknown", never "already
 delivered". A tool handoff is given to the lead only after `tool/sending` is
 journaled. `steerSidekick` sends the person's correction into the running
 round as a steer marked `[PiUI: the person adds to round …]` and counts it in
-`personSteers`; it changes no authority. Reads work in safe mode;
+`personSteers`; it changes no authority. A steer (the lead's or the
+person's) is sent under the round-start gate and only while the sidekick is
+still in the turn its round started (turn generation); otherwise it is refused
+with `round-finished`, so it never reaches the next round. Reads work in safe mode;
 changes are refused there. The event `piui://fusion-changed-v1` carries the
 lead id and the journal revision. Deleting a lead chat is refused while a
 sidekick round of its pair is open or uncertain; otherwise the pair goes with
@@ -379,11 +405,13 @@ the project folder.
 - **Claude Code:** the tool is `mcp__piui-workspace__sidekick` on the
   session's HTTP MCP server. Claude Code abandons an MCP call after about
   64 s, so the adapter sets `MCP_TOOL_TIMEOUT=600000` for a lead (spike S1).
-  A workspace-write Claude sidekick is refused: its shell approvals offer only
-  deny or cancel (spike S5).
+  A shell-less Claude sidekick has no shell tool at all (`--tools`, see
+  Sessions and policy).
 - **Codex:** dynamic tool `piui`/`sidekick`, registered on `thread/start`
   only; a resumed thread keeps it when its rollout lists it, else the chat
-  shows `unsupported-sidekick-tool-resume`.
+  shows `unsupported-sidekick-tool-resume`. A turn whose `turn/start` is still
+  unanswered reports `starting`; an interrupt then waits for the answer,
+  interrupts the started turn and confirms only after that or Codex's exit.
 - **Pi:** a sidekick only; follow-ups merge into a running turn, so rounds go
   through the host queue as prompts (spikes S2, S3).
 
@@ -401,6 +429,29 @@ the project folder.
   when one of its sidekick chats is current, and once when its pair starts
   working, so the sidekick's chat is in view without being opened first.
   After that the person's choice to open or close the lead stands.
+
+### Changing the sidekick
+
+In the Fusion panel, **Change sidekick model** uses the harness's current native
+catalog. The picker shows an unavailable model without replacing it. Select a
+model and, when offered, reasoning and Fast. The broker switches settings in the
+current native session when supported. A change of Codex provider or Nano source
+requires a fresh session and explicit confirmation. A model change before the
+first brief updates the choice used for that brief.
+
+**Replace sidekick** is available after stopping the sidekick's round, stopping
+the pair, using **Detach sidekick** while it is idle, or retiring the session. The picker shows the
+effective allowance. The host applies the same narrowing and launch rules as at
+pair creation, including the ban on delegation and background work. A fresh
+session starts with an empty context and its predecessor stays readable. The
+lead session and pair options carry forward. The last confirmed pair choice is
+remembered for future chats.
+
+The broker compares the displayed journal revision, reserves round admission,
+and commits the effective choice and retirement in one saved generation. An
+open or uncertain round, an undelivered or uncertain report, or safe mode
+blocks both actions. Stopping the pair leaves it paused until the person resumes
+it. A failed launch leaves the previous pair in place.
 
 ## Tests
 

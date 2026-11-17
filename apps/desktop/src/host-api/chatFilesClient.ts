@@ -1,10 +1,12 @@
-import { hostInvoke } from './transport';
+import { hostInvoke, hostListen } from './transport';
 import { workspaceError } from './workspaceClient';
 import {
+  CHAT_FILES_EVENT,
   CHAT_FILES_ROUTE,
   type ChatFileKind,
   type ChatFileOrigin,
   type ChatFileV1,
+  type ChatFilesChangedEventV1,
   type ChatFilesCommand,
   type ChatFilesListResult,
   type ChatFilesOpenedResult,
@@ -17,6 +19,7 @@ import {
 
 export type * from '../../../../contracts/chat-files-v1';
 export {
+  CHAT_FILES_EVENT,
   CHAT_FILES_PROTOCOL,
   CHAT_FILES_ROUTE,
   CHAT_FILE_MAX_IMAGE_PREVIEW_BYTES,
@@ -95,6 +98,22 @@ export async function chatFilesCommand(command: ChatFilesCommand): Promise<ChatF
   const result = decodeChatFilesResult(command, raw);
   if (!result) throw workspaceError(undefined);
   return result;
+}
+
+/** A host "files changed" event exactly as the contract describes it, or false. */
+export function isChatFilesChangedEvent(value: unknown): value is ChatFilesChangedEventV1 {
+  return isRecord(value) && value.protocol === 1 && value.type === 'changed' && isText(value.sessionId);
+}
+
+/**
+ * Calls `handler` with the session id whenever the host says that session's chat files changed (a file
+ * was reported, or inline bytes finished writing). The event carries no file: list again. Resolves to
+ * the function that stops listening.
+ */
+export function listenChatFilesChanged(handler: (sessionId: string) => void): Promise<() => void> {
+  return hostListen<unknown>(CHAT_FILES_EVENT, (payload) => {
+    if (isChatFilesChangedEvent(payload)) handler(payload.sessionId);
+  });
 }
 
 /** The files a session's registry holds: one entry per reporting block. */

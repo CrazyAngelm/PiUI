@@ -1183,6 +1183,14 @@ pub enum NativeEvent {
     Tasks {
         tasks: Vec<NativeTask>,
     },
+    /// An older part of the conversation, read after the chat opened (Codex
+    /// history pages, `bridge/CONTRACT.md` "History pages"). The blocks, oldest
+    /// first, go before every block already shown; one that is already shown is
+    /// kept as it is. Each event is one bounded frame, so no history size
+    /// reaches the frame cap.
+    HistoryPage {
+        blocks: Vec<NativeBlock>,
+    },
     /// A fire-and-forget extension UI request (Pi `notify`, `setStatus`,
     /// `setWidget`, `setTitle`, `set_editor_text`, or an unknown method).
     /// The bridge forwards only known presentation fields; the host projects
@@ -1405,6 +1413,11 @@ pub enum BridgeFailureCode {
     BranchUnsupported,
     /// The requested source message is no longer available to fork from.
     BranchPointNotFound,
+    /// The request reached the native harness, but its outcome is unknown (a
+    /// lost acknowledgement, the harness exited before answering, an answer
+    /// without the started turn): it may be running. Never a refusal
+    /// (`native-outcome-unknown`, CONTRACT.md, ADR-076).
+    OutcomeUnknown,
     OperationFailed,
 }
 
@@ -2906,6 +2919,7 @@ fn map_bridge_failure(code: &str) -> BridgeFailureCode {
         "unsupported-input" => BridgeFailureCode::UnsupportedInput,
         "branch-unsupported" => BridgeFailureCode::BranchUnsupported,
         "branch-point-not-found" => BridgeFailureCode::BranchPointNotFound,
+        "native-outcome-unknown" => BridgeFailureCode::OutcomeUnknown,
         _ => BridgeFailureCode::OperationFailed,
     }
 }
@@ -6457,6 +6471,11 @@ mod tests {
             map_bridge_failure("something-new"),
             BridgeFailureCode::OperationFailed
         );
+        // Sent but unconfirmed is its own outcome, never a refusal (ADR-076).
+        assert_eq!(
+            map_bridge_failure("native-outcome-unknown"),
+            BridgeFailureCode::OutcomeUnknown
+        );
         assert_eq!(
             INCOMPATIBLE_HARNESS_MESSAGE,
             "The installed harness speaks a protocol this Nano Desktop version does not support. Update Nano Desktop or the harness."
@@ -6980,6 +6999,23 @@ mod tests {
         assert!(serde_json::from_value::<NativeEvent>(invalid).is_err());
         let snapshot: NativeSnapshot = serde_json::from_value(json!({"nativeId":"private","title":"title","status":"idle","blocks":[],"approvals":[],"capabilities":capabilities(),"models":[]})).expect("snapshot");
         assert!(snapshot.tasks.is_empty());
+    }
+
+    #[test]
+    fn history_page_event_parses_and_rejects_unknown_fields() {
+        let value = json!({"type":"historyPage","blocks":[
+            {"id":"older-user","kind":"user","label":"You","status":"complete","text":"Question"},
+            {"id":"older-answer","kind":"assistant","label":"Codex","status":"complete","text":"Answer","truncated":true}
+        ]});
+        let event: NativeEvent = serde_json::from_value(value.clone()).expect("history page");
+        let NativeEvent::HistoryPage { blocks } = &event else {
+            panic!("expected a history page");
+        };
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(serde_json::to_value(&event).expect("serialize"), value);
+        let mut invalid = value;
+        invalid["blocks"][0]["unknown"] = json!(true);
+        assert!(serde_json::from_value::<NativeEvent>(invalid).is_err());
     }
 
     #[test]

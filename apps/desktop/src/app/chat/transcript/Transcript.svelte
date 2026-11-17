@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack, type Snippet } from 'svelte';
   import { chatFilesSource } from '../../interactive/chatFilesSource';
+  import type { MediaGate } from '../files/mediaGate';
   import { interactiveDecoration, type InteractiveAppTarget, type InteractiveReplyBlock } from '../../interactive/decorate';
   import { language } from '../../../features/locale/language';
   import { readWorkspaceHistory } from '../../../host-api/workspaceHistory';
@@ -19,6 +20,8 @@
     sessionKey: string;
     historySessionId?: string;
     agentLabel: string;
+    /** The chat's harness; only a Codex answer has its service markup removed. */
+    answerHarness?: string;
     /** The agent is working: the last turn stays open instead of folding its activity. */
     running?: boolean;
     searchOpen?: boolean;
@@ -39,6 +42,8 @@
     /** Files the agent produced, placed with the answer of their turn (ADR-074). */
     attachments?: readonly ConversationAttachment[];
     resolveAttachment?: (id: string) => Promise<ConversationMedia>;
+    /** The chat's media budget and transfer queue, shared by its cards, galleries and widgets (ADR-074). */
+    mediaGate?: MediaGate;
     onOpenAttachment?: (id: string) => Promise<void>;
     onDownloadAttachment?: (id: string) => Promise<void>;
     onRevealAttachment?: (id: string) => Promise<void>;
@@ -53,6 +58,7 @@
     // A link of an answer opens through the host, which asks the person first; without a route it is copied.
     ...(untrack(() => onOpenLink) === undefined ? {} : { openLink: async (url: string) => (await onOpenLink?.(url)) ?? false }),
     files: chatFilesSource(() => props.historySessionId),
+    gate: untrack(() => props.mediaGate),
     notify: (message: string) => { toasts.show({ title: message }); },
   }) : undefined;
   // Answers read these live (the Send button's reason, the reply operation); tell them when one changes.

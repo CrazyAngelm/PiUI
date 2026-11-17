@@ -12,16 +12,20 @@ import {
   type FusionRoleNameV1,
   type FusionRoundV1,
   type FusionStateV1,
+  type FusionSidekickChangeBlockV1,
   type RoundStateV1,
   type SidekickStateV1,
 } from '../../../../../contracts/fusion-v1';
+import { accountCatalogModel } from './catalogFake';
 import type { LabEventBus } from './labBus';
 import { SECOND } from './labClock';
 import { workspaceFailure } from './labErrors';
+import { validateModel } from './labGuards';
 import type { PermissionMode, WorkspaceModel, WorkspaceResult } from './labContracts';
 import type { LabHandlers } from './labHandlers';
-import { boolean, decodeArgument, enumOf, object, option, string, tagged } from './labSchema';
+import { boolean, decodeArgument, enumOf, object, option, string, tagged, u64 } from './labSchema';
 import { harnessIdentitySchema, workspaceModelSchema } from './labSchemas';
+import { verifiedProject } from './labState';
 import { sha256Hex } from './sha256';
 import type { LabSessions } from './sessionRuntime';
 import { workspaceHandlers } from './workspaceFake';
@@ -200,6 +204,9 @@ const commandSchema = tagged('type', {
   stopPair: { leadSessionId: string },
   stopSidekick: { leadSessionId: string },
   resetSidekick: { leadSessionId: string },
+  changeSidekick: { leadSessionId: string, change: object({
+    revision: u64, kind: enumOf(['model', 'replace']), sidekick: roleSchema, allowContextLoss: boolean,
+  }) },
   reconcileRound: { leadSessionId: string, roundId: string },
   abandonRound: { leadSessionId: string, roundId: string },
   resumePair: { leadSessionId: string },
@@ -348,9 +355,35 @@ export function createLabFusion(runtime: LabSessions, bus: LabEventBus, options:
     return doc;
   }
 
+  function changeBlock(doc: FusionStateV1): FusionSidekickChangeBlockV1 | undefined {
+    const rounds = doc.briefs.flatMap(brief => brief.rounds);
+    if (openRound(doc)) return 'FUSION_ROUND_OPEN';
+    if (rounds.some(round => round.state === 'uncertain')) return 'FUSION_ROUND_UNCERTAIN';
+    if (rounds.some(round => round.delivery?.state === 'uncertain')) return 'FUSION_REPORT_UNCERTAIN';
+    if (rounds.some(round => round.delivery?.state === 'queued' || round.delivery?.state === 'sending'
+      || (round.state === 'finished' && !round.delivery && round.answerBlockId))) return 'FUSION_REPORT_PENDING';
+    return undefined;
+  }
+
+  function replaceBlock(doc: FusionStateV1): FusionSidekickChangeBlockV1 | undefined {
+    const active = doc.sessions.find(session => !session.retired);
+    if (!active || doc.paused || !runtime.record(active.sessionId)?.live) return undefined;
+    const last = doc.briefs.filter(brief => brief.sidekickSessionId === active.sessionId).flatMap(brief => brief.rounds).at(-1);
+    return last?.outcome === 'interrupted' ? undefined : 'FUSION_SIDEKICK_ATTACHED';
+  }
+
   function view(doc: FusionStateV1): FusionStateV1 {
-    doc.sidekick = sidekickStateOf(doc);
-    return structuredClone(doc);
+    const active = doc.sessions.find(session => !session.retired);
+    const currentModel = active && runtime.record(active.sessionId)?.model;
+    const blocked = changeBlock(doc);
+    const replace = blocked ?? replaceBlock(doc);
+    return structuredClone({
+      ...doc,
+      sidekick: sidekickStateOf(doc),
+      ...(blocked ? { sidekickChangeBlock: blocked } : {}),
+      ...(replace ? { sidekickReplaceBlock: replace } : {}),
+      ...(currentModel ? { sidekickCurrentModel: currentModel } : {}),
+    });
   }
 
   /** One state generation: bump the revision and tell every listener. */
@@ -377,7 +410,7 @@ export function createLabFusion(runtime: LabSessions, bus: LabEventBus, options:
   }
 
   /** The sidekick's ordinary lab chat; a lab that cannot start one still gets a record id. */
-  function ensureSidekickSession(doc: FusionStateV1): string {
+  function ensureSidekickSession(doc: FusionStateV1, requireLaunch = false): string {
     const existing = doc.sessions.find((session) => !session.retired);
     if (existing !== undefined) return existing.sessionId;
     const { sidekick } = doc.pair;
@@ -393,9 +426,12 @@ export function createLabFusion(runtime: LabSessions, bus: LabEventBus, options:
           permissionMode: sidekick.permissionMode,
           title: `Sidekick · ${[...leadTitle].slice(0, 80).join('')}`,
           ...(model === undefined ? {} : { model }),
+          ...(sidekick.thinkingLevel ? { thinkingLevel: sidekick.thinkingLevel } : {}),
+          ...(sidekick.serviceTier ? { serviceTier: sidekick.serviceTier } : {}),
         },
       }) as WorkspaceResult);
-    } catch {
+    } catch (cause) {
+      if (requireLaunch) throw cause;
       sessionId = state.ids.next('session');
     }
     doc.sessions.push({ sessionId, harness: sidekick.harness, retired: false, createdAt: now() });
@@ -577,10 +613,76 @@ export function createLabFusion(runtime: LabSessions, bus: LabEventBus, options:
         }
         return { type: 'accepted' };
       }
-      case 'stopSidekick':
+      case 'stopSidekick': {
         assertNotSafe();
-        stopSidekick(command.leadSessionId);
+        const doc = slotOf(command.leadSessionId);
+        if (hasUnsettledRound(doc)) {
+          stopSidekick(command.leadSessionId);
+        } else {
+          const active = doc.sessions.find(session => !session.retired);
+          const record = active && runtime.record(active.sessionId);
+          if (record?.live) {
+            runtime.close(record);
+            commit(doc);
+          }
+        }
         return { type: 'accepted' };
+      }
+      case 'changeSidekick': {
+        assertNotSafe();
+        if (!validId(command.leadSessionId)) throw workspaceFailure('INVALID_ARGUMENT');
+        const doc = docOf(command.leadSessionId);
+        const { change } = command;
+        if (doc.revision !== change.revision) throw workspaceFailure('CONFLICT');
+        const fail = (code: string): never => { throw { code, recoverable: true }; };
+        const blocked = changeBlock(doc) ?? (change.kind === 'replace' ? replaceBlock(doc) : undefined);
+        if (blocked) fail(blocked);
+        const next = { ...change.sidekick };
+        if (change.kind === 'model' && (next.harness !== doc.pair.sidekick.harness
+          || next.permissionMode !== doc.pair.sidekick.permissionMode || !next.model)) throw workspaceFailure('INVALID_ARGUMENT');
+        const pair = { ...doc.pair, sidekick: next };
+        const admission = admitPair(pair, fusion.codexSandbox);
+        if ('refusal' in admission) return fail('FUSION_SIDEKICK_NOT_ADMITTED');
+        next.permissionMode = admission.sidekickMode;
+        verifiedProject(state, doc.workspaceId, true);
+        if (next.model) {
+          validateModel(next.model, undefined);
+          const model = accountCatalogModel(state, next.harness, next.model.id, next.model.provider);
+          if (!model) return fail('FUSION_MODEL_MISSING');
+          if ((next.thinkingLevel && !model.thinkingLevels?.includes(next.thinkingLevel)) || (next.serviceTier && !model.supportsFast)) {
+            throw workspaceFailure('INVALID_ARGUMENT');
+          }
+          next.model = {
+            id: model.id, name: model.name,
+            ...(model.provider ? { provider: model.provider } : {}),
+            ...(model.thinkingLevels ? { thinkingLevels: model.thinkingLevels } : {}),
+          };
+        } else if (next.thinkingLevel || next.serviceTier) throw workspaceFailure('INVALID_ARGUMENT');
+        const active = doc.sessions.find(session => !session.retired);
+        const record = active && runtime.record(active.sessionId);
+        const restart = change.kind === 'replace' || Boolean(active && (next.harness === 'codex' || next.harness === 'nano')
+          && next.model?.provider !== record?.model?.provider);
+        if (restart && !change.allowContextLoss) fail('FUSION_CONTEXT_LOSS');
+        if (restart) {
+          const staged = structuredClone(doc);
+          staged.pair = pair;
+          const old = staged.sessions.find(session => !session.retired);
+          if (old) {
+            old.retired = true;
+            old.retiredReason = 'sidekick changed by the person';
+          }
+          ensureSidekickSession(staged, true);
+          doc.sessions = staged.sessions;
+          if (record?.live) runtime.close(record);
+        } else if (record && next.model) {
+          record.model = next.model;
+          if (next.thinkingLevel) record.thinkingLevel = next.thinkingLevel;
+          if (next.harness === 'codex') record.serviceTier = next.serviceTier ?? 'standard';
+        }
+        doc.pair = pair;
+        commit(doc);
+        return { type: 'state', state: view(doc) };
+      }
       case 'resetSidekick': {
         assertNotSafe();
         const doc = slotOf(command.leadSessionId);

@@ -25,31 +25,69 @@
   let root: HTMLElement | undefined = $state(undefined);
   const mediaKind = untrack(() => attachment.presentation);
 
+  /** How far past the scroller's edge a card still counts as near: it is loaded inside this band and let go outside it. */
+  const NEAR = '1200px 0px';
+  function scrollParent(node: HTMLElement): HTMLElement | null {
+    for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+      const { overflowY } = getComputedStyle(parent);
+      if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') return parent;
+    }
+    return null;
+  }
+
   onMount(() => {
     let observer: IntersectionObserver | undefined;
+    // A resolved preview the owner may take back (`release`), and which request is current.
+    let release: (() => void) | undefined;
+    let epoch = 0;
+    let loading = false;
+    const giveBack = () => { const back = release; release = undefined; back?.(); };
     const load = () => {
+      if (loading || src) return;
+      loading = true;
+      const mine = ++epoch;
       void ports.resolve?.(id).then(media => {
-        if (disposed) return;
-        if (typeof media.src !== 'string' || !media.src) throw new Error('Missing media source.');
+        // The card was let go (or closed) while the bytes travelled: hand them straight back.
+        if (disposed || mine !== epoch) { media.release?.(); return; }
+        if (typeof media.src !== 'string' || !media.src) { media.release?.(); throw new Error('Missing media source.'); }
         const url = new URL(media.src, document.baseURI);
         const dataImage = mediaKind === 'image' && /^data:image\/(png|jpeg|gif|webp);base64,/i.test(media.src);
-        if (!['http:', 'https:', 'blob:'].includes(url.protocol) && !dataImage) throw new Error('Unsupported media source.');
+        if (!['http:', 'https:', 'blob:'].includes(url.protocol) && !dataImage) { media.release?.(); throw new Error('Unsupported media source.'); }
+        giveBack();
+        release = media.release;
         src = media.src;
-      }).catch(() => { if (!disposed) error = 'Preview unavailable. Open the attachment to continue.'; });
+      }).catch(() => { if (!disposed && mine === epoch) error = 'Preview unavailable. Open the attachment to continue.'; })
+        .finally(() => { if (mine === epoch) loading = false; });
+    };
+    // Far out of view or collapsed: the bytes behind the preview go back to the chat's budget. The card keeps its
+    // height, so the transcript does not jump, and the preview is fetched again when the card is near once more.
+    const unload = () => {
+      epoch += 1;
+      loading = false;
+      if (src && root) root.style.minHeight = `${root.offsetHeight}px`;
+      src = '';
+      error = '';
+      giveBack();
     };
     if (ports.resolve && mediaKind && mediaKind !== 'file' && (!printMode || mediaKind === 'image') && !attachment.unavailable) {
-      // A large preview is fetched when its card comes into view, not when the transcript mounts.
+      // A large preview is fetched when its card comes near the view, not when the transcript mounts.
       if (attachment.deferPreview && !printMode && root && typeof IntersectionObserver === 'function') {
         observer = new IntersectionObserver(entries => {
-          if (!entries.some(entry => entry.isIntersecting)) return;
-          observer?.disconnect();
-          load();
-        });
+          const latest = entries[entries.length - 1];
+          if (latest === undefined) return;
+          if (latest.isIntersecting) load();
+          else unload();
+        }, { root: scrollParent(root), rootMargin: NEAR });
         observer.observe(root);
       } else load();
     }
-    return () => { observer?.disconnect(); disposed = true; src = ''; };
+    return () => { observer?.disconnect(); disposed = true; src = ''; giveBack(); };
   });
+
+  /** The preview showed: the card no longer needs the height it kept while it was let go. */
+  function shown(): void {
+    if (root) root.style.minHeight = '';
+  }
 
   async function act(kind: 'open' | 'download' | 'reveal'): Promise<void> {
     if (busy || attachment.unavailable || disposed) return;
@@ -75,14 +113,14 @@
   {#if src && mediaKind === 'image'}
     {#if !printMode && ports.open && attachment.openable !== false && !attachment.unavailable}
     <button class="image" type="button" aria-label={attachment.label} onclick={() => void act('open')}>
-      <img {src} alt={attachment.label} loading="lazy" onerror={() => { src = ''; error = 'Preview unavailable. Open the attachment to continue.'; }} />
+      <img {src} alt={attachment.label} loading="lazy" onload={shown} onerror={() => { src = ''; error = 'Preview unavailable. Open the attachment to continue.'; }} />
     </button>
-    {:else}<img {src} alt={attachment.label} loading={printMode ? 'eager' : 'lazy'} onerror={() => { src = ''; error = 'Preview unavailable. Open the attachment to continue.'; }} />{/if}
+    {:else}<img {src} alt={attachment.label} loading={printMode ? 'eager' : 'lazy'} onload={shown} onerror={() => { src = ''; error = 'Preview unavailable. Open the attachment to continue.'; }} />{/if}
   {:else if src && mediaKind === 'audio'}
-    <audio {src} controls preload="none" aria-label={attachment.label} onerror={() => { src = ''; error = 'Preview unavailable. Open the attachment to continue.'; }}></audio>
+    <audio {src} controls preload="none" aria-label={attachment.label} onloadedmetadata={shown} onerror={() => { src = ''; error = 'Preview unavailable. Open the attachment to continue.'; }}></audio>
   {:else if src && mediaKind === 'video'}
     <!-- svelte-ignore a11y_media_has_caption (The owner supplies an existing file, not authored video.) -->
-    <video {src} controls preload="none" aria-label={attachment.label} onerror={() => { src = ''; error = 'Preview unavailable. Open the attachment to continue.'; }}></video>
+    <video {src} controls preload="none" aria-label={attachment.label} onloadedmetadata={shown} onerror={() => { src = ''; error = 'Preview unavailable. Open the attachment to continue.'; }}></video>
   {/if}
   <div class="caption">
     {#if !printMode && ports.open && !attachment.unavailable && attachment.openable !== false}

@@ -5,7 +5,7 @@
 // Fixture options use the --fixture- prefix and precede the real CLI flags.
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 
 const argv = process.argv.slice(2);
@@ -66,6 +66,13 @@ const disallowedTools = (() => {
   return index >= 0 ? String(cliArgs[index + 1]).split(",") : [];
 })();
 const delegationTools = disallowedTools.includes("Agent") || disallowedTools.includes("Task") ? [] : ["Task"];
+// `--tools` restricts the built-in set as Claude Code does; a fixture flag
+// makes the init list offer Bash anyway (a CLI that ignored the restriction).
+const initTools = () => {
+  const index = argv.indexOf("--tools");
+  const listed = index >= 0 ? String(argv[index + 1]).split(",").filter(Boolean) : ["Bash", "Read", "Edit", "Write", "Grep", "Glob"];
+  return [...listed, ...(has("--fixture-init-extra-bash") && !listed.includes("Bash") ? ["Bash"] : []), ...delegationTools];
+};
 
 // Native transcript, written only under a test-provided CLAUDE_CONFIG_DIR.
 const configHome = process.env.CLAUDE_CONFIG_DIR;
@@ -193,6 +200,10 @@ const scenarios = {
     });
     useTool("toolu_write", "Write", { file_path: absolute, content: "a\nb\n" });
     toolResultNative("toolu_write", `File created successfully at: ${absolute}`, { type: "create", filePath: absolute, content: "a\nb\n", structuredPatch: [] });
+    // A file outside the project: its diff header shows the base name only.
+    const outside = join(dirname(process.cwd()), "outside-project", "d.ts");
+    useTool("toolu_out", "Write", { file_path: outside, content: "c\n" });
+    toolResultNative("toolu_out", `File created successfully at: ${outside}`, { type: "create", filePath: outside, content: "c\n", structuredPatch: [] });
     useTool("toolu_bad", "Edit", { file_path: "never.ts", old_string: "x", new_string: "y" });
     toolResultNative("toolu_bad", "String to replace not found", { filePath: "never.ts", structuredPatch: [] }, true);
     useTool("toolu_nb", "NotebookEdit", { notebook_path: "analysis.ipynb", new_source: "1+1" });
@@ -371,7 +382,7 @@ const startRun = async (batch) => {
   const initOverride = has("--fixture-init-api-key") ? "ANTHROPIC_API_KEY" : "none";
   send({
     type: "system", subtype: "init", uuid: randomUUID(), session_id: sessionId, apiKeySource: initOverride, cwd: process.cwd(),
-    tools: ["Bash", "Read", "Edit", "Write", "Grep", "Glob", ...delegationTools], mcp_servers: [], model: resolved(model),
+    tools: initTools(), mcp_servers: [], model: resolved(model),
     permissionMode: has("--fixture-init-mode-drift") ? "default" : permissionMode, slash_commands: ["review"], output_style: "default",
     skills: [], plugins: [], capabilities: ["interrupt_receipt_v1", "interrupt_cancel_queued_v1"], claude_code_version: "2.1.232",
   });

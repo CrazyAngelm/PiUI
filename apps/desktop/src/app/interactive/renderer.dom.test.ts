@@ -426,3 +426,93 @@ describe('rebuilding mounted answers', () => {
     expect(ui.querySelector('.hui__body')).not.toBeNull();
   });
 });
+
+describe('an embedded player\'s address (ADR-077)', () => {
+  it('shows the "not shown" note with Open link and Copy link for a video that has only an embed address', async () => {
+    const openLink = vi.fn().mockResolvedValue(true);
+    const copy = vi.fn().mockResolvedValue(true);
+    const address = 'https://www.youtube.com/embed/abc123';
+    const { ui } = mount(body({ type: 'video', embedUrl: address, title: 'Demo' }), { openLink, copy });
+    const player = ui.querySelector('figure.hui-player--video');
+    expect(player).not.toBeNull();
+    expect(player!.classList.contains('hui-media--remote')).toBe(true);
+    expect(noteOf(player)).toContain('Not shown in this app: Demo');
+    expect([...player!.querySelectorAll('.hui-media__action')].map(item => item.textContent)).toEqual(['Open link', 'Copy link']);
+    (player!.querySelector('.hui-media__action') as HTMLButtonElement).click();
+    await tick();
+    expect(openLink).toHaveBeenCalledWith(address);
+    (player!.querySelectorAll('.hui-media__action')[1] as HTMLButtonElement).click();
+    await tick();
+    expect(copy).toHaveBeenCalledWith(address);
+    // Nothing is embedded or loaded.
+    expect(ui.querySelector('iframe')).toBeNull();
+    expect(player!.querySelector('video')!.hasAttribute('src')).toBe(false);
+  });
+
+  it('shows the plain note for an embed address that is not https, and still drops a player with no source at all', () => {
+    const plain = mount(body({ type: 'video', embedUrl: 'javascript:alert(1)' }));
+    expect(noteOf(plain.ui.querySelector('figure.hui-player--video'))).toContain('Not shown in this app');
+    expect([...plain.ui.querySelectorAll('.hui-media__action')]).toEqual([]);
+    document.body.replaceChildren();
+    const empty = mount(body({ type: 'video' }, { type: 'paragraph', text: 'after' }));
+    expect(empty.ui.querySelector('figure.hui-player')).toBeNull();
+  });
+});
+
+describe('media that is far out of view gives its bytes back', () => {
+  interface FakeObserver { callback: (entries: { isIntersecting: boolean }[]) => void; options: IntersectionObserverInit | undefined }
+  const observers: FakeObserver[] = [];
+  const frames = async (): Promise<void> => { await new Promise(done => setTimeout(done, 60)); await tick(); };
+  beforeEach(() => {
+    observers.length = 0;
+    vi.stubGlobal('IntersectionObserver', class {
+      readonly self: FakeObserver;
+      constructor(callback: FakeObserver['callback'], options?: IntersectionObserverInit) {
+        this.self = { callback, options };
+        observers.push(this.self);
+      }
+      observe(): void {}
+      disconnect(): void {}
+    });
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+  const move = async (isIntersecting: boolean): Promise<void> => { observers[0]!.callback([{ isIntersecting }]); await tick(); };
+
+  it('loads a place when it is near, lets the URL go when it is far, and loads it again when it is near once more', async () => {
+    const resolveFile = vi.fn().mockResolvedValue('blob:a');
+    const releaseFile = vi.fn();
+    const { ui } = mount(body({ type: 'image', file: 'a.png' }), { resolveFile, releaseFile });
+    await frames();
+    expect(observers).toHaveLength(1);
+    expect(observers[0]!.options?.rootMargin).toBe('1200px 0px');
+    // Nothing is fetched for a place nobody is near.
+    expect(resolveFile).not.toHaveBeenCalled();
+    const image = ui.querySelector('figure.hui-image img')!;
+    await move(true);
+    expect(resolveFile).toHaveBeenCalledTimes(1);
+    expect(image.getAttribute('src')).toBe('blob:a');
+    await move(false);
+    expect(image.hasAttribute('src')).toBe(false);
+    expect(releaseFile).toHaveBeenCalledWith('a.png');
+    await move(true);
+    expect(resolveFile).toHaveBeenCalledTimes(2);
+    expect(image.getAttribute('src')).toBe('blob:a');
+    // The answer going away gives back what it still holds.
+    for (const scope of scopes.splice(0)) scope.dispose();
+    expect(releaseFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives a file back that arrived after the place was let go', async () => {
+    let arrive!: (url: string) => void;
+    const resolveFile = vi.fn(() => new Promise<string>(done => { arrive = done; }));
+    const releaseFile = vi.fn();
+    const { ui } = mount(body({ type: 'audio', file: 'a.wav' }), { resolveFile, releaseFile });
+    await frames();
+    await move(true);
+    await move(false);
+    arrive('blob:late');
+    await tick();
+    expect(releaseFile).toHaveBeenCalledWith('a.wav');
+    expect(ui.querySelector('audio')!.hasAttribute('src')).toBe(false);
+  });
+});

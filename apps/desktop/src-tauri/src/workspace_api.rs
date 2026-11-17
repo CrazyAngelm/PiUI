@@ -283,6 +283,11 @@ pub enum WorkspaceEventPayload {
     Notice {
         code: NativeNoticeCode,
     },
+    /// Additive v15 event (ADR-075): older blocks (oldest first) that go before
+    /// every block already in `SessionSnapshot.blocks`; a block already there is kept.
+    HistoryPage {
+        blocks: Vec<NativeBlock>,
+    },
     /// Additive v15 event (ADR-072): the whole new SessionSnapshot.tasks list.
     Tasks {
         tasks: Vec<NativeTask>,
@@ -536,11 +541,15 @@ impl From<WorkspaceError> for SendFailure {
 /// `invalid-sidekick-response`; both answer before the pending call is
 /// resolved) or the host refused to send it. A timeout, a closed channel or a
 /// dead runtime may follow a consumed answer, so those stay ambiguous.
+/// A typed bridge refusal proves nothing was sent. `native-outcome-unknown`
+/// (the request reached the harness, its answer did not) never does
+/// (ADR-076).
 fn sidekick_response_unconsumed(error: &NativeRuntimeError) -> bool {
-    matches!(
-        error,
-        NativeRuntimeError::Bridge(_) | NativeRuntimeError::InvalidConfiguration
-    )
+    match error {
+        NativeRuntimeError::Bridge(BridgeFailureCode::OutcomeUnknown) => false,
+        NativeRuntimeError::Bridge(_) | NativeRuntimeError::InvalidConfiguration => true,
+        _ => false,
+    }
 }
 
 /// Speed settings are refused before any native request when the adapter
@@ -769,6 +778,20 @@ pub(crate) trait FusionSessionHooks: Send + Sync {
     fn stop_current_sidekick(
         &self,
         _session_id: String,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        Box::pin(async {})
+    }
+    /// The pause epoch of a Fusion lead before a message the person wrote is
+    /// sent to it (`None`: not a lead). Only person-authored paths call it.
+    fn person_message_epoch(&self, _session_id: &str) -> Option<u64> {
+        None
+    }
+    /// The lead's harness confirmed a message the person wrote: it resumes
+    /// a stopped pair unless a stop came after it (ADR-076).
+    fn person_message_admitted(
+        &self,
+        _session_id: String,
+        _epoch: u64,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         Box::pin(async {})
     }
@@ -1055,6 +1078,7 @@ struct EventForwarding {
     events: NativeEventReceiver,
     coordinator: Option<CoordinatorBinding>,
     publisher: WorkspaceEventPublisher,
+    files_scope: chat_files::FileScope,
 }
 
 struct LiveSession {
@@ -1163,6 +1187,8 @@ struct SpawnedStart {
     sessions_admitted: bool,
     publisher: WorkspaceEventPublisher,
     created: bool,
+    /// Where this session's chat files may be served from (ADR-074).
+    files_scope: chat_files::FileScope,
 }
 
 impl SpawnedStart {
@@ -1255,6 +1281,8 @@ struct WorkspaceHostInner {
     chat_files: Arc<chat_files::ChatFileRegistry>,
     /// Receives extension UI surface events; unset until the app is set up.
     extension_ui: Mutex<Option<ExtensionUiPublisher>>,
+    /// Tells the WebView a session's chat files changed (ADR-074).
+    chat_files_events: Mutex<Option<chat_files::ChatFilesPublisher>>,
     /// Plugin MCP servers for ordinary chats; unset until the app is set up.
     plugin_mcp: Mutex<Option<PluginMcpProvider>>,
     /// The project board; unset until the app is set up (no board tool).
@@ -1311,6 +1339,7 @@ impl WorkspaceHost {
                 attachments: attachments::AttachmentStore::open(app_data_dir)?,
                 chat_files: Arc::new(chat_files::ChatFileRegistry::open(app_data_dir)?),
                 extension_ui: Mutex::new(None),
+                chat_files_events: Mutex::new(None),
                 plugin_mcp: Mutex::new(None),
                 board: Mutex::new(None),
                 fusion: Mutex::new(None),
@@ -1332,6 +1361,14 @@ impl WorkspaceHost {
     /// to the WebView. Without a publisher the events are dropped.
     pub(crate) fn set_extension_ui_publisher(&self, publisher: ExtensionUiPublisher) {
         if let Ok(mut slot) = self.inner.extension_ui.lock() {
+            *slot = Some(publisher);
+        }
+    }
+
+    /// Routes "this session's chat files changed" to the WebView. Without a
+    /// publisher the events are dropped.
+    pub(crate) fn set_chat_files_publisher(&self, publisher: chat_files::ChatFilesPublisher) {
+        if let Ok(mut slot) = self.inner.chat_files_events.lock() {
             *slot = Some(publisher);
         }
     }
@@ -1400,6 +1437,22 @@ impl WorkspaceHost {
     pub(crate) fn is_fusion_sidekick(&self, session_id: &str) -> bool {
         self.fusion_hooks()
             .is_some_and(|hooks| hooks.is_sidekick(session_id))
+    }
+
+    /// The Fusion pause epoch before a person-authored send (ADR-076).
+    pub(crate) fn person_message_epoch(&self, session_id: &str) -> Option<u64> {
+        self.fusion_hooks()
+            .and_then(|hooks| hooks.person_message_epoch(session_id))
+    }
+
+    /// A person-authored message was confirmed by the harness: a stopped
+    /// Fusion pair of this lead resumes unless a stop came after it.
+    pub(crate) async fn person_message_admitted(&self, session_id: &str, epoch: Option<u64>) {
+        if let (Some(epoch), Some(hooks)) = (epoch, self.fusion_hooks()) {
+            hooks
+                .person_message_admitted(session_id.to_owned(), epoch)
+                .await;
+        }
     }
 
     /// Lets the broker stop and withdraw the open round of a current Fusion
@@ -2099,6 +2152,13 @@ impl WorkspaceHost {
             created,
             settings_not_remembered,
         } = pending;
+        // The folders this session's files may come from: its real working
+        // folder (the worktree when it has one) and its harness's own output.
+        let files_scope = self.inner.chat_files.scope(
+            &record.id,
+            Some(&cwd),
+            &chat_files::output_roots(record.harness),
+        );
         let RuntimeStartOptions {
             model,
             thinking_level,
@@ -2123,6 +2183,15 @@ impl WorkspaceHost {
             .fusion_hooks()
             .and_then(|hooks| hooks.setup(&record.id));
         let sidekick = fusion.as_ref().is_some_and(|setup| setup.sidekick);
+        // A shell-less Claude Code sidekick gets an enforced built-in tool set
+        // (no shell, no MCP), new and reopened alike (ADR-076).
+        let allowed_tools = match (sidekick, record.harness) {
+            (true, HarnessKind::ClaudeCode) => {
+                crate::fusion::capability::claude_sidekick_tools(record.permission_mode)
+                    .or(allowed_tools)
+            }
+            _ => allowed_tools,
+        };
         let plugin_mcp_servers = if sidekick || record.nano_connector {
             Vec::new()
         } else {
@@ -2352,6 +2421,7 @@ impl WorkspaceHost {
                 sessions_admitted,
                 publisher,
                 created,
+                files_scope,
             }),
             Err(error) => {
                 if created {
@@ -2401,6 +2471,7 @@ impl WorkspaceHost {
             sessions_admitted,
             publisher,
             created: _,
+            files_scope,
         } = spawned;
         let (live_board, mut notices): (_, Vec<NativeNoticeCode>) = match board {
             Some((binding, hooks, setup)) => (
@@ -2450,6 +2521,7 @@ impl WorkspaceHost {
             events,
             coordinator,
             publisher: publisher.clone(),
+            files_scope,
         });
         live.insert(
             record.id.clone(),
@@ -2694,6 +2766,145 @@ impl WorkspaceHost {
             .interrupt()
             .await
             .map_err(|_| WorkspaceError::runtime())
+    }
+
+    pub(crate) fn fusion_sidekick_model(&self, session_id: &str) -> Option<WorkspaceModel> {
+        self.record(session_id).ok()?.model
+    }
+
+    /// Broker-only counterpart to workspace_settings_v16. The broker holds
+    /// round admission and the caller holds the trusted live-operation gate.
+    pub(crate) async fn set_fusion_sidekick_model(
+        &self,
+        session_id: &str,
+        role: crate::fusion::model::FusionRole,
+    ) -> Result<crate::fusion::model::FusionRole, WorkspaceError> {
+        use crate::fusion::model::{FusionRole, FusionServiceTier, sidekick_change_error};
+        let record = self.record(session_id)?;
+        if !self.is_fusion_sidekick(session_id)
+            || record.harness != role.harness
+            || record.permission_mode != role.permission_mode
+        {
+            return Err(WorkspaceError::not_supported());
+        }
+        let model = role.model.as_ref().ok_or_else(WorkspaceError::invalid)?;
+        let (runtime, state) = self
+            .live_runtime(session_id)?
+            .ok_or_else(WorkspaceError::closed)?;
+        let _admission = state.composer_gate.lock().await;
+        let before = runtime
+            .snapshot()
+            .await
+            .map_err(|_| WorkspaceError::runtime())?;
+        if before.status != SessionStatus::Idle {
+            return Err(crate::fusion::model::SidekickChangeBlock::SidekickBusy.error());
+        }
+        let models = runtime
+            .models()
+            .await
+            .map_err(|_| WorkspaceError::runtime())?;
+        if !models
+            .iter()
+            .any(|entry| entry.id == model.id && entry.provider == model.provider)
+        {
+            return Err(sidekick_change_error(
+                "FUSION_MODEL_MISSING",
+                "The model is missing from the native catalog.",
+            ));
+        }
+        let before_model = before.model.ok_or_else(WorkspaceError::runtime)?;
+        let tier = (role.harness == HarnessKind::Codex).then_some(if role.service_tier.is_some() {
+            "fast"
+        } else {
+            "standard"
+        });
+        let apply = async {
+            runtime
+                .set_model(
+                    model.clone(),
+                    role.thinking_level.clone(),
+                    tier.map(str::to_owned),
+                )
+                .await
+                .map_err(|_| WorkspaceError::runtime())?;
+            let actual = runtime
+                .snapshot()
+                .await
+                .map_err(|_| WorkspaceError::runtime())?;
+            if !actual.model.as_ref().is_some_and(|actual_model| {
+                actual_model.id == model.id && actual_model.provider == model.provider
+            }) || role
+                .thinking_level
+                .as_ref()
+                .is_some_and(|level| actual.thinking_level.as_ref() != Some(level))
+                || tier.is_some_and(|tier| actual.service_tier.as_deref() != Some(tier))
+            {
+                return Err(WorkspaceError::runtime());
+            }
+            self.update_record(session_id, |record| {
+                record.model = actual.model;
+                record.thinking_level = actual.thinking_level.clone();
+                record.updated_at = now_string();
+            })?;
+            settle_settings_notices(
+                &state,
+                self.remember_settings(session_id, model, actual.thinking_level.as_deref(), tier),
+            );
+            Ok(())
+        }
+        .await;
+        if let Err(error) = apply {
+            let old_tier = (role.harness == HarnessKind::Codex).then(|| {
+                before
+                    .service_tier
+                    .clone()
+                    .unwrap_or_else(|| "standard".into())
+            });
+            let rollback = runtime
+                .set_model(
+                    before_model.clone(),
+                    before.thinking_level.clone(),
+                    old_tier.clone(),
+                )
+                .await;
+            if rollback.is_err() {
+                settle_settings_notices(
+                    &state,
+                    self.remember_settings(
+                        session_id,
+                        &before_model,
+                        before.thinking_level.as_deref(),
+                        old_tier.as_deref(),
+                    ),
+                );
+                drop(_admission);
+                let _ = self.close_session(session_id).await;
+            }
+            return Err(error);
+        }
+        Ok(FusionRole {
+            model: Some(before_model),
+            thinking_level: before.thinking_level,
+            service_tier: (before.service_tier.as_deref() == Some("fast"))
+                .then_some(FusionServiceTier::Fast),
+            ..role
+        })
+    }
+
+    /// A staged sidekick cannot receive a prompt before the pair commits.
+    pub(crate) async fn discard_fusion_sidekick_draft(&self, session_id: &str) {
+        let _ = self.close_session(session_id).await;
+        if self
+            .record(session_id)
+            .is_ok_and(|record| record.materialized == Some(false))
+            && let Ok(mut registry) = lock(&self.inner.registry)
+        {
+            let _ = registry.transact(|sessions| {
+                sessions.retain(|record| record.id != session_id);
+                Ok(())
+            });
+            self.inner.settings.discard(session_id);
+        }
     }
 
     async fn set_model(
@@ -3478,11 +3689,18 @@ fn historical_content_registering(
     project_native_workspace_history(&source, directory)
         .map(|projection| {
             if let Some(registry) = files {
+                // The history directory is the chat's worktree or project.
+                let scope = registry.scope(
+                    &record.id,
+                    Some(directory.canonical_path()),
+                    &chat_files::output_roots(record.harness),
+                );
                 chat_files::record_history(
                     registry,
                     &record.id,
                     directory.canonical_path(),
                     projection.chat_files(),
+                    &scope,
                 );
             }
             let mut snapshot = snapshot_from_history(record, &projection);
@@ -4072,6 +4290,60 @@ pub async fn harness_models_v19(
         protocol: 19,
         catalog,
     })
+}
+
+/// Validate and canonicalize the person's selection against the same native
+/// catalog the Fusion role picker uses. A missing selection never falls back.
+pub(crate) async fn fusion_catalog_role(
+    host: &HostState,
+    workspace_id: String,
+    mut role: crate::fusion::model::FusionRole,
+) -> Result<crate::fusion::model::FusionRole, WorkspaceError> {
+    use crate::fusion::model::sidekick_change_error;
+    let Some(requested) = &role.model else {
+        verified_project_directory(host, &workspace_id, true)?;
+        if role.thinking_level.is_some() || role.service_tier.is_some() {
+            return Err(WorkspaceError::invalid());
+        }
+        return Ok(role);
+    };
+    validate_model(requested, None)?;
+    let catalog = harness_models(
+        host,
+        HarnessModelsRequest {
+            workspace_id,
+            harness: role.harness,
+            part: Some(HarnessCatalogPart::Models),
+        },
+        None,
+    )
+    .await?;
+    let entry = catalog
+        .models
+        .into_iter()
+        .find(|entry| entry.id == requested.id && entry.provider == requested.provider)
+        .ok_or_else(|| {
+            sidekick_change_error(
+                "FUSION_MODEL_MISSING",
+                "The model is missing from the native catalog.",
+            )
+        })?;
+    if role.thinking_level.as_ref().is_some_and(|level| {
+        entry
+            .thinking_levels
+            .as_ref()
+            .is_none_or(|levels| !levels.contains(level))
+    }) || (role.service_tier.is_some() && !entry.supports_fast)
+    {
+        return Err(WorkspaceError::invalid());
+    }
+    role.model = Some(WorkspaceModel {
+        id: entry.id,
+        provider: entry.provider,
+        name: entry.name,
+        thinking_levels: entry.thinking_levels,
+    });
+    Ok(role)
 }
 
 async fn harness_models(
@@ -4679,6 +4951,24 @@ pub(crate) async fn linked_chat_history(
     Ok(snapshot.blocks)
 }
 
+/// The session's history as its harness persisted it, never the live view:
+/// a live Claude Code chat shows a sent prompt before Claude Code writes it,
+/// so only this read proves that a message reached the native history
+/// (Fusion delivery checks, ADR-076). Closed chats are read the same way.
+pub(crate) async fn persisted_history_blocks(
+    host: &HostState,
+    session_id: &str,
+) -> Result<Vec<NativeBlock>, WorkspaceError> {
+    let record = host.workspace.record(session_id)?;
+    let directory = verified_project_directory(host, &record.workspace_id, false)?;
+    let directory = host.workspace.history_directory(&record.id, directory)?;
+    let snapshot =
+        tokio::task::spawn_blocking(move || historical_content_blocking(record, &directory, true))
+            .await
+            .map_err(|_| WorkspaceError::io())??;
+    Ok(snapshot.blocks)
+}
+
 /// Explicit, process-free read from registered native history; available in safe mode.
 #[tauri::command]
 pub async fn workspace_history_v1(
@@ -4813,7 +5103,11 @@ pub(crate) async fn dispatch_workspace_command(
             mode,
         } => {
             let _operation = authorize_ordinary_live_session(host, &session_id).await?;
+            let epoch = host.workspace.person_message_epoch(&session_id);
             host.workspace.send(&session_id, text, mode).await?;
+            host.workspace
+                .person_message_admitted(&session_id, epoch)
+                .await;
             Ok(WorkspaceResult::Accepted { session_id })
         }
         WorkspaceCommand::Interrupt { session_id } => {
@@ -4924,8 +5218,19 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
         mut events,
         coordinator,
         publisher,
+        files_scope,
     } = forwarding;
     tokio::spawn(async move {
+        // One event per burst of reported files tells the WebView to list
+        // again, once the registry (the blocking pool included) has them.
+        let files_changed = {
+            let (host, session_id) = (host.clone(), session_id.clone());
+            chat_files::ChangeNotifier::new(move || {
+                if let Some(inner) = host.upgrade() {
+                    publish_chat_files_changed(&inner, &session_id);
+                }
+            })
+        };
         // This task is the only consumer of `events` and the bridge reader
         // waits for it under backpressure. It therefore never awaits a native
         // response while it still owns an undrained stream.
@@ -4970,7 +5275,14 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
             let payload = match event {
                 NativeEvent::File(file) => {
                     if let Some(file) = file.into_event(&session_id) {
-                        chat_files::record_report(&inner.chat_files, &session_id, file.into(), None);
+                        chat_files::record_report(
+                            &inner.chat_files,
+                            &session_id,
+                            file.into(),
+                            None,
+                            &files_scope,
+                            &files_changed,
+                        );
                     }
                     continue;
                 }
@@ -5021,6 +5333,9 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                 NativeEvent::Block { block } => {
                     mark_materialized(&inner, &state, &session_id);
                     WorkspaceEventPayload::Block { block }
+                }
+                NativeEvent::HistoryPage { blocks } => {
+                    WorkspaceEventPayload::HistoryPage { blocks }
                 }
                 NativeEvent::TextDelta { block_id, mut text } => {
                     next = coalesce_text_deltas(&mut events, &block_id, &mut text);
@@ -5357,6 +5672,17 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
             }
         }
     })
+}
+
+fn publish_chat_files_changed(inner: &WorkspaceHostInner, session_id: &str) {
+    let publisher = inner
+        .chat_files_events
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(Arc::clone));
+    if let Some(publisher) = publisher {
+        publisher(chat_files::ChatFilesChanged::new(session_id));
+    }
 }
 
 fn publish_extension_ui(
@@ -6590,6 +6916,8 @@ Board."
             NativeRuntimeError::NotRunning,
             NativeRuntimeError::UnexpectedExit,
             NativeRuntimeError::Protocol,
+            // Sent, outcome unknown (ADR-076): never a refusal.
+            NativeRuntimeError::Bridge(BridgeFailureCode::OutcomeUnknown),
         ] {
             assert!(
                 !super::sidekick_response_unconsumed(&ambiguous),

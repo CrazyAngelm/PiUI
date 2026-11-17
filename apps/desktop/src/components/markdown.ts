@@ -336,6 +336,16 @@ function convertBlocks(tokens: readonly RawToken[], context: Context): MarkdownB
   return blocks;
 }
 
+/**
+ * Whether the lexer met a link reference definition, at the top level or nested in a quote or a list
+ * (marked collects them all in the `links` table of its result): a definition can resolve links in
+ * blocks before it, so nothing may stay remembered once there is one.
+ */
+function hasDefinitions(tokens: readonly RawToken[]): boolean {
+  const links = (tokens as { links?: Record<string, unknown> }).links;
+  return (links !== undefined && Object.keys(links).length > 0) || tokens.some((token) => token.type === 'def');
+}
+
 function lastContentIndex(tokens: readonly RawToken[]): number {
   for (let index = tokens.length - 1; index >= 0; index -= 1) if (tokens[index]!.type !== 'space') return index;
   return -1;
@@ -350,6 +360,17 @@ function fenceClosed(raw: string): boolean {
   if (lines.length < 2) return false;
   const last = lines[lines.length - 1]!.replace(/^ {0,3}/u, '').trimEnd();
   return last.length >= marker.length && [...last].every((char) => char === marker[0]);
+}
+
+/** Whether the token at `index` can no longer change: a blank line follows it, or it ends by itself. */
+function boundaryAfter(tokens: readonly RawToken[], index: number): boolean {
+  const token = tokens[index]!;
+  if (token.type === 'space' || tokens[index + 1]?.type === 'space') return true;
+  switch (token.type) {
+    case 'heading': case 'hr': return true;
+    case 'code': return token.codeBlockStyle !== 'indented' && fenceClosed(token.raw);
+    default: return false;
+  }
 }
 
 /** Code that continues to the end of the text: its last characters belong to it. */
@@ -452,7 +473,7 @@ class IncrementalParser implements MarkdownParser {
     }
     tokens ??= lex(tail, limit);
 
-    if (!this.definitions && tokens.some((token) => token.type === 'def')) {
+    if (!this.definitions && hasDefinitions(tokens)) {
       this.reset();
       this.definitions = true;
       return this.build(text, text, streaming);
@@ -467,6 +488,15 @@ class IncrementalParser implements MarkdownParser {
       const type = previous >= 0 ? tokens[previous]!.type : '';
       if (type !== 'list' && type !== 'blockquote') break;
       commit = previous;
+    }
+    // Text that follows can still change a block it touches: a paragraph followed by `#` is two blocks until
+    // the next character makes it `#tag`, one paragraph. A block is remembered only behind a stable boundary:
+    // a blank line, or its own end (a heading line, a rule, a closed fence).
+    for (let index = 0; index < commit; index += 1) {
+      if (!boundaryAfter(tokens, index)) {
+        commit = index;
+        break;
+      }
     }
     if (commit > 0 && !this.definitions) {
       let offset = 0;

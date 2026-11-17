@@ -3,6 +3,7 @@ import { translate } from '../../features/locale/language';
 import { DEFAULT_FUSION_OPTIONS, FusionError, type FusionRefusalV1 } from '../../host-api/fusionClient';
 import {
   FUSION_PERMISSION_CHOICES,
+  FUSION_PAIR_MEMORY_KEY,
   checkRoleAgainstCatalog,
   defaultPair,
   defaultPermissionModes,
@@ -14,6 +15,8 @@ import {
   exceedsCopy,
   refusalCopy,
   rememberablePair,
+  rememberFusionPair,
+  sidekickModelRequiresRestart,
   restorePair,
   roleLabel,
   withHarness,
@@ -43,6 +46,31 @@ const REFUSALS: FusionRefusalV1[] = [
   'codex-sandbox-unverified',
   'read-only-lead',
 ];
+
+describe('remembering a confirmed sidekick change', () => {
+  it('stores the admitted role and its model and tuning for the next pair', () => {
+    const old = defaultPair(['claude-code', 'codex'])!;
+    const memory = new Map<string, string>();
+    const store = { setItem: (key: string, value: string) => { memory.set(key, value); } };
+    rememberFusionPair(old, store);
+    const updated = withRole(old, 'sidekick', {
+      harness: 'codex', permissionMode: 'read-only',
+      model: { id: 'new-model', name: 'New model', provider: 'openai' },
+      thinkingLevel: 'high', serviceTier: 'fast',
+    });
+    rememberFusionPair(updated, store);
+    const restored = restorePair(memory.get(FUSION_PAIR_MEMORY_KEY) ?? null, ['claude-code', 'codex']);
+    expect(restored).toEqual(updated);
+    expect(sidekickModelRequiresRestart(updated.sidekick, { id: 'old-model', name: 'Old model', provider: 'openai' })).toBe(false);
+    expect(sidekickModelRequiresRestart(updated.sidekick, { id: 'old-model', name: 'Old model', provider: 'another-source' })).toBe(true);
+    expect(checkRoleAgainstCatalog(updated.sidekick, []).role.model).toEqual(updated.sidekick.model);
+    expect(checkRoleAgainstCatalog(updated.sidekick, []).missingModel).toBe(true);
+
+    const replacement = withRole(updated, 'sidekick', { harness: 'pi', permissionMode: 'full-access' });
+    rememberFusionPair(replacement, store);
+    expect(restorePair(memory.get(FUSION_PAIR_MEMORY_KEY) ?? null, ['claude-code', 'pi'])).toEqual(replacement);
+  });
+});
 
 describe('default Fusion pair', () => {
   it('prefers a cross-vendor pair the host admits: a full-access lead over an edit-only sidekick', () => {

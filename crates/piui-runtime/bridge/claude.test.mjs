@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { PassThrough } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -1744,6 +1744,38 @@ test("native tasks are listed while they run, keep how they ended and can be sto
   } finally { await adapter.dispose(); }
 });
 
+test("a shell-less Fusion sidekick gets only its tool set, no MCP, no user settings, and stops if Claude Code offers more", async () => {
+  const tools = ["Read", "Glob", "Grep", "TodoWrite"];
+  const sidekick = setup({ backgroundTasks: false, nativeSubagents: false, permissionMode: "read-only", allowedTools: tools });
+  const log = recorder();
+  const adapter = await createClaudeAdapter(sidekick.config, log.emit);
+  try {
+    const args = startRecord(sidekick.records).args;
+    assert.equal(argValue(args, "--tools"), tools.join(","));
+    assert.ok(args.includes("--strict-mcp-config"));
+    assert.ok(!args.includes("--mcp-config"), "no MCP server is configured");
+    assert.equal(argValue(args, "--setting-sources"), "project");
+    assert.match(argValue(args, "--disallowed-tools"), /mcp__\*/);
+    await adapter.prompt({ text: "hello", mode: "prompt" });
+    await waitFor(() => log.of("turnCompleted").length === 1);
+    assert.notEqual((await adapter.snapshot()).status, "failed");
+  } finally { await adapter.dispose(); }
+  const widened = setup({ backgroundTasks: false, nativeSubagents: false, permissionMode: "read-only", allowedTools: tools }, ["--fixture-init-extra-bash"]);
+  const widenedLog = recorder();
+  const offered = await createClaudeAdapter(widened.config, widenedLog.emit);
+  try {
+    await offered.prompt({ text: "wait", mode: "prompt" });
+    await waitFor(() => widenedLog.of("turnCompleted").length === 1);
+    assert.equal((await offered.snapshot()).status, "failed");
+  } finally { await offered.dispose(); }
+  // An ordinary chat with a tool allowlist keeps the person's settings.
+  const ordinary = setup({ permissionMode: "read-only", allowedTools: ["Read"] });
+  const plain = await createClaudeAdapter(ordinary.config, () => {});
+  try {
+    assert.ok(!startRecord(ordinary.records).args.includes("--setting-sources"));
+  } finally { await plain.dispose(); }
+});
+
 test("a session without background work disables Claude Code background tasks for the whole CLI process", async () => {
   const quiet = setup({ backgroundTasks: false, nativeSubagents: false });
   const adapter = await createClaudeAdapter(quiet.config, () => {});
@@ -1763,6 +1795,7 @@ const EDIT_DIFF = "update: src/a.ts\n@@ -1,2 +1,2 @@\n keep\n-old line\n+new lin
 const expectedFileEvents = () => [
   { type: "file", blockId: claudeToolId("toolu_edit"), path: resolve(process.cwd(), "src/a.ts"), origin: "written" },
   { type: "file", blockId: claudeToolId("toolu_write"), path: join(process.cwd(), "abs", "c.ts"), origin: "written" },
+  { type: "file", blockId: claudeToolId("toolu_out"), path: join(dirname(process.cwd()), "outside-project", "d.ts"), origin: "written" },
   { type: "file", blockId: claudeToolId("toolu_nb"), path: resolve(process.cwd(), "analysis.ipynb"), origin: "written" },
   { type: "file", blockId: claudeToolId("toolu_img"), path: resolve(process.cwd(), "shots/Screen.PNG"), origin: "read", mimeType: "image/png" },
   { type: "file", blockId: claudeToolId("toolu_mcp"), origin: "returned", inline: { mimeType: "image/png", base64: TINY_PNG } },
@@ -1771,7 +1804,10 @@ function checkEditBlocks(blocks) {
   const tool = (toolUseId) => blocks.find((block) => block.id === claudeToolId(toolUseId));
   assert.equal(tool("toolu_edit").text, EDIT_DIFF, "the structured patch becomes the unified diff the tool row renders");
   assert.equal(tool("toolu_edit").status, "complete");
-  assert.equal(tool("toolu_write").text, `add: ${join(process.cwd(), "abs", "c.ts")}\n@@ -0,0 +1,2 @@\n+a\n+b`, "a new file shows its content as additions");
+  assert.equal(tool("toolu_write").text, "add: abs/c.ts\n@@ -0,0 +1,2 @@\n+a\n+b", "a new file shows its content as additions, named relative to the project");
+  assert.equal(tool("toolu_out").text, "add: d.ts\n@@ -0,0 +1,1 @@\n+c", "a file outside the project is named by its base name");
+  // An absolute path never enters block text.
+  assert.ok(blocks.every((block) => !String(block.text ?? "").includes(dirname(process.cwd()))), "no block text carries an absolute path");
   assert.deepEqual([tool("toolu_bad").status, tool("toolu_bad").text], ["failed", "String to replace not found"], "a failed edit keeps the tool's own message");
   assert.equal(tool("toolu_nb").text, "Edited cell");
   // Paths and bytes never enter block text.

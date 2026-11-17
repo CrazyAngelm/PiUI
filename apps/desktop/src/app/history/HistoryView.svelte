@@ -365,6 +365,7 @@
                 loading={chatReader.loading}
                 sessionKey={`history-chat:${chat.id}`}
                 agentLabel={harnessMeta(chat.harness).label}
+                answerHarness={chat.harness}
                 emptyText={$t('This session has no readable messages.')}
               />
             {/key}

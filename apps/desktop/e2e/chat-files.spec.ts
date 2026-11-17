@@ -38,7 +38,7 @@ test.describe('chat files', () => {
     await expect(sound.locator('audio')).toHaveAttribute('controls', '');
     await expect(sound.getByRole('button', { name: 'Save as…' })).toBeVisible();
 
-    const source = card(page, 'transport.ts');
+    const source = card(page, 'transport-notes.md');
     await expect(source.locator('img, audio, video')).toHaveCount(0);
     await expect(source).toContainText('Written');
 
@@ -80,7 +80,7 @@ test.describe('chat files', () => {
 
   test('opens a file through the host', async ({ lab, page }) => {
     await openChat(lab);
-    await card(page, 'transport.ts').getByRole('button', { name: 'transport.ts' }).click();
+    await card(page, 'transport-notes.md').getByRole('button', { name: 'transport-notes.md' }).click();
     await expect.poll(async () => (await calls(page)).filter((call) => call.type === 'open').length).toBe(1);
   });
 });

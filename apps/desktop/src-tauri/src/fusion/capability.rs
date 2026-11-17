@@ -180,6 +180,24 @@ pub(crate) const fn capabilities(
     }
 }
 
+/// The built-in tool set a Claude Code sidekick runs with in a shell-less
+/// preset: what makes the matrix rows above true (ADR-076). The bridge passes
+/// it as `--tools` (no Bash, PowerShell or other code runner exists in the
+/// session, whatever the person's own permission rules pre-approve) with
+/// `--strict-mcp-config` and no MCP configuration (no MCP server), drops the
+/// person's user and local setting sources, and stops the session if its
+/// init tool list holds anything else. `None`: not restricted this way.
+pub(crate) fn claude_sidekick_tools(permission: PermissionMode) -> Option<Vec<String>> {
+    let read = ["Read", "Glob", "Grep", "TodoWrite"];
+    let write = ["Edit", "Write", "NotebookEdit"];
+    let tools: Vec<&str> = match permission {
+        PermissionMode::ReadOnly => read.to_vec(),
+        PermissionMode::WorkspaceWrite => read.iter().chain(write.iter()).copied().collect(),
+        PermissionMode::Native | PermissionMode::FullAccess => return None,
+    };
+    Some(tools.into_iter().map(str::to_owned).collect())
+}
+
 const fn writes_le(a: Writes, b: Writes) -> bool {
     matches!(
         (a, b),

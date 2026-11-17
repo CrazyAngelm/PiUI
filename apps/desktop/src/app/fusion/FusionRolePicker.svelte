@@ -14,10 +14,10 @@
   import Brain from '@lucide/svelte/icons/brain';
   import Zap from '@lucide/svelte/icons/zap';
   import { t } from '../../features/locale/language';
-  import { cachedHarnessModels, workspaceModel } from '../../host-api/harnessModels';
+  import { cachedHarnessModels, harnessModels, workspaceModel } from '../../host-api/harnessModels';
   import type { HarnessCatalogModel } from '../../../../../contracts/harness-models-v18';
   import type { PermissionMode } from '../../../../../contracts/workspace-v15';
-  import type { FusionRoleNameV1, FusionRoleV1 } from '../../host-api/fusionClient';
+  import type { FusionRoleNameV1, FusionRoleV1, FusionSidekickChangeKindV1 } from '../../host-api/fusionClient';
   import { Spinner } from '../../lib/ui';
   import { harnessMeta } from '../harnessMeta';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
@@ -37,18 +37,22 @@
     modelsEnabled: boolean;
     harnesses: readonly FusionHarnessOption[];
     disabled: boolean;
+    editing?: FusionSidekickChangeKindV1 | undefined;
+    catalogValid?: boolean;
     /** The host's refusal when it concerns this role. */
     refusal: RefusalCopy | undefined;
     onChange: (next: FusionRoleV1) => void;
   }
-  let { role, value, workspaceId, modelsEnabled, harnesses, disabled, refusal, onChange }: Props = $props();
+  let { role, value, workspaceId, modelsEnabled, harnesses, disabled, editing, catalogValid = $bindable(false), refusal, onChange }: Props = $props();
 
   const uid = $props.id();
   const kinds: readonly HarnessKind[] = $derived(role === 'lead' ? FUSION_LEADS : FUSION_SIDEKICKS);
   const options = $derived<FusionHarnessOption[]>(
     kinds.map((kind) => harnesses.find((item) => item.kind === kind) ?? { kind, name: harnessMeta(kind).label, available: false }),
   );
-  const current = $derived(options.find((item) => item.kind === value.harness));
+  const selectedHarness = $derived(value.harness);
+  const current = $derived(options.find((item) => item.kind === selectedHarness));
+  const harnessAvailable = $derived(current?.available === true);
 
   let models = $state.raw<HarnessCatalogModel[]>([]);
   let loading = $state(false);
@@ -57,8 +61,8 @@
 
   $effect(() => {
     const id = workspaceId;
-    const kind = value.harness;
-    const enabled = modelsEnabled && current?.available === true;
+    const kind = selectedHarness;
+    const enabled = modelsEnabled && harnessAvailable;
     // The Nano catalog is account state: a sign-in, a plan or a credit change loads it again.
     if (kind === 'nano') void nanoAccount.catalogRevision;
     models = [];
@@ -77,8 +81,9 @@
         catalogReady = true;
       }
     };
-    cachedHarnessModels(
-      { workspaceId: id, harness: kind },
+    const request = { workspaceId: id, harness: kind };
+    const listing = editing ? harnessModels(request, true) : cachedHarnessModels(
+      request,
       {
         onFresh: show,
         onError: (error) => {
@@ -88,8 +93,8 @@
           }
         },
       },
-    )
-      .then(show)
+    );
+    listing.then(show)
       .catch((error: unknown) => {
         if (!cancelled) {
           loadError = errorMessage(error);
@@ -120,9 +125,16 @@
   const levels = $derived(selectedModel?.thinkingLevels ?? value.model?.thinkingLevels ?? []);
   const fastAvailable = $derived(Boolean(selectedModel?.supportsFast));
   const fast = $derived(value.serviceTier === 'fast');
+  const missingModel = $derived(catalogReady && modelsEnabled && current?.available === true && !loadError && Boolean(value.model) && !selectedModel);
+  const invalidReasoning = $derived(Boolean(value.thinkingLevel && selectedModel && !selectedModel.thinkingLevels?.includes(value.thinkingLevel)));
 
   $effect(() => {
-    if (catalogReady && value.serviceTier === 'fast' && !fastAvailable) onChange(withServiceTier(value, false));
+    catalogValid = catalogReady && !loadError && current?.available === true
+      && !missingModel && !invalidReasoning && (editing !== 'model' || selectedModel !== undefined);
+  });
+
+  $effect(() => {
+    if (catalogReady && selectedModel && value.serviceTier === 'fast' && !fastAvailable) onChange(withServiceTier(value, false));
   });
 
   function chooseModel(key: string): void {
@@ -135,7 +147,7 @@
 <section class="role" class:role--refused={refusal !== undefined} aria-labelledby="{uid}-title">
   <h3 id="{uid}-title">{$t(roleLabel(role))}</h3>
 
-  <div class="field">
+  {#if editing !== 'model'}<div class="field">
     <label for="{uid}-harness">{$t('Harness')}</label>
     <select
       id="{uid}-harness"
@@ -152,7 +164,7 @@
         </option>
       {/each}
     </select>
-  </div>
+  </div>{/if}
 
   <div class="field">
     <span class="label" id="{uid}-model-label">{$t('Model')}</span>
@@ -160,12 +172,12 @@
       models={modelOptions}
       harness={value.harness}
       value={modelKey}
-      defaultOption={true}
+      defaultOption={editing !== 'model'}
       {loading}
       error={loadError}
       {levels}
       level={value.thinkingLevel ?? ''}
-      levelDefault={true}
+      levelDefault={editing !== 'model' || invalidReasoning}
       {fastAvailable}
       {fast}
       busy={disabled || loading}
@@ -184,9 +196,11 @@
         </button>
       {/snippet}
     </ModelPicker>
+    {#if missingModel}<p class="hint" role="status">{$t('This model is missing from the current catalog. Choose another model.')}</p>{/if}
+    {#if invalidReasoning}<p class="hint" role="status">{$t('Choose a reasoning level offered by this model.')}</p>{/if}
   </div>
 
-  <div class="field">
+  {#if editing !== 'model'}<div class="field">
     <label for="{uid}-permission">{$t('Permissions')}</label>
     <select
       id="{uid}-permission"
@@ -202,7 +216,7 @@
       {/each}
     </select>
     <p class="hint">{$t(FUSION_PERMISSION_CHOICES.find((choice) => choice.value === value.permissionMode)?.description ?? '')}</p>
-  </div>
+  </div>{/if}
 
   {#if refusal}
     <div class="refusal" id="{uid}-refusal">

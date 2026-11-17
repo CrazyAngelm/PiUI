@@ -41,6 +41,35 @@ describe('fusion v1 contract', () => {
     await expect(malformed.request({ type: 'state', leadSessionId: 'lead-1' })).rejects.toMatchObject({ code: 'unknown' });
   });
 
+  it('decodes sidekick change readiness and typed refusals', async () => {
+    const envelope = { type: 'state', state: {
+      ...fixture.state.state,
+      sidekickChangeBlock: 'FUSION_REPORT_UNCERTAIN',
+      sidekickReplaceBlock: 'FUSION_REPORT_UNCERTAIN',
+      sidekickCurrentModel: { id: 'model', name: 'Model', provider: 'openai' },
+    } };
+    expect(decodeFusionResult(envelope)).toEqual(envelope);
+    expect(decodeFusionResult({ ...envelope, state: { ...envelope.state, sidekickReplaceBlock: 'invented' } })).toBeUndefined();
+    expect(decodeFusionResult({ ...envelope, state: { ...envelope.state, sidekickCurrentModel: { id: 'model' } } })).toBeUndefined();
+    const command: FusionCommandV1 = {
+      type: 'changeSidekick', leadSessionId: 'lead-1',
+      change: { kind: 'replace', revision: 4, sidekick: { harness: 'codex', permissionMode: 'workspace-write' }, allowContextLoss: true },
+    };
+    const refusing = createFusionClient(
+      () => Promise.reject({ code: 'FUSION_REPORT_UNCERTAIN' }),
+      () => Promise.resolve(() => {}),
+    );
+    await expect(refusing.request(command)).rejects.toMatchObject({ code: 'FUSION_REPORT_UNCERTAIN' });
+    const client = createFusionClient(
+      <T>(name: string, args?: Record<string, unknown>) => {
+        expect([name, args]).toEqual(['fusion_command_v1', { command }]);
+        return Promise.resolve(envelope as T);
+      },
+      () => Promise.resolve(() => {}),
+    );
+    await expect(client.request(command)).resolves.toEqual(envelope);
+  });
+
   it('sends the command in the shape of the fixture', async () => {
     const calls: unknown[] = [];
     const client = createFusionClient(

@@ -14,6 +14,8 @@ export interface AnswerSource {
   /** Whether the owner can read the saved history at all. */
   canLoad(): boolean;
   load(block: TimelineBlock): Promise<void>;
+  /** The harness of the chat (`'codex'`, ...): service markup is removed only from the answers of the one that writes it. */
+  harness?: string | undefined;
 }
 
 const ANSWER_CONTEXT = Symbol('piui.conversation.answers');
@@ -28,6 +30,6 @@ export function useAnswerSource(): AnswerSource {
 }
 
 /** The text of an assistant block as shown: the loaded full answer when there is one, without the harness's service markup. */
-export function answerText(block: Pick<TimelineBlock, 'text' | 'status'>, full: string | undefined = undefined): string {
-  return stripServiceMarkup(full ?? block.text ?? '', block.status === 'streaming');
+export function answerText(block: Pick<TimelineBlock, 'text' | 'status'>, full: string | undefined = undefined, harness: string | undefined = undefined): string {
+  return stripServiceMarkup(full ?? block.text ?? '', block.status === 'streaming', harness);
 }

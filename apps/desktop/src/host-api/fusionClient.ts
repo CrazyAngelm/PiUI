@@ -2,6 +2,7 @@ import { hostInvoke, hostListen, type HostInvoke, type HostListen } from './tran
 import {
   FUSION_CHANGED_EVENT_V1,
   FUSION_PROTOCOL,
+  FUSION_SIDEKICK_CHANGE_BLOCKS,
   type FusionCapabilitiesV1,
   type FusionChangedEventV1,
   type FusionCommandV1,
@@ -34,6 +35,13 @@ export const FUSION_ERROR_CODES = [
   'IO_ERROR',
   'SIGN_IN_REQUIRED',
   'NANO_SIGN_IN_REQUIRED',
+  ...FUSION_SIDEKICK_CHANGE_BLOCKS,
+  'FUSION_CONTEXT_LOSS',
+  'FUSION_MODEL_MISSING',
+  'FUSION_SIDEKICK_NOT_ADMITTED',
+  'FUSION_SIDEKICK_START_FAILED',
+  'RUNTIME_FAILED',
+  'NOT_TRUSTED',
   'unknown',
 ] as const;
 
@@ -78,7 +86,13 @@ export function isFusionState(value: unknown): value is FusionStateV1 {
     && Array.isArray(value.briefs)
     && value.briefs.every((brief) => isRecord(brief) && text(brief.briefId) && Array.isArray(brief.rounds))
     && isRecord(value.stats)
-    && count(value.revision);
+    && count(value.revision)
+    && (value.sidekickChangeBlock === undefined || FUSION_SIDEKICK_CHANGE_BLOCKS.some((code) => code === value.sidekickChangeBlock))
+    && (value.sidekickReplaceBlock === undefined || FUSION_SIDEKICK_CHANGE_BLOCKS.some((code) => code === value.sidekickReplaceBlock))
+    && (value.sidekickCurrentModel === undefined || (
+      isRecord(value.sidekickCurrentModel) && text(value.sidekickCurrentModel.id) && text(value.sidekickCurrentModel.name)
+      && (value.sidekickCurrentModel.provider === undefined || text(value.sidekickCurrentModel.provider))
+    ));
 }
 
 const PERMISSION_MODES = ['native', 'read-only', 'workspace-write', 'full-access'] as const;

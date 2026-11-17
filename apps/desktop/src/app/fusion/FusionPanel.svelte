@@ -8,11 +8,13 @@
   import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
   import Square from '@lucide/svelte/icons/square';
   import OctagonX from '@lucide/svelte/icons/octagon-x';
+  import { tick } from 'svelte';
   import { t } from '../../features/locale/language';
   import { Badge, Button, Spinner, StatusDot } from '../../lib/ui';
   import { harnessMeta } from '../harnessMeta';
   import HarnessMark from '../shell/HarnessMark.svelte';
-  import { FUSION_PERMISSION_CHOICES } from './fusionPair';
+  import { FUSION_PERMISSION_CHOICES, fusionErrorText, pairKey, sidekickModelRequiresRestart } from './fusionPair';
+  import type { FusionHarnessOption } from './FusionRolePicker.svelte';
   import type { FusionPairState } from './fusionPairState.svelte';
   import {
     briefOutcomeLabel,
@@ -26,15 +28,17 @@
     sidekickStateDot,
     sidekickStateLabel,
   } from './fusionState';
-  import type { FusionBriefV1, FusionRoleV1 } from '../../host-api/fusionClient';
+  import type { FusionBriefV1, FusionPairV1, FusionRoleV1, FusionSidekickChangeKindV1 } from '../../host-api/fusionClient';
 
   interface Props {
     model: FusionPairState;
     safeMode: boolean;
+    trusted: boolean;
+    harnesses: readonly FusionHarnessOption[];
     onOpenSession: (sessionId: string) => void;
     onConfirm: (request: FusionConfirm) => void;
   }
-  let { model, safeMode, onOpenSession, onConfirm }: Props = $props();
+  let { model, safeMode, trusted, harnesses, onOpenSession, onConfirm }: Props = $props();
 
   const INITIAL_BRIEFS = 8;
   const journal = $derived(model.state);
@@ -52,6 +56,57 @@
   const shownBriefs = $derived(showAll ? briefs : briefs.slice(0, INITIAL_BRIEFS));
   const working = $derived(journal ? ['working', 'waitingApproval', 'stopping'].includes(journal.sidekick) : false);
   const locked = $derived(safeMode || model.busy !== '');
+  const uid = $props.id();
+  const loadPicker = () => import('./FusionPairPicker.svelte');
+  let editing = $state<FusionSidekickChangeKindV1>();
+  let draft = $state<FusionPairV1>();
+  let draftRevision = $state(0);
+  let initialDraftKey = $state('');
+  let ready = $state(false);
+  let editor = $state<HTMLElement>();
+  let editTrigger: HTMLElement | undefined;
+
+  const changeReason = $derived(journal?.sidekickChangeBlock ?? (!trusted ? 'NOT_TRUSTED' : undefined));
+  const replaceReason = $derived(changeReason ?? journal?.sidekickReplaceBlock);
+  const reasonText = (code: string): string => fusionErrorText({ code });
+  const current = $derived(journal?.sessions.find((session) => !session.retired));
+  const canDetach = $derived(journal?.sidekickReplaceBlock === 'FUSION_SIDEKICK_ATTACHED');
+  const losesContext = $derived(editing === 'replace' || Boolean(draft && current
+    && sidekickModelRequiresRestart(draft.sidekick, journal?.sidekickCurrentModel)));
+  const stale = $derived(Boolean(journal && journal.revision !== draftRevision));
+  const editorReason = $derived((editing === 'replace' ? replaceReason : changeReason)
+    ?? (stale ? 'CONFLICT' : undefined));
+
+  async function edit(kind: FusionSidekickChangeKindV1, trigger: HTMLElement): Promise<void> {
+    if (!journal) return;
+    editTrigger = trigger;
+    draft = journal.pair;
+    if (kind === 'model' && !draft.sidekick.model && journal.sidekickCurrentModel) {
+      draft = { ...draft, sidekick: { ...draft.sidekick, model: journal.sidekickCurrentModel } };
+    }
+    initialDraftKey = pairKey(draft);
+    draftRevision = journal.revision;
+    ready = false;
+    editing = kind;
+    await tick();
+    editor?.focus();
+  }
+
+  async function closeEditor(): Promise<void> {
+    editing = undefined;
+    draft = undefined;
+    await tick();
+    editTrigger?.focus();
+  }
+
+  async function confirmChange(): Promise<void> {
+    if (locked || !ready || !draft || !editing || editorReason) return;
+    const ok = await model.act('changeSidekick', {
+      type: 'changeSidekick', leadSessionId: model.leadSessionId,
+      change: { revision: draftRevision, kind: editing, sidekick: draft.sidekick, allowContextLoss: losesContext },
+    });
+    if (ok) await closeEditor();
+  }
 
   const permissionLabel = (role: FusionRoleV1): string =>
     $t(FUSION_PERMISSION_CHOICES.find((choice) => choice.value === role.permissionMode)?.label ?? role.permissionMode);
@@ -137,9 +192,9 @@
     {/if}
 
     <div class="actions" role="group" aria-label={$t('Pair actions')}>
-      <Button size="sm" disabled={locked || !working} loading={model.busy === 'stopSidekick'} onclick={() => void model.act('stopSidekick', { type: 'stopSidekick', leadSessionId: model.leadSessionId })}>
+      <Button size="sm" disabled={locked || (!working && !canDetach)} loading={model.busy === 'stopSidekick'} onclick={() => void model.act('stopSidekick', { type: 'stopSidekick', leadSessionId: model.leadSessionId })}>
         {#snippet leading()}<Square />{/snippet}
-        {$t('Stop sidekick')}
+        {$t(working ? 'Stop sidekick' : 'Detach sidekick')}
       </Button>
       <Button size="sm" disabled={locked} loading={model.busy === 'stopPair'} onclick={() => void model.act('stopPair', { type: 'stopPair', leadSessionId: model.leadSessionId })}>
         {#snippet leading()}<OctagonX />{/snippet}
@@ -149,8 +204,48 @@
         {#snippet leading()}<RotateCcw />{/snippet}
         {$t('Reset sidekick…')}
       </Button>
+      <Button
+        size="sm"
+        disabled={locked || Boolean(changeReason) || editing !== undefined}
+        aria-describedby={changeReason ? `${uid}-change-reason` : undefined}
+        onclick={(event) => void edit('model', event.currentTarget)}
+      >{$t('Change sidekick model')}</Button>
+      <Button
+        size="sm"
+        disabled={locked || Boolean(replaceReason) || editing !== undefined}
+        aria-describedby={replaceReason ? (changeReason ? `${uid}-change-reason` : `${uid}-replace-reason`) : undefined}
+        onclick={(event) => void edit('replace', event.currentTarget)}
+      >{$t('Replace sidekick')}</Button>
     </div>
-    <p class="hint">{$t('Stop sidekick interrupts its current round. Stop pair also stops the lead. Reset retires the sidekick context; the next brief starts a fresh one.')}</p>
+    {#if changeReason}<p class="hint" id="{uid}-change-reason">{ $t(reasonText(changeReason)) }</p>
+    {:else if replaceReason}<p class="hint" id="{uid}-replace-reason">{ $t(reasonText(replaceReason)) }</p>{/if}
+
+    {#if editing && draft}
+      <section class="sidekick-editor" bind:this={editor} tabindex="-1" aria-labelledby="{uid}-editor-title">
+        <h3 id="{uid}-editor-title">{$t(editing === 'model' ? 'Change sidekick model' : 'Replace sidekick')}</h3>
+        {#await loadPicker()}
+          <Spinner size={14} />
+        {:then { default: FusionPairPicker }}
+          <FusionPairPicker workspaceId={journal.workspaceId} {trusted} {harnesses} disabled={locked} {editing} bind:pair={draft} bind:ready />
+        {/await}
+        {#if losesContext}
+          <p class="hint">{$t('This starts a fresh sidekick conversation with no earlier context. The old conversation stays readable.')}</p>
+        {/if}
+        {#if editorReason && editorReason !== changeReason && editorReason !== replaceReason}
+          <p class="hint" role="status">{$t(reasonText(editorReason))}</p>
+        {/if}
+        <div class="actions">
+          <Button size="sm" variant="ghost" disabled={model.busy === 'changeSidekick'} onclick={() => void closeEditor()}>{$t('Cancel')}</Button>
+          <Button
+            size="sm"
+            disabled={locked || !ready || Boolean(editorReason) || (editing === 'model' && pairKey(draft) === initialDraftKey)}
+            loading={model.busy === 'changeSidekick'}
+            onclick={() => void confirmChange()}
+          >{$t(losesContext ? 'Start fresh sidekick' : 'Apply model settings')}</Button>
+        </div>
+      </section>
+    {/if}
+    <p class="hint">{$t('Stop the running round or detach the idle sidekick. Stop pair also stops the lead. Reset retires the sidekick conversation.')}</p>
     {#if safeMode}<p class="hint">{$t('Fusion actions are disabled in safe mode.')}</p>{/if}
   {:else if model.error}
     <p class="problem" role="alert">{$t(model.error)}</p>
@@ -408,6 +503,14 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--piui-space-2);
+  }
+  .sidekick-editor {
+    display: grid;
+    gap: var(--piui-space-2);
+  }
+  .sidekick-editor h3 {
+    margin: 0;
+    font-size: var(--piui-text-sm);
   }
   .hint {
     margin: 0;

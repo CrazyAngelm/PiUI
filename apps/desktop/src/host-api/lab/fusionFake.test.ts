@@ -49,6 +49,53 @@ describe('fusion lab fake', () => {
   });
   afterEach(() => vi.useRealTimers());
 
+  it('changes a model in place only after the round and delivery settle', async () => {
+    host.fusion.autoDemo = false;
+    const initial = await create(host, CODEX_PAIR);
+    const leadSessionId = initial.leadSessionId;
+    const sidekick = {
+      ...initial.pair.sidekick,
+      model: { id: 'gpt-lab-5-mini', name: 'GPT Lab 5 Mini', provider: 'openai-lab' },
+      thinkingLevel: 'high', serviceTier: 'fast',
+    };
+    const change = (revision: number, role = sidekick) => ({ type: 'changeSidekick', leadSessionId, change: {
+      kind: 'model', sidekick: role, revision, allowContextLoss: false,
+    } });
+    simulateFusionBrief(host.fusion, leadSessionId);
+    const open = await stateOf(host, leadSessionId);
+    expect(open.sidekickChangeBlock).toBe('FUSION_ROUND_OPEN');
+    await expect(fusion(host, change(open.revision))).rejects.toMatchObject({ code: 'FUSION_ROUND_OPEN' });
+    await vi.advanceTimersByTimeAsync(LAB_FUSION_QUEUE_MS + LAB_FUSION_ROUND_MS);
+    const settled = await stateOf(host, leadSessionId);
+    expect(settled.sidekickReplaceBlock).toBe('FUSION_SIDEKICK_ATTACHED');
+    await expect(fusion(host, change(settled.revision, { ...sidekick, model: { ...sidekick.model, id: 'missing' } })))
+      .rejects.toMatchObject({ code: 'FUSION_MODEL_MISSING' });
+    await expect(fusion(host, change(settled.revision))).resolves.toMatchObject({
+      type: 'state', state: { leadSessionId, sessions: settled.sessions, pair: { sidekick }, revision: settled.revision + 1 },
+    });
+    await expect(fusion(host, change(settled.revision))).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+
+  it('replaces a stopped sidekick with the permissions admitted for the original lead', async () => {
+    host.fusion.autoDemo = false;
+    const initial = await create(host, pairOf(role('claude-code', 'workspace-write'), role('claude-code', 'workspace-write')));
+    const leadSessionId = initial.leadSessionId;
+    simulateFusionBrief(host.fusion, leadSessionId);
+    const open = await stateOf(host, leadSessionId);
+    await fusion(host, { type: 'stopSidekick', leadSessionId });
+    const stopped = await stateOf(host, leadSessionId);
+    const replace = (allowContextLoss: boolean) => ({ type: 'changeSidekick', leadSessionId, change: {
+      kind: 'replace', sidekick: role('codex', 'full-access'), revision: stopped.revision, allowContextLoss,
+    } });
+    await expect(fusion(host, replace(false))).rejects.toMatchObject({ code: 'FUSION_CONTEXT_LOSS' });
+    await expect(fusion(host, replace(true))).resolves.toMatchObject({
+      type: 'state', state: {
+        leadSessionId, pair: { lead: initial.pair.lead, sidekick: role('codex', 'workspace-write') },
+        sessions: [{ sessionId: open.sessions[0]?.sessionId, retired: true }, { harness: 'codex', retired: false }],
+      },
+    });
+  });
+
   it('admits cross-harness pairs by narrowing the sidekick, refusing only with a dimension', () => {
     const answer = (pair: FusionPairV1, sandbox = true): string => {
       const admission = admitPair(pair, sandbox);

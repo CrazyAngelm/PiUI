@@ -8,7 +8,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
   const { createHash, randomUUID } = await import("node:crypto");
   const { createServer } = await import("node:http");
   const { homedir } = await import("node:os");
-  const { isAbsolute, join, resolve } = await import("node:path");
+  const { basename, isAbsolute, join, relative, resolve, sep } = await import("node:path");
   const { mkdtemp, open, rm, stat, writeFile } = await import("node:fs/promises");
 
   const fail = (code, safeMessage) => Object.assign(new Error(code), { bridgeCode: code, safeMessage });
@@ -143,6 +143,15 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
     throw fail("unsupported-settings", "Plugin MCP servers are only for ordinary Claude Code chats.");
   }
   const disableSubagents = coordination || config.nativeSubagents === false;
+  // A Fusion sidekick with an enforced tool set (ADR-076): the person's user
+  // and local settings (where their pre-approved permission rules live) are
+  // not loaded, no MCP server is configured, and the init tool list must not
+  // offer a shell, network, MCP or (read-only) editing tool.
+  const restrictedSidekick = config.backgroundTasks === false && toolAllowlist !== undefined;
+  const SHELL_OR_NETWORK_TOOLS = new Set(["Bash", "BashOutput", "KillBash", "KillShell", "PowerShell", "REPL", "WebFetch", "WebSearch", "Agent", "Task"]);
+  const EDIT_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
+  const forbiddenSidekickTool = (name) => typeof name === "string" && !toolAllowlist?.includes(name)
+    && (SHELL_OR_NETWORK_TOOLS.has(name) || EDIT_TOOLS.has(name) || name.startsWith("mcp__"));
   if (config.nativeId != null && (typeof config.nativeId !== "string" || !UUID_PATTERN.test(config.nativeId))) {
     throw fail("invalid-session", "The saved Claude Code conversation reference is invalid.");
   }
@@ -329,6 +338,16 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
   // diff view reads a unified diff from the block text, as for a Codex file
   // change: an `update: <path>` header, then hunks. A new file's content is
   // shown as additions.
+  // The header names the file relative to the project (a file outside it shows
+  // its base name only): an absolute path never enters block text.
+  const diffPathLabel = (value) => {
+    const text = plain(value);
+    if (!text || text.includes(String.fromCharCode(0))) return "file";
+    const absolute = isAbsolute(text) ? text : resolve(config.cwd, text);
+    const inside = relative(config.cwd, absolute);
+    if (inside && inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside)) return inside.split(sep).join("/");
+    return basename(absolute) || "file";
+  };
   const diffFromResult = (result) => {
     if (!isRecord(result)) return undefined;
     const lines = [];
@@ -345,7 +364,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
       lines.push(`@@ -0,0 +1,${content.length} @@`, ...content.map((line) => `+${line}`));
     }
     if (!lines.length) return undefined;
-    return `${created ? "add" : "update"}: ${oneLine(plain(result.filePath) || "file", 300)}\n${lines.join("\n")}`;
+    return `${created ? "add" : "update"}: ${oneLine(diffPathLabel(result.filePath), 300)}\n${lines.join("\n")}`;
   };
 
   // Chat files (CONTRACT.md, "File events"): files a tool wrote, an image file
@@ -1085,6 +1104,10 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
     // must not delegate stops before the model can call a subagent tool.
     if (disableSubagents && Array.isArray(message.tools) && message.tools.some((name) => name === "Agent" || name === "Task")) {
       stopForPolicy("Claude Code offered a subagent tool to a session that must not delegate; the session was stopped.");
+      return;
+    }
+    if (restrictedSidekick && (!Array.isArray(message.tools) || message.tools.some(forbiddenSidekickTool))) {
+      stopForPolicy("Claude Code offered the sidekick a shell, network, MCP or editing tool outside its tool set; the session was stopped.");
     }
   };
   const startCompaction = () => {
@@ -2034,6 +2057,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
       if (server && hostTools.length) args.push("--allowed-tools", hostTools.join(","));
     }
     if (toolAllowlist) args.push("--tools", toolAllowlist.join(","), "--strict-mcp-config");
+    if (restrictedSidekick) args.push("--setting-sources", "project");
     // With an allowlist, `--strict-mcp-config` already limits MCP to this
     // session's own server; `mcp__*` is denied only when no host tool uses it.
     const denied = [...(disableSubagents ? ["Agent"] : []), ...(toolAllowlist && !coordination && !boardEnabled && !sidekickEnabled && !sessionsEnabled ? ["mcp__*"] : [])];

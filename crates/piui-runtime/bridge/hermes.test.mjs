@@ -340,3 +340,20 @@ test('finished edit and read tools, media and file links become file events with
     assert.doesNotMatch(JSON.stringify(a.snapshot().blocks), /iVBORw0KGgo|report\.pdf|src\/x\.ts|never\.ts/);
   } finally { await a.dispose(); }
 });
+
+test('only tool calls in flight are tracked for files: finished calls are dropped and a turn end clears the open ones', async () => {
+  const e = events(), a = await createHermesAdapter(config, e.emit);
+  try {
+    let done = e.next(v => v.type === 'turnCompleted');
+    await a.prompt({ text: 'many-tools', mode: 'prompt' });
+    assert.equal((await done).outcome, 'succeeded');
+    assert.deepEqual(e.values.filter(v => v.type === 'file'), [
+      { type: 'file', blockId: 'hermes-tool-m-edit', path: resolve(process.cwd(), 'late.ts'), origin: 'written' },
+    ], 'a call finished after 300 others still reports its file, and the open one has not finished');
+    const before = e.values.length;
+    done = e.next(v => v.type === 'turnCompleted' && e.values.length > before);
+    await a.prompt({ text: 'late-update', mode: 'prompt' });
+    await done;
+    assert.equal(e.values.filter(v => v.type === 'file').length, 1, 'what the finished turn left open is forgotten');
+  } finally { await a.dispose(); }
+});

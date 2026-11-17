@@ -29,9 +29,16 @@ could end the visible turn, and that the page lost the reader's place.
   text. A paragraph longer than 2 KB that is mostly delimiters and over a cost
   limit is shown as plain text. A lexer error shows the message as typed.
 - **Streaming.** One parser per message keeps the parsed blocks that cannot
-  change and parses only the tail again, so a long answer is not O(n^2). A list
-  or quote at the end stays open, because a later indented line can join it.
-  A link reference definition turns the parser to whole-text mode. An open
+  change and parses only the tail again, so a long answer is not O(n^2). A block
+  is kept only behind a stable boundary: a blank line after it, or its own end (a
+  heading line, a rule, a closed fence). A paragraph followed directly by `#` is
+  not kept, because the next character makes it `#tag`, one paragraph. A list or
+  quote at the end stays open, because a later indented line can join it.
+  Any link reference definition the lexer collects (at the top level, or nested
+  in a quote or a list) turns the parser to whole-text mode, since it can
+  resolve links in blocks before it. A streamed text, cut at random places,
+  gives what one parse of the whole text gives (tests, with seeded random
+  splits of several fixtures, also at every step). An open
   fence shows as code and a closing fence being typed is not code. A run of
   `*`, `_` or `~` at the very end of the text waits for its next character.
   Blocks keep stable keys (`block:N`, `widget:N`), so a widget keeps its DOM.
@@ -58,9 +65,21 @@ could end the visible turn, and that the page lost the reader's place.
   "Would open <site>" instead of a dialog. The remote viewer has no route.
 - **Service data.** `serviceJson` classifies by protocol origin only (an
   assistant-kind block with a tool name), never by what the text looks like. The
-  Codex memory citation (`<oai-mem-citation>...`) is removed where an answer is
-  shown or copied, never inside a fence, and the history is left as the harness
-  wrote it.
+  Codex memory citation is removed where an answer is shown or copied, only
+  from a Codex answer (the transcript is given the chat's harness), only as the
+  exact element (`<oai-mem-citation>`, `<citation_entries>`, the optional
+  `<rollout_ids>`, `</oai-mem-citation>`), and never in code: not in a fenced or
+  indented block and not in an inline code span. An answer that quotes the tag,
+  talks about it or comes from another harness is shown as written. While the
+  element is still arriving only its opening, followed by nothing or by
+  `<citation_entries>`, is held back. The history is left as the harness wrote it.
+- **History pages (Codex).** A resumed or branched Codex chat opens with its newest
+  page; older pages are read afterwards and arrive as the additive workspace v15
+  event `historyPage` (blocks, oldest first, before every shown block, one bounded
+  frame each), so a long chat opens without waiting for, or failing on, its
+  history, and a page that cannot be read changes nothing. Live notifications
+  that race the opening replay after the first page and win over it. See
+  `crates/piui-runtime/bridge/CONTRACT.md`.
 - **Folding (amends ADR-073).** A pending steer (a user block still `streaming`)
   joins the running turn and never ends it or makes a note the final answer;
   trailing pending steers are shown after the folded turn. Completed empty

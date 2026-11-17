@@ -3,12 +3,15 @@ import fixture from '../../../../contracts/fixtures/chat-files-v1.json';
 import type { ChatFilesCommand, ChatFilesResult } from '../../../../contracts/chat-files-v1';
 
 const invoke = vi.hoisted(() => vi.fn());
-vi.mock('./transport', () => ({ hostInvoke: invoke, hostListen: vi.fn(), desktopAvailable: true }));
+const listen = vi.hoisted(() => vi.fn());
+vi.mock('./transport', () => ({ hostInvoke: invoke, hostListen: listen, desktopAvailable: true }));
 import {
   chatFileBlob,
   decodeChatFilesResult,
   isChatFile,
+  isChatFilesChangedEvent,
   listChatFiles,
+  listenChatFilesChanged,
   openChatFile,
   previewChatFile,
   resolveChatFile,
@@ -21,6 +24,7 @@ const FILE = '0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b';
 
 beforeEach(() => {
   invoke.mockReset();
+  listen.mockReset();
 });
 
 describe('chat files v1 contract', () => {
@@ -124,5 +128,34 @@ describe('chat files client', () => {
     await expect(revealChatFile(SESSION, FILE)).rejects.toMatchObject({ code: 'UNKNOWN' });
     invoke.mockResolvedValueOnce({ ...(fixture.results.files as object), sessionId: 'another-session' });
     await expect(listChatFiles(SESSION)).rejects.toMatchObject({ code: 'UNKNOWN' });
+  });
+});
+
+describe('chat files changed event', () => {
+  it('keeps the golden fixture in the TypeScript contract shape', () => {
+    const events = fixture.events as unknown[];
+    expect(events).toHaveLength(1);
+    expect(events.every(isChatFilesChangedEvent)).toBe(true);
+    for (const bad of [null, 'changed', { protocol: 1, type: 'changed' }, { protocol: 2, type: 'changed', sessionId: SESSION }, { protocol: 1, type: 'list', sessionId: SESSION }]) {
+      expect(isChatFilesChangedEvent(bad)).toBe(false);
+    }
+  });
+
+  it('hands the handler the session of a well-formed event on the host channel and drops anything else', async () => {
+    let deliver!: (payload: unknown) => void;
+    const stop = vi.fn();
+    listen.mockImplementation(async (_channel: string, handler: (payload: unknown) => void) => {
+      deliver = handler;
+      return stop;
+    });
+    const seen: string[] = [];
+    const unlisten = await listenChatFilesChanged((sessionId) => seen.push(sessionId));
+    expect(listen).toHaveBeenCalledWith('piui://chat-files-v1', expect.any(Function));
+    deliver((fixture.events as unknown[])[0]);
+    deliver({ protocol: 1, type: 'changed' });
+    deliver({ protocol: 1, type: 'changed', sessionId: '' });
+    deliver('changed');
+    expect(seen).toEqual([SESSION]);
+    expect(unlisten).toBe(stop);
   });
 });

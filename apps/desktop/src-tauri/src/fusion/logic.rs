@@ -3,7 +3,7 @@
 
 use super::model::{
     BriefFields, BriefPolicy, FactApprovals, FactChange, FactCommand, FactCommands, FactFile,
-    FactFiles, FactSource, FactTokens, REPORT_BODY_BYTES, ReportStatus, RoundOutcome,
+    FactFiles, FactSource, FactTokens, FusionRole, REPORT_BODY_BYTES, ReportStatus, RoundOutcome,
     SidekickFacts, SidekickProgress, SidekickReport,
 };
 use crate::review_api::{ReviewArea, ReviewChange, ReviewFileV1};
@@ -82,6 +82,19 @@ pub(crate) fn sidekick_instructions(pushback: bool) -> String {
         "{PUSHBACK_RULE}",
         if pushback { PUSHBACK_ON } else { PUSHBACK_OFF },
     )
+}
+
+/// The existing native settings adapters preserve context within a source.
+pub(crate) fn sidekick_model_requires_restart(
+    next: &FusionRole,
+    current: Option<&piui_runtime::workspace_runtime::WorkspaceModel>,
+) -> bool {
+    matches!(next.harness, HarnessKind::Codex | HarnessKind::Nano)
+        && current.and_then(|model| model.provider.as_ref())
+            != next
+                .model
+                .as_ref()
+                .and_then(|model| model.provider.as_ref())
 }
 
 /// The briefing policy the lead reads in `status` and brief results.

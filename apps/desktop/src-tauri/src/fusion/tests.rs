@@ -15,14 +15,15 @@ use super::model::{
     BriefFields, DeliveryState, DeliveryVia, FactApprovals, FactCommand, FactCommands, FactFiles,
     FactSource, FactTokens, FusionDelivery, FusionDocument, FusionOptions, FusionPair,
     FusionRefusal, FusionRole, FusionRoleName, FusionServiceTier, ReportStatus, RoundOutcome,
-    RoundState, SidekickErrorCode, SidekickFacts, SidekickReport,
+    RoundState, SidekickChange, SidekickChangeBlock, SidekickChangeKind, SidekickErrorCode,
+    SidekickFacts, SidekickReport,
 };
 use super::store::{FusionStore, MemoryFusionStore};
 use crate::review_api::{ReviewArea, ReviewContentV1, ReviewFileV1};
-use crate::workspace_api::TurnState;
+use crate::workspace_api::{TurnState, WorkspaceError};
 use piui_runtime::workspace_runtime::{
     BlockKind, BlockStatus, HarnessKind, NativeBlock, PermissionMode, PromptMode, SessionStatus,
-    SidekickCallIdentity, TurnOutcome,
+    SidekickCallIdentity, TurnOutcome, WorkspaceModel,
 };
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -1114,6 +1115,7 @@ struct FakeHost {
     sessions: Mutex<HashMap<String, FakeSession>>,
     sent: Mutex<Vec<(String, String, PromptMode)>>,
     launches: Mutex<Vec<SidekickLaunch>>,
+    models: Mutex<HashMap<String, FusionRole>>,
     interrupts: Mutex<Vec<String>>,
     fail_launch: AtomicBool,
     fail_send: AtomicBool,
@@ -1242,6 +1244,10 @@ impl FusionHost for Arc<FakeHost> {
             return ready(Err(HostFailure::SignInRequired));
         }
         self.live(&launch.session_id, SessionStatus::Idle);
+        self.models
+            .lock()
+            .unwrap()
+            .insert(launch.session_id.clone(), launch.role.clone());
         self.launches.lock().unwrap().push(launch);
         ready(Ok(()))
     }
@@ -1258,6 +1264,36 @@ impl FusionHost for Arc<FakeHost> {
         } else {
             Err(HostFailure::Unavailable)
         })
+    }
+
+    fn sidekick_model(&self, session_id: &str) -> Option<WorkspaceModel> {
+        self.models.lock().unwrap().get(session_id)?.model.clone()
+    }
+
+    fn validate_sidekick_role(
+        &self,
+        _: String,
+        role: FusionRole,
+    ) -> HostFuture<Result<FusionRole, WorkspaceError>> {
+        ready(Ok(role))
+    }
+
+    fn set_sidekick_model(
+        &self,
+        session_id: String,
+        role: FusionRole,
+    ) -> HostFuture<Result<FusionRole, WorkspaceError>> {
+        ready(
+            self.models
+                .lock()
+                .unwrap()
+                .insert(session_id, role)
+                .ok_or_else(WorkspaceError::not_found),
+        )
+    }
+
+    fn discard_sidekick_draft(&self, session_id: String) -> HostFuture<()> {
+        self.close(session_id)
     }
 
     fn turns(&self, session_id: &str) -> Result<watch::Receiver<TurnState>, HostFailure> {
@@ -1925,7 +1961,7 @@ fn membership_names_the_lead_and_its_sidekicks() {
     let store = Arc::new(MemoryFusionStore::default());
     let broker = FusionBroker::new(Arc::new(Arc::new(FakeHost::default())), store, true);
     broker.register_lead(LEAD, "w", claude_pair()).unwrap();
-    let (role, lead, _) = broker.membership(LEAD).unwrap();
+    let (role, lead, ..) = broker.membership(LEAD).unwrap();
     assert_eq!((role, lead.as_str()), (FusionRoleName::Lead, LEAD));
     assert!(broker.membership("other").is_none());
     broker.forget_lead(LEAD);
@@ -2423,6 +2459,9 @@ fn contract_shapes_match_the_public_fixture() {
         },
         revision: 4,
         paused: false,
+        sidekick_change_block: None,
+        sidekick_replace_block: None,
+        sidekick_current_model: None,
     };
     let encode = |value: &FusionResultV1| serde_json::to_value(value).expect("result");
     assert_eq!(
@@ -3382,19 +3421,74 @@ async fn stop_pair_with_a_queued_follow_up_never_wakes_the_lead_until_resumed() 
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_lead_turn_the_person_starts_after_stop_pair_resumes_the_pair() {
+async fn only_the_person_resumes_a_stopped_pair_never_a_late_tool_call_or_a_report() {
     let fixture = fixture();
-    // The lead is running when the person stops the pair.
-    fixture.broker.pause_pair(LEAD).await.unwrap();
-    // A call of the stopped turn keeps the pause.
-    let _ = fixture.call("call-1", op(json!({"op": "status"}))).await;
-    assert!(fixture.broker.state(LEAD).await.unwrap().paused);
-    // That turn ends; the person's next message starts a newer one.
+    queued_follow_up(&fixture).await;
+    // A message the person wrote before the stop: its epoch predates it.
+    let before = fixture.broker.person_message_epoch(LEAD).unwrap();
+    assert!(fixture.broker.pause_pair(LEAD).await.unwrap(), "journaled");
+    // The stopped turn ends and a late tool call of it arrives: still paused.
     fixture.host.complete(LEAD, None, TurnOutcome::Interrupted);
+    let _ = fixture.call("call-late", op(json!({"op": "status"}))).await;
     fixture.host.set_status(LEAD, SessionStatus::Running);
-    let (admitted, _) = fixture.call("call-2", brief(false, 0)).await;
-    assert_eq!(admitted["ok"], json!(true), "{admitted}");
+    let (refused, _) = fixture.call("call-2", brief(false, 0)).await;
+    assert_eq!(refused["code"], json!("pair-stopping"), "{refused}");
+    assert!(fixture.broker.state(LEAD).await.unwrap().paused);
+    // The idle lead gets no auto-delivered report, and nothing resumes.
+    fixture.host.set_status(LEAD, SessionStatus::Idle);
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    assert!(fixture.host.sent_to(LEAD).is_empty());
+    // A person's message admitted before the stop does not lift it.
+    fixture.broker.person_message_admitted(LEAD, before).await;
+    assert!(fixture.broker.state(LEAD).await.unwrap().paused);
+    // One the person writes after the stop does, and the report goes once.
+    let after = fixture.broker.person_message_epoch(LEAD).unwrap();
+    fixture.broker.person_message_admitted(LEAD, after).await;
     assert!(!fixture.broker.state(LEAD).await.unwrap().paused);
+    assert!(!fixture.document().await.paused, "the resume is journaled");
+    let host = Arc::clone(&fixture.host);
+    until(|| host.sent_to(LEAD).len() == 1).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pause_whose_journal_write_fails_still_holds_in_this_process() {
+    let fixture = fixture();
+    fixture.store.fail_writes.store(true, Ordering::Release);
+    assert!(
+        !fixture.broker.pause_pair(LEAD).await.unwrap(),
+        "the failure is reported"
+    );
+    assert!(fixture.broker.state(LEAD).await.unwrap().paused);
+    fixture.store.fail_writes.store(false, Ordering::Release);
+    let (refused, _) = fixture.call("call-1", brief(false, 0)).await;
+    assert_eq!(refused["code"], json!("pair-stopping"), "{refused}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_steer_never_reaches_a_turn_after_its_round_ended() {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    // The round's turn ends; the steer comes before or after the broker
+    // settles it, and is refused either way.
+    fixture
+        .host
+        .complete(&sidekick, Some("STATUS: done"), TurnOutcome::Succeeded);
+    let (refused, _) = fixture
+        .call(
+            "call-2",
+            op(json!({"op": "steer", "roundId": "r1", "text": "late"})),
+        )
+        .await;
+    assert_eq!(refused["code"], json!("round-finished"), "{refused}");
+    assert!(
+        fixture
+            .host
+            .sent_to(&sidekick)
+            .iter()
+            .all(|(_, mode)| *mode != PromptMode::Steer),
+        "no steer was sent"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -3586,5 +3680,222 @@ async fn a_sidekick_approval_reaches_the_person_for_claude_and_codex_sidekicks()
             stored_round(&fixture.store, 0).is_some_and(|round| round.state == RoundState::Running)
         })
         .await;
+    }
+}
+
+fn model_selection(mut role: FusionRole, id: &str, provider: &str) -> FusionRole {
+    role.model = Some(WorkspaceModel {
+        id: id.into(),
+        provider: Some(provider.into()),
+        name: id.into(),
+        thinking_levels: Some(vec!["high".into()]),
+    });
+    role
+}
+
+fn sidekick_change(
+    state: &super::model::FusionStateV1,
+    kind: SidekickChangeKind,
+    sidekick: FusionRole,
+    allow_context_loss: bool,
+) -> SidekickChange {
+    SidekickChange {
+        revision: state.revision,
+        kind,
+        sidekick,
+        allow_context_loss,
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn changing_sidekick_model_uses_native_session_or_confirmed_fresh_start() {
+    let mut pair = claude_pair();
+    pair.lead.permission_mode = PermissionMode::WorkspaceWrite;
+    pair.sidekick = model_selection(
+        role(HarnessKind::Codex, PermissionMode::WorkspaceWrite),
+        "first",
+        "openai",
+    );
+    let fixture = fixture_with(pair);
+    fixture
+        .broker
+        .handle(LEAD, &identity("start", "start"), brief(false, 0))
+        .await;
+    let id = fixture.host.sidekick_id();
+    fixture
+        .host
+        .interrupt_completes
+        .store(true, Ordering::Release);
+    fixture.broker.stop_sidekick(LEAD).await.unwrap();
+    let state = fixture.broker.state(LEAD).await.unwrap();
+    let mut second = model_selection(state.pair.sidekick.clone(), "second", "openai");
+    second.thinking_level = Some("high".into());
+    second.service_tier = Some(FusionServiceTier::Fast);
+    fixture
+        .broker
+        .change_sidekick(
+            LEAD,
+            sidekick_change(&state, SidekickChangeKind::Model, second.clone(), false),
+            false,
+        )
+        .await
+        .unwrap();
+    let state = fixture.broker.state(LEAD).await.unwrap();
+    assert_eq!(state.pair.sidekick, second);
+    assert_eq!(fixture.host.models.lock().unwrap()[&id], second);
+    assert_eq!(state.sessions.len(), 1);
+    assert_eq!(fixture.host.launches.lock().unwrap().len(), 1);
+    let third = model_selection(second, "third", "another-source");
+    let err = fixture
+        .broker
+        .change_sidekick(
+            LEAD,
+            sidekick_change(&state, SidekickChangeKind::Model, third.clone(), false),
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "FUSION_CONTEXT_LOSS");
+    fixture
+        .broker
+        .change_sidekick(
+            LEAD,
+            sidekick_change(&state, SidekickChangeKind::Model, third.clone(), true),
+            false,
+        )
+        .await
+        .unwrap();
+    let state = fixture.broker.state(LEAD).await.unwrap();
+    assert_eq!(state.pair.sidekick, third);
+    assert_eq!(state.sessions.len(), 2);
+    assert!(state.sessions[0].retired);
+    assert_eq!(fixture.host.closed.lock().unwrap().as_slice(), &[id]);
+    assert_eq!(state.lead_session_id, LEAD);
+}
+
+#[tokio::test(start_paused = true)]
+async fn sidekick_replacement_is_narrowed_and_revision_checked() {
+    let mut pair = claude_pair();
+    pair.lead.permission_mode = PermissionMode::WorkspaceWrite;
+    pair.sidekick.permission_mode = PermissionMode::WorkspaceWrite;
+    let fixture = fixture_with(pair);
+    let state = fixture.broker.state(LEAD).await.unwrap();
+    let next = role(HarnessKind::Codex, PermissionMode::FullAccess);
+    let err = fixture
+        .broker
+        .change_sidekick(
+            LEAD,
+            sidekick_change(&state, SidekickChangeKind::Replace, next.clone(), true),
+            true,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "SAFE_MODE");
+    fixture
+        .broker
+        .change_sidekick(
+            LEAD,
+            sidekick_change(&state, SidekickChangeKind::Replace, next.clone(), true),
+            false,
+        )
+        .await
+        .unwrap();
+    let err = fixture
+        .broker
+        .change_sidekick(
+            LEAD,
+            sidekick_change(&state, SidekickChangeKind::Replace, next, true),
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "CONFLICT");
+    let state = fixture.broker.state(LEAD).await.unwrap();
+    assert_eq!(
+        state.sidekick_replace_block,
+        Some(SidekickChangeBlock::SidekickAttached)
+    );
+    assert_eq!(
+        state.pair.sidekick.permission_mode,
+        PermissionMode::WorkspaceWrite
+    );
+    {
+        let launched = fixture.host.launches.lock().unwrap();
+        assert_eq!(launched.len(), 1);
+        assert_eq!(launched[0].role, state.pair.sidekick);
+    }
+    assert_eq!(fixture.store.load_all()[0].pair, state.pair);
+    fixture.broker.person_stop_sidekick(LEAD).await.unwrap();
+    let detached = fixture.broker.state(LEAD).await.unwrap();
+    assert_eq!(detached.sidekick_replace_block, None);
+    assert!(detached.revision > state.revision);
+    assert!(
+        fixture
+            .broker
+            .is_current_sidekick(&detached.sessions[0].session_id)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn sidekick_change_is_blocked_by_open_uncertain_or_unsettled_report() {
+    let fixture = fixture();
+    let next = role(HarnessKind::Codex, PermissionMode::FullAccess);
+    fixture
+        .broker
+        .handle(LEAD, &identity("start", "start"), brief(false, 0))
+        .await;
+    let state = fixture.broker.state(LEAD).await.unwrap();
+    let err = fixture
+        .broker
+        .change_sidekick(
+            LEAD,
+            sidekick_change(&state, SidekickChangeKind::Replace, next.clone(), true),
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "FUSION_ROUND_OPEN");
+    let reopened = FusionBroker::new(
+        Arc::new(Arc::clone(&fixture.host)),
+        fixture.store.clone(),
+        true,
+    );
+    let state = reopened.state(LEAD).await.unwrap();
+    let err = reopened
+        .change_sidekick(
+            LEAD,
+            sidekick_change(&state, SidekickChangeKind::Replace, next.clone(), true),
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "FUSION_ROUND_UNCERTAIN");
+
+    fixture.broker.pause_pair(LEAD).await.unwrap();
+    fixture.host.complete(
+        &fixture.host.sidekick_id(),
+        Some("STATUS: done"),
+        TurnOutcome::Succeeded,
+    );
+    loop {
+        let state = fixture.broker.state(LEAD).await.unwrap();
+        if state.sidekick_change_block == Some(SidekickChangeBlock::ReportPending) {
+            let err = fixture
+                .broker
+                .change_sidekick(
+                    LEAD,
+                    sidekick_change(&state, SidekickChangeKind::Replace, next, true),
+                    false,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(err.code, "FUSION_REPORT_PENDING");
+            break;
+        }
+        assert_eq!(
+            state.sidekick_change_block,
+            Some(SidekickChangeBlock::RoundOpen)
+        );
+        tokio::task::yield_now().await;
     }
 }

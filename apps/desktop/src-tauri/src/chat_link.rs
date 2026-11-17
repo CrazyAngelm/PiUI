@@ -120,16 +120,18 @@ static DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
 
 /// Validation, the single dialog slot, the question and the launch, with the
 /// dialog and the launcher injected so the order of the checks is testable.
-async fn open_after_confirmation<Confirm, Pending>(
+async fn open_after_confirmation<Confirm, Pending, Open, Opening>(
     safe_mode: bool,
     slot: &AtomicBool,
     request: ChatOpenLinkRequestV1,
     confirm: Confirm,
-    open: impl FnOnce(&Url) -> Result<(), ()>,
+    open: Open,
 ) -> Result<ChatOpenLinkResultV1, ChatLinkError>
 where
     Confirm: FnOnce(Wording, String) -> Pending,
     Pending: Future<Output = bool>,
+    Open: FnOnce(Url) -> Opening,
+    Opening: Future<Output = Result<(), ()>>,
 {
     if safe_mode {
         return Err(ChatLinkError::SafeMode);
@@ -143,7 +145,9 @@ where
     if !confirm(wording, text).await {
         return Ok(ChatOpenLinkResultV1 { opened: false });
     }
-    open(&url).map_err(|()| ChatLinkError::OpenFailed)?;
+    // A launcher that fails is `OPEN_FAILED`, not `opened: false` (which is a No):
+    // the page then copies the address instead.
+    open(url).await.map_err(|()| ChatLinkError::OpenFailed)?;
     Ok(ChatOpenLinkResultV1 { opened: true })
 }
 
@@ -179,7 +183,13 @@ pub async fn chat_open_link_v1<R: Runtime>(
             let app = app.clone();
             async move { native_confirm(&app, wording, text).await }
         },
-        browser::open_web_link,
+        // The launcher's exit status is read on the blocking pool, not on a
+        // runtime worker or the UI thread.
+        |url| async move {
+            tauri::async_runtime::spawn_blocking(move || browser::open_web_link(&url))
+                .await
+                .unwrap_or(Err(()))
+        },
     )
     .await
 }
@@ -279,7 +289,7 @@ mod tests {
             },
             |url| {
                 *opened.borrow_mut() = url.as_str().to_owned();
-                Ok(())
+                async { Ok(()) }
             },
         ));
         assert_eq!(result, Ok(ChatOpenLinkResultV1 { opened: true }));
@@ -306,7 +316,7 @@ mod tests {
             },
             |_| {
                 launched.set(true);
-                Ok(())
+                async { Ok(()) }
             },
         ));
         assert_eq!(result, Ok(ChatOpenLinkResultV1 { opened: false }));
@@ -330,7 +340,7 @@ mod tests {
                     asked.set(true);
                     async { true }
                 },
-                |_| Ok(()),
+                |_| async { Ok(()) },
             ));
             assert_eq!(result, Err(expected));
         }
@@ -350,7 +360,7 @@ mod tests {
                 asked.set(true);
                 async { true }
             },
-            |_| Ok(()),
+            |_| async { Ok(()) },
         ));
         assert_eq!(result, Err(ChatLinkError::Busy));
         assert!(!asked.get());
@@ -365,7 +375,7 @@ mod tests {
             &slot,
             request("https://example.com/"),
             |_, _| async { true },
-            |_| Err(()),
+            |_| async { Err(()) },
         ));
         assert_eq!(result, Err(ChatLinkError::OpenFailed));
         assert!(!slot.load(Ordering::Acquire));

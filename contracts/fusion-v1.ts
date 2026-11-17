@@ -339,6 +339,24 @@ export interface FusionStatsV1 {
   rounds: number;
 }
 
+export const FUSION_SIDEKICK_CHANGE_BLOCKS = [
+  'FUSION_ROUND_OPEN',
+  'FUSION_ROUND_UNCERTAIN',
+  'FUSION_REPORT_PENDING',
+  'FUSION_REPORT_UNCERTAIN',
+  'FUSION_SIDEKICK_ATTACHED',
+  'FUSION_SIDEKICK_BUSY',
+] as const;
+
+export type FusionSidekickChangeBlockV1 = (typeof FUSION_SIDEKICK_CHANGE_BLOCKS)[number];
+export type FusionSidekickChangeKindV1 = 'model' | 'replace';
+export interface FusionSidekickChangeV1 {
+  revision: number;
+  kind: FusionSidekickChangeKindV1;
+  sidekick: FusionRoleV1;
+  allowContextLoss: boolean;
+}
+
 export interface FusionStateV1 {
   protocol: typeof FUSION_PROTOCOL;
   leadSessionId: string;
@@ -351,6 +369,10 @@ export interface FusionStateV1 {
   revision: number;
   /** Additive (ADR-076): the person stopped the pair; no brief starts and no report is delivered until they resume it. */
   paused?: boolean;
+  sidekickChangeBlock?: FusionSidekickChangeBlockV1;
+  sidekickReplaceBlock?: FusionSidekickChangeBlockV1;
+  /** Native model of the current session, including an effective default provider. */
+  sidekickCurrentModel?: WorkspaceModel;
 }
 
 // ---------------------------------------------------------------------------
@@ -365,6 +387,7 @@ export type FusionCommandV1 =
   | { type: 'stopPair'; leadSessionId: string }
   | { type: 'stopSidekick'; leadSessionId: string }
   | { type: 'resetSidekick'; leadSessionId: string }
+  | { type: 'changeSidekick'; leadSessionId: string; change: FusionSidekickChangeV1 }
   | { type: 'reconcileRound'; leadSessionId: string; roundId: string }
   | { type: 'abandonRound'; leadSessionId: string; roundId: string }
   // Additive (ADR-076): resume a stopped pair; settle a report whose delivery is unknown

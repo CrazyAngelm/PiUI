@@ -31,5 +31,5 @@ export type ChatLinkErrorCode =
   | 'SAFE_MODE'
   /** A confirmation is already on screen. */
   | 'BUSY'
-  /** The person said Yes and the system browser could not be started. */
+  /** The person said Yes and the system browser could not be started or reported a failure (the page then copies the address). */
   | 'OPEN_FAILED';

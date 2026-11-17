@@ -1,6 +1,7 @@
 import type { ConversationAttachment } from '../../../../../../contracts/conversation-presentation-v1';
 import type { ChatFileOrigin, ChatFileV1 } from '../../../host-api/chatFilesClient';
 import type { TimelineBlock } from '../../../host-api/types';
+import { splitTurns } from '../../../features/sessions/timelineView';
 
 type Translate = (value: string, parameters?: readonly unknown[]) => string;
 
@@ -64,30 +65,48 @@ function describeFile(file: ChatFileV1, blockId: string, translate: Translate): 
 }
 
 /**
+ * The block a turn's files show with: its last reply that has text, else its
+ * last reply, else its last error (a stopped turn with no reply keeps its files
+ * with the error it ended on). A turn that has none shows no card.
+ */
+function answerOf(turn: readonly TimelineBlock[]): string | undefined {
+  let withText: string | undefined;
+  let reply: string | undefined;
+  let error: string | undefined;
+  for (const block of turn) {
+    if (block.kind === 'assistant') {
+      reply = block.id;
+      if (hasText(block)) withText = block.id;
+    } else if (block.kind === 'error') error = block.id;
+  }
+  return withText ?? reply ?? error;
+}
+
+const hasText = (block: TimelineBlock): boolean => (block.text ?? '').trim() !== '';
+
+/**
  * Re-targets the files of a turn's tool blocks to the turn's final answer, so
  * they show with the answer while the work folds behind one control (ADR-073).
- * A turn starts at a person's message once the previous turn has an answer; a
- * turn with no answer yet shows nothing, and a file whose block is not in the
- * transcript (older history not loaded) is left out. A file several blocks of
- * one turn touched is one card.
+ * Turns are the transcript's own (`splitTurns`): each person's message starts
+ * one, so a turn that was stopped or failed keeps its files and never lends
+ * them to the next turn's answer. A turn with no reply yet shows nothing, and
+ * a file whose block is not in the transcript (older history not loaded) is
+ * left out. A file several blocks of one turn touched is one card. `running`
+ * tells whether a message steered into a working turn joins it.
  */
 export function placeChatFiles(
   blocks: readonly TimelineBlock[],
   files: readonly ChatFileV1[],
   translate: Translate,
+  running: boolean | 'unknown' = false,
 ): ConversationAttachment[] {
   if (files.length === 0 || blocks.length === 0) return [];
   const turnOf = new Map<string, number>();
-  const answers: (string | undefined)[] = [undefined];
-  let turn = 0;
-  for (const block of blocks) {
-    if (block.kind === 'user' && answers[turn] !== undefined) {
-      turn += 1;
-      answers[turn] = undefined;
-    }
-    turnOf.set(block.id, turn);
-    if (block.kind === 'assistant') answers[turn] = block.id;
-  }
+  const answers: (string | undefined)[] = [];
+  splitTurns(blocks, running).forEach((turn, index) => {
+    for (const block of turn) turnOf.set(block.id, index);
+    answers.push(answerOf(turn));
+  });
   const perAnswer = new Map<string, ConversationAttachment[]>();
   const seen = new Set<string>();
   for (const file of files) {
@@ -103,4 +122,48 @@ export function placeChatFiles(
     perAnswer.set(answer, list);
   }
   return [...perAnswer.values()].flatMap((list) => list.slice(-MAX_FILES_PER_ANSWER));
+}
+
+/** What decides where a block's files go: its identity, kind, status and whether it has text. */
+function sameShape(left: readonly TimelineBlock[], right: readonly TimelineBlock[]): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index]!;
+    const b = right[index]!;
+    if (a === b) continue;
+    if (a.id !== b.id || a.kind !== b.kind || a.status !== b.status || hasText(a) !== hasText(b)) return false;
+  }
+  return true;
+}
+
+/**
+ * `placeChatFiles` for a live chat. A streamed token changes a block's text and
+ * nothing that decides where a file goes, so the previous cards (the same array)
+ * are returned until the turns, a block's status, the registry or the language
+ * change.
+ */
+export function createChatFilePlacer(): (
+  blocks: readonly TimelineBlock[],
+  files: readonly ChatFileV1[],
+  translate: Translate,
+  running?: boolean | 'unknown',
+) => ConversationAttachment[] {
+  let knownBlocks: readonly TimelineBlock[] | undefined;
+  let knownFiles: readonly ChatFileV1[] | undefined;
+  let knownTranslate: Translate | undefined;
+  let knownRunning: boolean | 'unknown' | undefined;
+  let cards: ConversationAttachment[] = [];
+  return (blocks, files, translate, running = false) => {
+    if (knownBlocks !== undefined && files === knownFiles && translate === knownTranslate && running === knownRunning && sameShape(knownBlocks, blocks)) {
+      // Keep the newest array so the next comparison is by identity again.
+      knownBlocks = blocks;
+      return cards;
+    }
+    knownBlocks = blocks;
+    knownFiles = files;
+    knownTranslate = translate;
+    knownRunning = running;
+    cards = placeChatFiles(blocks, files, translate, running);
+    return cards;
+  };
 }

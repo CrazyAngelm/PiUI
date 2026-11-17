@@ -18,14 +18,15 @@ use crate::state::HostState;
 use crate::workspace_api::{
     FusionAnswerFuture, FusionSessionHooks, FusionSessionSetup, SendFailure, TurnState,
     WorkspaceError, WorkspaceLaunchRequest, authorize_live_session, event_publisher,
+    fusion_catalog_role,
 };
 use broker::{FusionBroker, FusionHost, HostFailure, HostFuture, SessionActivity, SidekickLaunch};
 use model::{
     FUSION_CHANGED_EVENT_V1, FUSION_PROTOCOL, FactCommand, FusionChangedEventV1, FusionCommandV1,
-    FusionResultV1, FusionRoleName,
+    FusionResultV1, FusionRole, FusionRoleName,
 };
 use piui_runtime::workspace_runtime::{
-    BlockKind, HarnessKind, HostTool, PromptMode, SidekickCallIdentity,
+    BlockKind, HarnessKind, HostTool, PromptMode, SidekickCallIdentity, WorkspaceModel,
 };
 use std::future::Future;
 use std::path::Path;
@@ -100,26 +101,24 @@ const fn native_subagent_switch(harness: HarnessKind) -> bool {
 
 impl FusionSessionHooks for FusionSessions {
     fn setup(&self, session_id: &str) -> Option<FusionSessionSetup> {
-        let (role, _, pair) = self.broker.membership(session_id)?;
+        let (role, _, harness, options) = self.broker.membership(session_id)?;
         Some(match role {
             FusionRoleName::Lead => FusionSessionSetup {
-                host_tools: pair
-                    .lead
-                    .harness
+                host_tools: harness
                     .supports_sidekick_tool()
                     .then_some(HostTool::Sidekick)
                     .into_iter()
                     .collect(),
                 instructions: Some(logic::LEAD_INSTRUCTIONS.to_owned()),
-                native_subagents: (!pair.options.lead_native_subagents
-                    && native_subagent_switch(pair.lead.harness))
+                native_subagents: (!options.lead_native_subagents
+                    && native_subagent_switch(harness))
                 .then_some(false),
                 sidekick: false,
             },
             FusionRoleName::Sidekick => FusionSessionSetup {
                 host_tools: Vec::new(),
-                instructions: Some(logic::sidekick_instructions(pair.options.pushback)),
-                native_subagents: native_subagent_switch(pair.sidekick.harness).then_some(false),
+                instructions: Some(logic::sidekick_instructions(options.pushback)),
+                native_subagents: native_subagent_switch(harness).then_some(false),
                 sidekick: true,
             },
         })
@@ -167,13 +166,29 @@ impl FusionSessionHooks for FusionSessions {
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let broker = self.broker.clone();
         Box::pin(async move {
-            let Some((FusionRoleName::Sidekick, lead, _)) = broker.membership(&session_id) else {
+            let Some((FusionRoleName::Sidekick, lead, ..)) = broker.membership(&session_id) else {
                 return;
             };
             // The caller disposes the process whatever the barrier proves; a
             // refusal (an uncertain round) is the person's to reconcile.
             let _ = broker.stop_sidekick(&lead).await;
         })
+    }
+
+    fn person_message_epoch(&self, session_id: &str) -> Option<u64> {
+        match self.broker.membership(session_id) {
+            Some((FusionRoleName::Lead, ..)) => self.broker.person_message_epoch(session_id),
+            _ => None,
+        }
+    }
+
+    fn person_message_admitted(
+        &self,
+        session_id: String,
+        epoch: u64,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        let broker = self.broker.clone();
+        Box::pin(async move { broker.person_message_admitted(&session_id, epoch).await })
     }
 
     fn delivery_sent(
@@ -329,6 +344,50 @@ impl FusionHost for TauriFusionHost {
         })
     }
 
+    fn sidekick_model(&self, session_id: &str) -> Option<WorkspaceModel> {
+        self.app
+            .state::<HostState>()
+            .workspace
+            .fusion_sidekick_model(session_id)
+    }
+
+    fn validate_sidekick_role(
+        &self,
+        workspace_id: String,
+        role: FusionRole,
+    ) -> HostFuture<Result<FusionRole, WorkspaceError>> {
+        let app = self.app.clone();
+        Box::pin(async move {
+            fusion_catalog_role(app.state::<HostState>().inner(), workspace_id, role).await
+        })
+    }
+
+    fn set_sidekick_model(
+        &self,
+        session_id: String,
+        role: FusionRole,
+    ) -> HostFuture<Result<FusionRole, WorkspaceError>> {
+        let app = self.app.clone();
+        Box::pin(async move {
+            let host = app.state::<HostState>();
+            let _operation = authorize_live_session(host.inner(), &session_id).await?;
+            host.workspace
+                .set_fusion_sidekick_model(&session_id, role)
+                .await
+        })
+    }
+
+    fn discard_sidekick_draft(&self, session_id: String) -> HostFuture<()> {
+        let app = self.app.clone();
+        Box::pin(async move {
+            let host = app.state::<HostState>();
+            let _operation = host.live_runtime_operation_gate.lock().await;
+            host.workspace
+                .discard_fusion_sidekick_draft(&session_id)
+                .await;
+        })
+    }
+
     fn turns(&self, session_id: &str) -> Result<watch::Receiver<TurnState>, HostFailure> {
         self.app
             .state::<HostState>()
@@ -453,16 +512,18 @@ impl FusionHost for TauriFusionHost {
         let app = self.app.clone();
         Box::pin(async move {
             let host = app.state::<HostState>();
-            let snapshot = host
-                .workspace
-                .snapshot(&session_id)
+            // The persisted native history, live or closed, by the report's
+            // stable id: only a message or tool result the lead's harness
+            // wrote counts, never a displayed block or the lead quoting it.
+            let blocks = crate::workspace_api::persisted_history_blocks(host.inner(), &session_id)
                 .await
                 .map_err(|error| failure(&error))?;
-            Ok(snapshot.blocks.iter().any(|block| {
-                block
-                    .text
-                    .as_deref()
-                    .is_some_and(|text| text.contains(&needle))
+            Ok(blocks.iter().any(|block| {
+                matches!(block.kind, BlockKind::User | BlockKind::Tool)
+                    && block
+                        .text
+                        .as_deref()
+                        .is_some_and(|text| text.contains(&needle))
             }))
         })
     }
@@ -665,7 +726,7 @@ async fn dispatch(
         }
         FusionCommandV1::State { lead_session_id } => state_of(&lead_session_id).await,
         FusionCommandV1::Find { session_id } => Ok(match broker.membership(&session_id) {
-            Some((role, lead, _)) => FusionResultV1::Membership {
+            Some((role, lead, ..)) => FusionResultV1::Membership {
                 role: Some(role),
                 lead_session_id: Some(lead),
             },
@@ -691,8 +752,10 @@ async fn dispatch(
             // The pair is paused before anything is interrupted (ADR-076):
             // no follow-up can wake the lead and no brief is admitted while
             // the stop runs, and both stay off until the person resumes the
-            // pair or speaks in the lead chat.
-            broker.pause_pair(&lead_session_id).await.map_err(refused)?;
+            // pair or a message the person wrote is admitted in the lead chat.
+            // A failed journal write keeps the pause in this process; the stop
+            // still runs and the failure is returned after it.
+            let saved = broker.pause_pair(&lead_session_id).await.map_err(refused)?;
             // The lead's start and any prompt still being admitted finish
             // first (operation gate); queued input is paused and the composer
             // gate is held before the status decides whether to interrupt. The
@@ -706,14 +769,30 @@ async fn dispatch(
             let sidekick = broker.stop_sidekick(&lead_session_id).await;
             sidekick.map_err(refused)?;
             lead?;
+            if !saved {
+                return Err(WorkspaceError::io());
+            }
             Ok(FusionResultV1::Accepted {})
         }
         FusionCommandV1::StopSidekick { lead_session_id } => {
             broker
-                .stop_sidekick(&lead_session_id)
+                .person_stop_sidekick(&lead_session_id)
                 .await
                 .map_err(refused)?;
             Ok(FusionResultV1::Accepted {})
+        }
+        FusionCommandV1::ChangeSidekick {
+            lead_session_id,
+            change,
+        } => {
+            validate_id(&lead_session_id)?;
+            let broker = broker.clone();
+            let lead = lead_session_id.clone();
+            // Complete the journal transaction and any cleanup even if the panel closes.
+            tokio::spawn(async move { broker.change_sidekick(&lead, change, false).await })
+                .await
+                .map_err(|_| WorkspaceError::io())??;
+            state_of(&lead_session_id).await
         }
         FusionCommandV1::ResetSidekick { lead_session_id } => {
             broker

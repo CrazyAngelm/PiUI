@@ -7,12 +7,27 @@
  * inputs v1. The WebView never names a path: it sends a session id and an
  * opaque file id the host handed out. The host keeps, per session, a registry
  * of the files that session's own native events (or its native history)
- * reported (at most 200), re-canonicalizes the path on every call, serves
- * regular files only and refuses symlinks and other reparse points. Preview
+ * reported (at most 200). Every call opens the file first and checks the final
+ * path of the opened handle: a regular file, never a link, the path first seen,
+ * and inside the session's scope (below). Preview
  * bytes come from the host (base64), are identified by their magic bytes and
  * never by a name, and the frontend turns them into a `blob:` URL it revokes
  * on unmount. Open, Save as and Reveal run in the host; every command refuses
  * safe mode (`SAFE_MODE`). Unknown fields are rejected.
+ *
+ * Scope (ADR-074): a registered path is served only when its final path is
+ * inside (a) the session's verified working folder (its own worktree when it
+ * has one), (b) the host's own inline store, (c) a folder the host resolves
+ * for the session's harness (Codex's generated images), or (d) the agent
+ * itself wrote or generated it (origin `written` or `generated`) anywhere. A
+ * file the agent only read, or that was returned, outside (a) to (c) is not
+ * kept and never served. The check runs when a file is reported and on every
+ * operation, so a file that moved out of scope is `unavailable`.
+ *
+ * Open is an allowlist (images, audio, video, PDF, `.txt`/`.md`/`.csv`/`.json`/
+ * `.log`) whose bytes must match the extension. Everything else (programs,
+ * scripts, shortcuts, installers and packages such as `.msix`, web pages, SVG,
+ * Office files) offers Save as and Open containing folder only.
  */
 export const CHAT_FILES_PROTOCOL = 1 as const;
 export const CHAT_FILES_ROUTE = 'workspace_chat_files_v1';
@@ -40,7 +55,10 @@ export interface ChatFileV1 {
   /** Bytes, when the file could be read. */
   size?: number;
   origin: ChatFileOrigin;
-  /** False for executable and script types (`.exe`, `.bat`, `.ps1`, ...): Save and Reveal stay. */
+  /**
+   * True only for an allowlisted document or media type whose bytes match its extension
+   * (see the Open allowlist above). False for everything else: Save and Reveal stay.
+   */
   openable: boolean;
   /** True when `preview` can return the bytes: an image up to 20 MB, audio or video up to 64 MB. */
   previewable: boolean;
@@ -48,6 +66,19 @@ export interface ChatFileV1 {
   revealable: boolean;
   /** The file was deleted, moved or replaced by a link since it was reported. */
   unavailable?: boolean;
+}
+
+/**
+ * Host event `piui://chat-files-v1` (additive, ADR-074): a session's chat files changed
+ * (a file was reported, or inline bytes finished writing). It carries no file; the
+ * WebView lists again with `{ type: 'list' }`. Several changes within a short window
+ * arrive as one event. Not sent in safe mode or to a remote browser.
+ */
+export const CHAT_FILES_EVENT = 'piui://chat-files-v1';
+export interface ChatFilesChangedEventV1 {
+  protocol: 1;
+  type: 'changed';
+  sessionId: string;
 }
 
 export type ChatFilesCommand =

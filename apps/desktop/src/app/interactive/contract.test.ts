@@ -42,9 +42,16 @@ describe('interactive answers desktop contract', () => {
   it.each([
     'createElement("a"', "createElement('a'", 'el("a"', "el('a'", 'iframe', 'srcdoc', 'srcDoc',
     'innerHTML', 'outerHTML', 'insertAdjacentHTML', 'eval(', 'new Function', 'fetch(', 'XMLHttpRequest', 'WebSocket',
-    'addEventListener("message"', 'window.open', 'location.', 'embedUrl',
+    'addEventListener("message"', 'window.open', 'location.',
   ])('does not contain the forbidden primitive %s', primitive => {
     expect(source).not.toContain(primitive);
+  });
+
+  it('reads an embedded player\'s address only to show the "not shown" note (ADR-077), never to embed it', () => {
+    // The address joins the `src` path of a media place, which shows a note with Open link and Copy link.
+    expect([...source.matchAll(/\bembedUrl\b/g)]).toHaveLength(2);
+    expect(source).toMatch(/src: resolveValue\(source\.src \?\? source\.embedUrl, scope\)/);
+    expect(source).toMatch(/node\.src === undefined && node\.embedUrl === undefined/);
   });
 
   it('never assigns an address to an element property', () => {

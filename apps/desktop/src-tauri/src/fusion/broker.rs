@@ -16,23 +16,24 @@ use super::logic::{
 use super::model::{
     BriefFields, BriefOutcome, BriefState, CORRECTION_HINT_ROUNDS, CallRecord,
     DEFAULT_WAIT_SECONDS, DeliveryState, DeliveryVia, FUSION_PROTOCOL, FactApprovals, FactCommand,
-    FactCommands, FactSource, FusionBrief, FusionDelivery, FusionDocument, FusionPair,
-    FusionRoleName, FusionRound, FusionSidekickSession, FusionStateV1, FusionStats,
-    MAX_LIVE_BRIEFS, MAX_WAIT_SECONDS, RoundKind, RoundOutcome, RoundState, SidekickErrorCode,
-    SidekickOperation, SidekickProgress, SidekickState,
+    FactCommands, FactSource, FusionBrief, FusionDelivery, FusionDocument, FusionOptions,
+    FusionPair, FusionRole, FusionRoleName, FusionRound, FusionSidekickSession, FusionStateV1,
+    FusionStats, MAX_LIVE_BRIEFS, MAX_WAIT_SECONDS, RoundKind, RoundOutcome, RoundState,
+    SidekickChange, SidekickChangeBlock, SidekickChangeKind, SidekickErrorCode, SidekickOperation,
+    SidekickProgress, SidekickState, sidekick_change_error,
 };
 use super::store::FusionStore;
 use crate::review_api::{ReviewArea, ReviewContentV1, ReviewFileV1};
-use crate::workspace_api::TurnState;
+use crate::workspace_api::{TurnState, WorkspaceError};
 use chrono::{DateTime, SecondsFormat, Utc};
 use piui_runtime::workspace_runtime::{
-    PromptMode, SessionStatus, SidekickCallIdentity, TurnOutcome,
+    HarnessKind, PromptMode, SessionStatus, SidekickCallIdentity, TurnOutcome, WorkspaceModel,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -73,6 +74,18 @@ pub(crate) trait FusionHost: Send + Sync + 'static {
     /// Opens a session that is not live through the ordinary open path,
     /// which applies the frozen sidekick policy again.
     fn ensure_live(&self, session_id: String) -> HostFuture<Result<(), HostFailure>>;
+    fn sidekick_model(&self, session_id: &str) -> Option<WorkspaceModel>;
+    fn validate_sidekick_role(
+        &self,
+        workspace_id: String,
+        role: FusionRole,
+    ) -> HostFuture<Result<FusionRole, WorkspaceError>>;
+    fn set_sidekick_model(
+        &self,
+        session_id: String,
+        role: FusionRole,
+    ) -> HostFuture<Result<FusionRole, WorkspaceError>>;
+    fn discard_sidekick_draft(&self, session_id: String) -> HostFuture<()>;
     fn turns(&self, session_id: &str) -> Result<watch::Receiver<TurnState>, HostFailure>;
     fn send(
         &self,
@@ -172,7 +185,7 @@ type AnswerCache = (HashMap<String, CachedAnswer>, VecDeque<String>);
 
 struct LeadSlot {
     lead_session_id: String,
-    pair: FusionPair,
+    options: FusionOptions,
     document: tokio::sync::Mutex<FusionDocument>,
     revision: watch::Sender<u64>,
     /// Tool calls currently waiting for a round's report.
@@ -197,10 +210,16 @@ struct LeadSlot {
     /// out before the stop (whose interrupt then reaches it) or sees the
     /// pause and never sends (ADR-076).
     delivery_gate: tokio::sync::Mutex<()>,
-    /// The lead's turn generation from which a lead tool call belongs to a
-    /// turn the person started after a pair stop (`None`: any; after a
-    /// restart no earlier turn survives). Memory only.
-    resume_from: Mutex<Option<u64>>,
+    /// Counts pair stops; changed under the document lock with `paused`. A
+    /// person's message resumes the pair only if no stop came after the
+    /// message was admitted (ADR-076). Memory only.
+    pause_epoch: AtomicU64,
+    /// The sidekick's turn generation each running round started at. A steer
+    /// is sent only while the sidekick is still in that turn, under the send
+    /// gate a new round's prompt also takes, so it never reaches the next
+    /// round (ADR-076). Memory only: a round of an earlier process is not
+    /// steered.
+    round_turns: Mutex<HashMap<String, u64>>,
 }
 
 /// Admission held by one reset, abandon or reconcile; released on drop
@@ -219,7 +238,7 @@ struct BrokerInner {
     codex_sandbox: bool,
     leads: Mutex<HashMap<String, Arc<LeadSlot>>>,
     /// Session id → (role, lead session id).
-    members: Mutex<HashMap<String, (FusionRoleName, String)>>,
+    members: Mutex<HashMap<String, (FusionRoleName, String, HarnessKind)>>,
     /// Sidekick sessions the broker no longer uses.
     retired: Mutex<HashSet<String>>,
     notifier: Mutex<Option<Notifier>>,
@@ -704,11 +723,18 @@ impl FusionBroker {
     fn install(&self, document: FusionDocument) -> Arc<LeadSlot> {
         let lead = document.lead_session_id.clone();
         if let Ok(mut members) = self.inner.members.lock() {
-            members.insert(lead.clone(), (FusionRoleName::Lead, lead.clone()));
+            members.insert(
+                lead.clone(),
+                (
+                    FusionRoleName::Lead,
+                    lead.clone(),
+                    document.pair.lead.harness,
+                ),
+            );
             for session in &document.sessions {
                 members.insert(
                     session.session_id.clone(),
-                    (FusionRoleName::Sidekick, lead.clone()),
+                    (FusionRoleName::Sidekick, lead.clone(), session.harness),
                 );
             }
         }
@@ -723,7 +749,7 @@ impl FusionBroker {
         }
         let slot = Arc::new(LeadSlot {
             lead_session_id: lead.clone(),
-            pair: document.pair.clone(),
+            options: document.pair.options,
             revision: watch::channel(document.revision).0,
             document: tokio::sync::Mutex::new(document),
             waiting: Mutex::new(HashMap::new()),
@@ -733,7 +759,8 @@ impl FusionBroker {
             forgotten: AtomicBool::new(false),
             reserved: AtomicBool::new(false),
             delivery_gate: tokio::sync::Mutex::new(()),
-            resume_from: Mutex::new(None),
+            pause_epoch: AtomicU64::new(0),
+            round_turns: Mutex::new(HashMap::new()),
         });
         if let Ok(mut leads) = self.inner.leads.lock() {
             leads.insert(lead, Arc::clone(&slot));
@@ -782,14 +809,14 @@ impl FusionBroker {
             .and_then(|leads| leads.get(lead).cloned())
     }
 
-    /// The Fusion role of a session and its lead, with the pair.
+    /// The Fusion role and harness of a session, with the lead id and pair options.
     pub(crate) fn membership(
         &self,
         session_id: &str,
-    ) -> Option<(FusionRoleName, String, FusionPair)> {
-        let (role, lead) = self.inner.members.lock().ok()?.get(session_id).cloned()?;
-        let pair = self.slot(&lead)?.pair.clone();
-        Some((role, lead, pair))
+    ) -> Option<(FusionRoleName, String, HarnessKind, FusionOptions)> {
+        let (role, lead, harness) = self.inner.members.lock().ok()?.get(session_id).cloned()?;
+        let options = self.slot(&lead)?.options;
+        Some((role, lead, harness, options))
     }
 
     /// A sidekick session the broker may still use (not retired).
@@ -812,7 +839,7 @@ impl FusionBroker {
     /// Whether the person may delete this session's chat: a lead only while
     /// no sidekick round of its pair is open or uncertain.
     pub(crate) async fn deletable(&self, session_id: &str) -> bool {
-        let Some((role, lead, _)) = self.membership(session_id) else {
+        let Some((role, lead, ..)) = self.membership(session_id) else {
             return true;
         };
         if role != FusionRoleName::Lead {
@@ -822,7 +849,8 @@ impl FusionBroker {
             return true;
         };
         let document = slot.document.lock().await;
-        open_round(&document).is_none()
+        !slot.reserved.load(Ordering::Acquire)
+            && open_round(&document).is_none()
             && !document
                 .briefs
                 .iter()
@@ -835,7 +863,7 @@ impl FusionBroker {
     /// closes the idle sidekick (its catalog entry and history stay). A
     /// deleted retired sidekick is forgotten.
     pub(crate) async fn session_deleted(&self, session_id: &str) {
-        let Some((role, lead, _)) = self.membership(session_id) else {
+        let Some((role, lead, ..)) = self.membership(session_id) else {
             return;
         };
         if role == FusionRoleName::Sidekick {
@@ -918,7 +946,7 @@ impl FusionBroker {
             slot.forgotten.store(true, Ordering::Release);
         }
         if let Ok(mut members) = self.inner.members.lock() {
-            members.retain(|_, (_, lead)| lead != lead_session_id);
+            members.retain(|_, (_, lead, _)| lead != lead_session_id);
         }
     }
 
@@ -933,7 +961,11 @@ impl FusionBroker {
         if !saved {
             eprintln!("event=fusion_persist_failed revision={}", document.revision);
         }
-        let revision = document.revision;
+        self.publish_revision(slot, document.revision);
+        saved
+    }
+
+    fn publish_revision(&self, slot: &LeadSlot, revision: u64) {
         slot.revision.send_replace(revision);
         let notifier = self
             .inner
@@ -944,12 +976,13 @@ impl FusionBroker {
         if let Some(notifier) = notifier {
             notifier(&slot.lead_session_id, revision);
         }
-        saved
     }
 
     pub(crate) async fn state(&self, lead: &str) -> Option<FusionStateV1> {
         let slot = self.slot(lead)?;
         let document = slot.document.lock().await;
+        let sidekick_change_block = self.change_block(&document);
+        let current = current_session(&document);
         Some(FusionStateV1 {
             protocol: FUSION_PROTOCOL,
             lead_session_id: document.lead_session_id.clone(),
@@ -961,7 +994,222 @@ impl FusionBroker {
             stats: document.stats,
             revision: document.revision,
             paused: document.paused,
+            sidekick_change_block,
+            sidekick_replace_block: sidekick_change_block.or_else(|| self.replace_block(&document)),
+            sidekick_current_model: current
+                .and_then(|session| self.inner.host.sidekick_model(&session.session_id)),
         })
+    }
+
+    fn change_block(&self, document: &FusionDocument) -> Option<SidekickChangeBlock> {
+        use SidekickChangeBlock::*;
+        if open_round(document).is_some() {
+            return Some(RoundOpen);
+        }
+        if uncertain_round(document).is_some() {
+            return Some(RoundUncertain);
+        }
+        let rounds = || document.briefs.iter().flat_map(|brief| &brief.rounds);
+        if rounds().any(delivery_needs_check) {
+            return Some(ReportUncertain);
+        }
+        if rounds().any(report_pending) {
+            return Some(ReportPending);
+        }
+        current_session(document)
+            .and_then(|session| self.inner.host.turns(&session.session_id).ok())
+            .filter(|turns| {
+                !matches!(
+                    turns.borrow().status,
+                    SessionStatus::Idle | SessionStatus::Closed | SessionStatus::Failed
+                )
+            })
+            .map(|_| SidekickBusy)
+    }
+
+    fn replace_block(&self, document: &FusionDocument) -> Option<SidekickChangeBlock> {
+        let session = current_session(document)?;
+        let stopped = document
+            .briefs
+            .iter()
+            .filter(|brief| brief.sidekick_session_id == session.session_id)
+            .flat_map(|brief| &brief.rounds)
+            .max_by_key(|round| round_number(round))
+            .is_some_and(|round| round.outcome == Some(RoundOutcome::Interrupted));
+        let attached = self
+            .inner
+            .host
+            .turns(&session.session_id)
+            .is_ok_and(|turns| {
+                !matches!(
+                    turns.borrow().status,
+                    SessionStatus::Closed | SessionStatus::Failed
+                )
+            });
+        (!document.paused && !stopped && attached).then_some(SidekickChangeBlock::SidekickAttached)
+    }
+
+    pub(crate) async fn change_sidekick(
+        &self,
+        lead: &str,
+        change: SidekickChange,
+        safe_mode: bool,
+    ) -> Result<(), WorkspaceError> {
+        if safe_mode {
+            return Err(WorkspaceError::safe_mode());
+        }
+        let slot = self.slot(lead).ok_or_else(WorkspaceError::not_found)?;
+        let (reserved, mut candidate, current) = {
+            let document = slot.document.lock().await;
+            if document.revision != change.revision {
+                return Err(WorkspaceError::conflict());
+            }
+            if let Some(block) = self.change_block(&document) {
+                return Err(block.error());
+            }
+            if slot.reserved.load(Ordering::Acquire) {
+                return Err(SidekickChangeBlock::SidekickBusy.error());
+            }
+            let mut candidate = document.clone();
+            let old = &document.pair.sidekick;
+            match change.kind {
+                SidekickChangeKind::Model => {
+                    if change.sidekick.harness != old.harness
+                        || change.sidekick.permission_mode != old.permission_mode
+                        || change.sidekick.model.is_none()
+                    {
+                        return Err(WorkspaceError::invalid());
+                    }
+                }
+                SidekickChangeKind::Replace => {
+                    if let Some(block) = self.replace_block(&document) {
+                        return Err(block.error());
+                    }
+                }
+            }
+            candidate.pair.sidekick = change.sidekick;
+            let admission = super::capability::admit(&candidate.pair, self.codex_sandbox())
+                .map_err(|_| {
+                    sidekick_change_error(
+                        "FUSION_SIDEKICK_NOT_ADMITTED",
+                        "The pair does not admit this sidekick.",
+                    )
+                })?;
+            candidate.pair.sidekick.permission_mode = admission.sidekick_mode;
+            slot.reserved.store(true, Ordering::Release);
+            (
+                Reservation(&slot.reserved),
+                candidate,
+                current_session(&document).map(|session| session.session_id.clone()),
+            )
+        };
+
+        let host = self.inner.host.as_ref();
+        candidate.pair.sidekick = host
+            .validate_sidekick_role(candidate.workspace_id.clone(), candidate.pair.sidekick)
+            .await?;
+        let restart = change.kind == SidekickChangeKind::Replace
+            || current.as_ref().is_some_and(|id| {
+                let before = host.sidekick_model(id);
+                super::logic::sidekick_model_requires_restart(
+                    &candidate.pair.sidekick,
+                    before.as_ref(),
+                )
+            });
+        if restart && !change.allow_context_loss {
+            return Err(sidekick_change_error(
+                "FUSION_CONTEXT_LOSS",
+                "This change starts a fresh sidekick conversation.",
+            ));
+        }
+
+        let mut fresh = None;
+        let mut previous = None;
+        if restart {
+            if let Some(session) = candidate
+                .sessions
+                .iter_mut()
+                .rev()
+                .find(|session| !session.retired)
+            {
+                session.retired = true;
+                session.retired_reason = Some("sidekick changed by the person".into());
+            }
+            let id = self.sidekick_session_for_new_brief(&mut candidate);
+            let launch = host
+                .launch_sidekick(SidekickLaunch {
+                    session_id: id.clone(),
+                    workspace_id: candidate.workspace_id.clone(),
+                    lead_session_id: lead.to_owned(),
+                    role: candidate.pair.sidekick.clone(),
+                })
+                .await;
+            if let Err(failure) = launch {
+                self.discard_sidekick_draft(id).await;
+                return Err(sidekick_host_error(failure));
+            }
+            if let Some(requested) = &candidate.pair.sidekick.model
+                && host.sidekick_model(&id).is_none_or(|actual| {
+                    actual.id != requested.id || actual.provider != requested.provider
+                })
+            {
+                self.discard_sidekick_draft(id).await;
+                return Err(sidekick_host_error(HostFailure::Unavailable));
+            }
+            fresh = Some(id);
+        } else if let Some(id) = &current {
+            host.ensure_live(id.clone())
+                .await
+                .map_err(sidekick_host_error)?;
+            previous = Some(
+                host.set_sidekick_model(id.clone(), candidate.pair.sidekick.clone())
+                    .await?,
+            );
+        }
+
+        // A pause, delivery or tool call can still change the journal during startup.
+        let result = {
+            let mut document = slot.document.lock().await;
+            if slot.forgotten.load(Ordering::Acquire) || document.revision != change.revision {
+                Err(WorkspaceError::conflict())
+            } else {
+                candidate.revision += 1;
+                if self.inner.store.save(&candidate).is_err() {
+                    Err(WorkspaceError::io())
+                } else {
+                    if restart && let Some(id) = &current {
+                        self.mark_retired(id);
+                    }
+                    *document = candidate;
+                    Ok(())
+                }
+            }
+        };
+        if result.is_err() {
+            if let Some(id) = fresh {
+                self.discard_sidekick_draft(id).await;
+            }
+            if let (Some(id), Some(previous)) = (current, previous)
+                && host.set_sidekick_model(id.clone(), previous).await.is_err()
+            {
+                host.close(id).await;
+            }
+        } else if restart && let Some(id) = current {
+            host.close(id).await;
+        }
+        let document = slot.document.lock().await;
+        drop(reserved);
+        if result.is_ok() {
+            self.publish_revision(&slot, document.revision);
+        }
+        result
+    }
+
+    async fn discard_sidekick_draft(&self, id: String) {
+        self.inner.host.discard_sidekick_draft(id.clone()).await;
+        if let Ok(mut members) = self.inner.members.lock() {
+            members.remove(&id);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1002,7 +1250,6 @@ impl FusionBroker {
         {
             return replayed;
         }
-        self.resume_if_person_spoke(&slot).await;
         let parsed: Result<SidekickOperation, _> = serde_json::from_value(Value::Object(operation));
         let (answer, claimed) = match parsed {
             Err(_) => (
@@ -1153,30 +1400,6 @@ impl FusionBroker {
         Some(round_id.to_owned())
     }
 
-    /// After a pair stop the broker sends the lead nothing, so a lead turn
-    /// newer than the stopped one was started by the person: their next
-    /// message resumes the pair (ADR-076).
-    async fn resume_if_person_spoke(&self, slot: &Arc<LeadSlot>) {
-        if !slot.document.lock().await.paused {
-            return;
-        }
-        let threshold = slot.resume_from.lock().ok().and_then(|from| *from);
-        let generation = self
-            .inner
-            .host
-            .turns(&slot.lead_session_id)
-            .map(|receiver| receiver.borrow().generation)
-            .ok();
-        let newer = match (threshold, generation) {
-            (None, _) => true,
-            (Some(threshold), Some(generation)) => generation >= threshold,
-            (Some(_), None) => false,
-        };
-        if newer {
-            self.set_paused(slot, false).await;
-        }
-    }
-
     async fn set_paused(&self, slot: &Arc<LeadSlot>, paused: bool) {
         {
             let mut document = slot.document.lock().await;
@@ -1189,9 +1412,6 @@ impl FusionBroker {
             self.persist(slot, &mut document).await;
         }
         if !paused {
-            if let Ok(mut from) = slot.resume_from.lock() {
-                *from = None;
-            }
             self.resume_slot_deliveries(slot).await;
         }
     }
@@ -1387,7 +1607,7 @@ impl FusionBroker {
             &brief_id,
             &round_id,
             &warnings,
-            slot.pair.options.brief_policy,
+            slot.options.brief_policy,
         );
         Ok(result)
     }
@@ -1503,7 +1723,11 @@ impl FusionBroker {
         if let Ok(mut members) = self.inner.members.lock() {
             members.insert(
                 session_id.clone(),
-                (FusionRoleName::Sidekick, document.lead_session_id.clone()),
+                (
+                    FusionRoleName::Sidekick,
+                    document.lead_session_id.clone(),
+                    document.pair.sidekick.harness,
+                ),
             );
         }
         session_id
@@ -1713,7 +1937,11 @@ impl FusionBroker {
                             .iter()
                             .any(|round| round.answer_block_id.is_some() || round.outcome.is_some())
                 });
-                (exists, document.workspace_id.clone())
+                (
+                    exists,
+                    document.workspace_id.clone(),
+                    document.pair.sidekick.clone(),
+                )
             };
             let opened = if launched.0 {
                 host.ensure_live(session_id.to_owned()).await
@@ -1725,7 +1953,7 @@ impl FusionBroker {
                             session_id: session_id.to_owned(),
                             workspace_id: launched.1,
                             lead_session_id: slot.lead_session_id.clone(),
-                            role: slot.pair.sidekick.clone(),
+                            role: launched.2,
                         })
                         .await
                     }
@@ -1779,6 +2007,9 @@ impl FusionBroker {
         mut receiver: watch::Receiver<TurnState>,
         generation: u64,
     ) {
+        if let Ok(mut turns) = slot.round_turns.lock() {
+            turns.insert(round_id.clone(), generation);
+        }
         let broker = self.clone();
         let slot = Arc::clone(slot);
         tokio::spawn(async move {
@@ -1825,6 +2056,9 @@ impl FusionBroker {
                     () = tokio::time::sleep(POLL) => {}
                 }
             };
+            if let Ok(mut turns) = slot.round_turns.lock() {
+                turns.remove(&round_id);
+            }
             broker
                 .finish_round(
                     &slot,
@@ -2462,7 +2696,7 @@ impl FusionBroker {
             brief_id,
             &round_id,
             &[],
-            slot.pair.options.brief_policy,
+            slot.options.brief_policy,
         );
         Ok(result)
     }
@@ -2473,6 +2707,9 @@ impl FusionBroker {
         round_id: &str,
         text: String,
     ) -> Result<Value, ToolError> {
+        // Held to the end of the send: no next round's prompt starts between
+        // the turn check below and the steer reaching the sidekick.
+        let _admission = slot.send_gate.lock().await;
         let session_id = {
             let mut document = slot.document.lock().await;
             let Some((brief, index)) = find_round(&mut document, round_id) else {
@@ -2498,6 +2735,25 @@ impl FusionBroker {
             }
             brief.sidekick_session_id.clone()
         };
+        // The round's own turn must still be the sidekick's current turn: a
+        // finished turn the watcher has not settled yet is not steered.
+        let expected = slot
+            .round_turns
+            .lock()
+            .ok()
+            .and_then(|turns| turns.get(round_id).copied());
+        let current = self
+            .inner
+            .host
+            .turns(&session_id)
+            .ok()
+            .map(|receiver| receiver.borrow().generation);
+        if expected.is_none() || expected != current {
+            return Err(error(
+                SidekickErrorCode::RoundFinished,
+                "That round's turn already ended; use message for a new round.",
+            ));
+        }
         self.inner
             .host
             .send(session_id, text, PromptMode::Steer)
@@ -3142,35 +3398,83 @@ impl FusionBroker {
         }
     }
 
-    /// The first step of Stop pair: pause the pair before anything is
-    /// interrupted. No round is admitted and no follow-up is sent until the
-    /// person resumes it (or speaks in the lead chat); a follow-up already
-    /// past its pause check finishes its send before this returns, so the
-    /// lead interrupt that follows reaches it.
-    pub(crate) async fn pause_pair(&self, lead: &str) -> Result<(), SidekickErrorCode> {
+    /// The panel stops a running round or detaches an idle sidekick. Keep
+    /// admission reserved while closing so a lead cannot reopen it mid-close.
+    pub(crate) async fn person_stop_sidekick(&self, lead: &str) -> Result<(), SidekickErrorCode> {
         let slot = self
             .slot(lead)
             .ok_or(SidekickErrorCode::SidekickUnavailable)?;
-        // Tool calls of the turn being stopped keep its generation; a turn
-        // the person starts afterwards has a newer one.
-        let threshold = self.inner.host.turns(lead).ok().map(|receiver| {
-            let state = *receiver.borrow();
-            let running = matches!(
-                state.status,
-                SessionStatus::Starting | SessionStatus::Running | SessionStatus::Stopping
-            );
-            state.generation + u64::from(running)
-        });
-        if let Ok(mut from) = slot.resume_from.lock() {
-            *from = Some(threshold.unwrap_or(0));
+        let reserved = self
+            .reserve(&slot)
+            .await
+            .ok_or(SidekickErrorCode::PairStopping)?;
+        let idle = {
+            let document = slot.document.lock().await;
+            if open_round(&document).is_some() || uncertain_round(&document).is_some() {
+                None
+            } else {
+                current_session(&document).map(|session| session.session_id.clone())
+            }
+        };
+        if let Some(id) = idle {
+            self.inner.host.close(id.clone()).await;
+            if self.inner.host.turns(&id).is_ok() {
+                return Err(SidekickErrorCode::SidekickUnavailable);
+            }
+            let mut document = slot.document.lock().await;
+            drop(reserved);
+            self.persist(&slot, &mut document).await;
+            Ok(())
+        } else {
+            self.stop_sidekick(lead).await
         }
+    }
+
+    /// The first step of Stop pair: pause the pair before anything is
+    /// interrupted. No round is admitted and no follow-up is sent until the
+    /// person resumes it (`resumePair`) or a message the person wrote is
+    /// admitted in the lead chat; a lead tool call, a turn end or an
+    /// auto-delivered report never resumes it. A follow-up already past its
+    /// pause check finishes its send before this returns, so the lead
+    /// interrupt that follows reaches it. `Ok(false)`: paused in this process
+    /// but the journal write failed (the caller reports it after stopping).
+    pub(crate) async fn pause_pair(&self, lead: &str) -> Result<bool, SidekickErrorCode> {
+        let slot = self
+            .slot(lead)
+            .ok_or(SidekickErrorCode::SidekickUnavailable)?;
+        let saved = {
+            let mut document = slot.document.lock().await;
+            slot.pause_epoch.fetch_add(1, Ordering::AcqRel);
+            document.paused = true;
+            self.persist(&slot, &mut document).await
+        };
+        drop(slot.delivery_gate.lock().await);
+        Ok(saved)
+    }
+
+    /// The pause epoch before a person's message to `lead` is admitted
+    /// (`None`: not a Fusion lead).
+    pub(crate) fn person_message_epoch(&self, lead: &str) -> Option<u64> {
+        self.slot(lead)
+            .map(|slot| slot.pause_epoch.load(Ordering::Acquire))
+    }
+
+    /// A message the person wrote was confirmed by the lead's harness: it
+    /// resumes a stopped pair unless a stop came after it (`epoch` changed).
+    /// Checked under the document lock, the lock Stop pair pauses under.
+    pub(crate) async fn person_message_admitted(&self, lead: &str, epoch: u64) {
+        let Some(slot) = self.slot(lead) else {
+            return;
+        };
         {
             let mut document = slot.document.lock().await;
-            document.paused = true;
+            if !document.paused || slot.pause_epoch.load(Ordering::Acquire) != epoch {
+                return;
+            }
+            document.paused = false;
             self.persist(&slot, &mut document).await;
         }
-        drop(slot.delivery_gate.lock().await);
-        Ok(())
+        self.resume_slot_deliveries(&slot).await;
     }
 
     /// The person resumes a stopped pair: queued reports are delivered again
@@ -3491,6 +3795,23 @@ impl FusionBroker {
     }
 }
 
+fn sidekick_host_error(failure: HostFailure) -> WorkspaceError {
+    match failure {
+        HostFailure::SignInRequired => WorkspaceError::subscription_required(),
+        HostFailure::Unavailable | HostFailure::AcceptanceUnknown => sidekick_change_error(
+            "FUSION_SIDEKICK_START_FAILED",
+            "The sidekick could not start.",
+        ),
+    }
+}
+
+fn report_pending(round: &FusionRound) -> bool {
+    delivery_pending(round)
+        || (round.state == RoundState::Finished
+            && round.delivery.is_none()
+            && (round.answer_block_id.is_some() || round.report.is_some()))
+}
+
 fn brief_used_session(briefs: &[FusionBrief], session_id: &str, except: &str) -> bool {
     briefs.iter().any(|brief| {
         brief.brief_id != except
@@ -3525,10 +3846,11 @@ fn uncertain_round(document: &FusionDocument) -> Option<(&FusionBrief, &FusionRo
 pub(crate) fn fold_old_briefs(document: &mut FusionDocument) {
     while document.briefs.len() > MAX_LIVE_BRIEFS {
         let Some(index) = document.briefs.iter().position(|brief| {
-            brief
-                .rounds
-                .iter()
-                .all(|round| round.state == RoundState::Finished && !delivery_pending(round))
+            brief.rounds.iter().all(|round| {
+                round.state == RoundState::Finished
+                    && !report_pending(round)
+                    && !delivery_needs_check(round)
+            })
         }) else {
             break;
         };
