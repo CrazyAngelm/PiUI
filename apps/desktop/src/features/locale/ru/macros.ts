@@ -6,7 +6,7 @@ export const macrosRu: Readonly<Record<string, string>> = {
   'Delete //{0}': 'Удалить //{0}',
   'Deleted //{0}': 'Макрос //{0} удалён',
   'No macros yet': 'Макросов пока нет',
-  'A macro is a saved prompt or a set of skills. Type // in a message to add one.': 'Макрос: готовый промпт или набор навыков. Введите // в сообщении, чтобы добавить его.',
+  'A macro is a saved prompt or a set of skills. Press Space in an empty message, or Space twice after text, to add one.': 'Макрос: готовый промпт или набор навыков. Нажмите пробел в пустом сообщении или два пробела после текста, чтобы добавить его.',
   'No matching macros': 'Подходящих макросов нет',
   'Manage macros': 'Настроить макросы',
   'Edit the macro at the caret': 'Изменить макрос под курсором',

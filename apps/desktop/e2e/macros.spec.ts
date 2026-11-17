@@ -82,13 +82,13 @@ test('Settings creates by keyboard, rejects duplicate names, deletes with Undo, 
   await expect(page.getByRole('textbox', { name: 'Prompt', exact: true })).toHaveValue('Updated review.');
 });
 
-test('Codex // menu inserts with Enter, Tab and click, filters, and highlights known macros', async ({ lab, page }) => {
+test('Codex space menu inserts with Enter, Tab and click, filters, and highlights known macros', async ({ lab, page }) => {
   await seed(page);
   await lab.open();
   const editor = await openChat(lab);
   const menu = page.getByRole('listbox', { name: 'Macros', exact: true });
   for (const key of ['Enter', 'Tab', 'click']) {
-    await editor.fill('//re');
+    await editor.fill(' re');
     const option = menu.getByRole('option', { name: /\/\/review/ });
     await expect(option).toBeVisible();
     if (key === 'click') await option.click();
@@ -97,9 +97,35 @@ test('Codex // menu inserts with Enter, Tab and click, filters, and highlights k
     await expect(menu).toHaveCount(0);
     await expect(page.locator('.macro-marks mark')).toHaveText('//review');
   }
-  await editor.fill('//unknown');
-  await expect(menu).toContainText('No matching macros');
+  // A space that names no macro is an ordinary space.
+  await editor.fill(' unknown');
+  await expect(menu).toHaveCount(0);
   await expect(page.locator('.macro-marks')).toHaveCount(0);
+});
+
+test('typed spaces open the menu only at the start or as a second space, and Escape keeps a plain space', async ({ lab, page }) => {
+  await seed(page);
+  await lab.open();
+  const editor = await openChat(lab);
+  const menu = page.getByRole('listbox', { name: 'Macros', exact: true });
+  await editor.fill('');
+  await editor.press('Space');
+  await expect(menu.getByRole('option', { name: /\/\/review/ })).toBeVisible();
+  await editor.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(editor).toHaveValue(' ');
+  await editor.press('r');
+  await expect(menu).toHaveCount(0);
+  await editor.fill('fix');
+  await editor.press('Space');
+  await expect(menu).toHaveCount(0);
+  await editor.press('Space');
+  await expect(menu).toBeVisible();
+  await editor.press('r');
+  await editor.press('ArrowDown');
+  await editor.press('Enter');
+  await expect(editor).toHaveValue('fix //review ');
+  await expect(page.locator('.macro-marks mark')).toHaveText('//review');
 });
 
 test('mirror matches short, wrapped and scrolling text and stays aligned on resize', async ({ lab, page }) => {
@@ -178,26 +204,11 @@ test('sending expands every known token in an existing Codex chat', async ({ lab
   await expect(editor).toHaveValue('');
 });
 
-test('a whole macro name opens no menu, so Enter sends the message', async ({ lab, page }) => {
-  await seed(page);
-  await lab.open();
-  const editor = await openChat(lab);
-  const menu = page.getByRole('listbox', { name: 'Macros', exact: true });
-  await editor.fill('//revie');
-  await expect(menu.getByRole('option', { name: /\/\/review/ })).toBeVisible();
-  await editor.fill('//review');
-  await expect(menu).toHaveCount(0);
-  await expect(page.locator('.macro-marks mark')).toHaveText('//review');
-  await editor.press('Enter');
-  await expect(page.getByRole('region', { name: 'Conversation messages' }).getByText(expanded, { exact: true })).toBeVisible();
-  await expect(editor).toHaveValue('');
-});
-
 test('the menu lists an exact name before a longer name that starts with it', async ({ lab, page }) => {
   await seed(page, [{ ...review, id: 'review-all', name: 'review-all' }, review]);
   await lab.open();
   const editor = await openChat(lab);
-  await editor.fill('//review');
+  await editor.fill(' review');
   const options = page.getByRole('listbox', { name: 'Macros', exact: true }).getByRole('option');
   await expect(options).toHaveCount(2);
   await expect(options.first()).not.toContainText('review-all');
@@ -227,7 +238,7 @@ test('new-chat menu and highlighting use the selected agent syntax and expand th
   await home.getByRole('button', { name: 'Pi', exact: true }).click();
   await lab.option(/^Codex/).click();
   const editor = home.getByRole('textbox', { name: 'Message', exact: true });
-  await editor.fill('//re');
+  await editor.fill(' re');
   await expect(page.getByRole('listbox', { name: 'Macros', exact: true }).getByRole('option', { name: /\/\/review/ })).toBeVisible();
   await editor.press('Enter');
   await expect(editor).toHaveValue('//review ');
@@ -237,17 +248,17 @@ test('new-chat menu and highlighting use the selected agent syntax and expand th
   await expect(page.getByRole('region', { name: 'Conversation messages' }).getByText(expanded, { exact: true })).toBeVisible();
 });
 
-test('with no saved macros // opens no listbox and / commands still work', async ({ lab, page }) => {
+test('with no saved macros a space opens no listbox and / commands still work', async ({ lab, page }) => {
   await seed(page, []);
   await lab.open();
   const editor = await openChat(lab);
-  await editor.fill('//');
+  await editor.fill(' ');
   await expect(page.getByRole('listbox')).toHaveCount(0);
   await expect(page.locator('.macro-marks')).toHaveCount(0);
   await editor.fill('/');
   await expect(page.getByRole('listbox', { name: 'Available commands', exact: true })).toBeVisible();
   await lab.nav('New chat').click();
-  await page.getByRole('textbox', { name: 'Message', exact: true }).fill('//');
+  await page.getByRole('textbox', { name: 'Message', exact: true }).fill(' ');
   await expect(page.getByRole('listbox')).toHaveCount(0);
 });
 

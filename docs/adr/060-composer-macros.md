@@ -60,3 +60,17 @@ the new-chat composer or in an open chat. One message may hold several.
 - The new-chat composer is on the first paint, so only the token rules and the
   small store load there; the expansion rules, the mirror layer and the menu
   load on first use.
+
+## Amendment — 2026-11-17 (0.3.2): a space opens the list
+
+Typing `//` no longer opens the list; it collided with comments, paths and
+URLs. A space does instead, in two places only: as the first character of an
+empty message, and as the second of two spaces right after text (`fix␣␣`).
+A third space, two leading spaces, a space after a line break or a single
+space between words open nothing. Letters typed after that space narrow the
+list; a space that names no macro closes it and stays an ordinary space.
+Enter, Tab or a click replaces the space with the `//name` token (the first
+space of a double space stays as the separator). Escape closes the list and
+keeps the space; the same space stays closed while the text before it is
+unchanged. The token, its marks, its card, `F2` and the expansion on send are
+unchanged, and a typed `//name` is still a macro.
