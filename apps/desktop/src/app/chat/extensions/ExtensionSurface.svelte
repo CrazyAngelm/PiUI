@@ -19,6 +19,8 @@
   let { sessionId, status, placement, agentLabel, surfaces = extensionSurfaces }: Props = $props();
 
   const view = $derived(surfaces.stateFor(sessionId));
+  // Plain "loaded" messages of extensions are quiet: only warnings and errors take space in the chat.
+  const notices = $derived(view.notifications.filter((notice) => notice.level !== 'info'));
   const widgets = $derived(view.widgets.filter((widget) => widget.placement === (placement === 'above' ? 'aboveEditor' : 'belowEditor')));
 
   // A stopped runtime no longer owns what its extensions showed.
@@ -40,9 +42,9 @@
 </script>
 
 {#if placement === 'above'}
-  {#if view.notifications.length}
+  {#if notices.length}
     <div class="notices" aria-label={$t('Extension notices')}>
-      {#each view.notifications as notice (notice.id)}
+      {#each notices as notice (notice.id)}
         <div class="notice notice--{notice.level}" role={notice.level === 'error' ? 'alert' : 'status'}>
           <span class="notice__source"><Puzzle size={13} /> {$t('{0} extension', [agentLabel])}</span>
           <p>{notice.message}</p>

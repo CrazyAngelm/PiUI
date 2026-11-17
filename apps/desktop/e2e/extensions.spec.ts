@@ -20,43 +20,41 @@ test.describe('Pi extension UI in a chat', () => {
   test('surfaces appear next to the message box and every dialog kind can be answered', async ({ lab, page }) => {
     test.slow(); // The lab replays the extension with real timers.
     const chat = await startDemo(lab);
-    await expect(chat.getByRole('status').filter({ hasText: 'Extension demo: notices, statuses and panels appear next to the message box.' })).toContainText('Pi extension');
+    // Plain info notices ("loaded", "saved") are quiet: only warnings and errors take space in the chat.
+    const quiet = chat.getByRole('status').filter({ hasText: /Extension demo: notices|Preview build allowed|Target chosen|Preview named|Release note saved/ });
+    await expect(quiet).toHaveCount(0);
     await expect(chat.getByRole('list', { name: 'Extension status' }).getByRole('listitem')).toHaveText(['Checks: running', 'Branch: feat/classic-port']);
     await expect(chat.getByRole('complementary', { name: 'Extension panel' }).first()).toContainText('Release checklist');
     await expect(page).toHaveTitle('Extension demo — Nano Desktop');
 
-    // 1. confirm → permission card.
+    // 1. confirm → permission card; answering closes it and the replay asks the next question.
     const confirm = card(page, 'Build a preview?');
     await confirm.getByRole('button', { name: 'Allow once' }).click();
-    await expect(chat.getByRole('status').filter({ hasText: 'Preview build allowed.' })).toBeVisible();
+    await expect(confirm).toBeHidden();
     // 2. select → choices.
     const select = card(page, 'Where should the preview go?');
     await select.getByRole('group', { name: 'Choices' }).getByRole('button', { name: 'Staging' }).click();
-    await expect(chat.getByRole('status').filter({ hasText: 'Target chosen.' })).toBeVisible();
+    await expect(select).toBeHidden();
     // 3. input → an answer is required before sending.
     const input = card(page, 'Name the preview');
     const send = input.getByRole('button', { name: 'Send answer' });
     await expect(send).toBeDisabled();
     await input.getByRole('textbox', { name: 'Preview name' }).fill('lab-preview');
     await send.click();
-    await expect(chat.getByRole('status').filter({ hasText: 'Preview named.' })).toBeVisible();
+    await expect(input).toBeHidden();
     // 4. editor → prepared text that closes by itself if unanswered.
     const editor = card(page, 'Edit the release note');
     await expect(editor.getByRole('textbox', { name: 'Release note' })).toHaveValue('feat(history): read Pi sessions and their branches in Nano Desktop');
     await expect(editor).toContainText('This request closes automatically if you do not answer.');
     await editor.getByRole('button', { name: 'Send answer' }).click();
-    await expect(chat.getByRole('status').filter({ hasText: 'Release note saved.' })).toBeVisible();
+    await expect(editor).toBeHidden();
 
     // The end of the replay: updated status, a panel below the box, prepared text, a generic fallback.
     await expect(chat.getByRole('list', { name: 'Extension status' })).toContainText('Checks: passed', { timeout: 20_000 });
     await expect(chat.getByRole('complementary', { name: 'Extension panel' }).filter({ hasText: 'Tip: extension panels can sit below the message box too.' })).toBeVisible();
     await expect(chat.getByRole('textbox', { name: 'Message' })).toHaveValue('Summarize what the extension showed.', { timeout: 20_000 });
     await expect(chat.getByRole('region', { name: 'Conversation messages' })).toContainText('Done. The statuses and panels stay', { timeout: 20_000 });
-
-    // A notice can be dismissed.
-    const notice = chat.getByRole('status').filter({ hasText: 'Release note saved.' });
-    await notice.getByRole('button', { name: 'Dismiss notice' }).click();
-    await expect(notice).toHaveCount(0);
+    await expect(quiet).toHaveCount(0);
   });
 
   test('declined and dismissed dialogs are reported and the replay goes on', async ({ lab, page }) => {
@@ -71,6 +69,11 @@ test.describe('Pi extension UI in a chat', () => {
     await card(page, 'Edit the release note').getByRole('button', { name: 'Dismiss' }).click();
     await expect(chat.getByRole('status').filter({ hasText: 'Release note skipped.' })).toBeVisible();
     await expect(chat.getByRole('list', { name: 'Extension status' })).toContainText('Checks: passed', { timeout: 20_000 });
+
+    // A warning notice stays in the chat until it is dismissed.
+    const notice = chat.getByRole('status').filter({ hasText: 'Release note skipped.' });
+    await notice.getByRole('button', { name: 'Dismiss notice' }).click();
+    await expect(notice).toHaveCount(0);
   });
 });
 
