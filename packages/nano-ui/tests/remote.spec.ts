@@ -1,6 +1,8 @@
+import type { Locator } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import { test, expect } from './browserFixture';
 import { NANO_REMOTE_COMMANDS } from '../../../contracts/nano-remote-v1';
-import { DEVICE_ID, DEVICE_NAME, OTHER_DEVICE_ID, startRemoteLab, type RemoteLab } from './remote-harness';
+import { DEVICE_ID, DEVICE_NAME, MOUNT, OTHER_DEVICE_ID, seedRemotePipeline, startRemoteLab, type RemoteLab } from './remote-harness';
 
 // The built `dist-remote` bundle (pnpm build:remote) against a scripted relay and a desktop backed
 // by the UI Lab host. Synthetic: no real Nano server, desktop or provider is involved.
@@ -16,9 +18,21 @@ test.afterAll(async () => {
   await lab.close();
 });
 
-test.beforeEach(() => {
+test.beforeEach(async ({ page }) => {
   lab.options.approval = 'manual';
   lab.options.shell = {};
+  lab.options.commands = undefined;
+  lab.options.failNextStartReply = false;
+  // Keep the persistent browser and its pairing key. A previous test's route, selected project
+  // or draft must not change a first-opening scenario, even on a rerun with the same profile.
+  await page.goto(lab.url + MOUNT + 'remote-manifest.json');
+  await page.evaluate((devices) => {
+    for (const storage of [localStorage, sessionStorage]) {
+      for (const key of Object.keys(storage)) {
+        if (devices.some((device) => key.startsWith('nano-remote:' + device + ':'))) storage.removeItem(key);
+      }
+    }
+  }, [DEVICE_ID, OTHER_DEVICE_ID]);
 });
 
 /** The page's real localStorage, read through a fresh same-origin frame because the page itself sees only its device's keys. */
@@ -147,6 +161,116 @@ test('a refusal on the desktop shows the refusal and never mounts the shell', as
   expect(viewer.requests).toEqual([]);
 });
 
+test('a phone opens the graph, edits the saved pipeline and starts it on the paired desktop', async ({ page }, testInfo) => {
+  lab.options.approval = 'auto';
+  await seedRemotePipeline(lab, 'Editorial brief');
+  await page.setViewportSize({ width: 390, height: 780 });
+  const next = lab.nextViewer();
+  await page.goto(lab.launch());
+  const viewer = await next;
+  await page.getByRole('button', { name: 'Pipelines', exact: true }).click();
+  await page.getByRole('button', { name: 'Open', exact: true }).click();
+  await page.locator('.piui-picker').getByText('Editorial brief', { exact: true }).click();
+  const name = page.getByRole('textbox', { name: 'Pipeline name' });
+  await expect(name).toHaveValue('Editorial brief');
+  await expect(page.locator('.svelte-flow__node[aria-label="Сбор материалов"]')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  // The first working step opens at reading size. Fit to screen can still show the whole graph.
+  await expect.poll(async () => (await page.locator('.svelte-flow__node[aria-label="Сбор материалов"]').boundingBox())?.width ?? 0).toBeGreaterThan(200);
+  const screenshot = testInfo.outputPath('phone-pipeline.png');
+  await page.screenshot({ path: screenshot, animations: 'disabled' });
+  await testInfo.attach('phone-pipeline', { path: screenshot, contentType: 'image/png' });
+  await page.getByRole('button', { name: 'Сбор материалов' }).click();
+  const inspector = page.getByRole('complementary', { name: 'Node settings' });
+  await inspector.locator('button.select').first().click();
+  const picker = page.locator('.piui-picker');
+  const hermes = picker.locator('.piui-picker__item').filter({ hasText: /Hermes/i });
+  await expect(hermes).toHaveAttribute('aria-disabled', 'true');
+  await expect(hermes).toContainText('This harness cannot enforce read-only access.');
+  await page.keyboard.press('Escape');
+  await inspector.getByRole('button', { name: 'Close', exact: true }).click();
+  await name.fill('Revised brief');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect.poll(() => viewer.requests.some((row) => row.command === 'orchestration_save_graph_v6')).toBe(true);
+  await page.getByRole('button', { name: 'Run', exact: true }).click();
+  await expect.poll(() => viewer.requests.some((row) => row.command === 'orchestration_start_run_v6')).toBe(true);
+  await expect(page.locator('.stage__title h2')).toHaveText('Revised brief');
+});
+
+test('shared member assignments remain visible and start from their original saved command', async ({ page }) => {
+  lab.options.approval = 'auto';
+  await seedRemotePipeline(lab, 'Shared reviewer', true);
+  lab.options.failNextStartReply = true;
+  const next = lab.nextViewer();
+  await page.goto(lab.launch());
+  const viewer = await next;
+  await page.getByRole('button', { name: 'Pipelines', exact: true }).click();
+  await page.getByRole('button', { name: 'Open', exact: true }).click();
+  await page.locator('.piui-picker').getByText('Shared reviewer', { exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'Pipeline name' })).toBeDisabled();
+  const firstNode = page.locator('.svelte-flow__node[aria-label="Сбор материалов"]');
+  await expect(firstNode).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(firstNode).toBeInViewport({ ratio: 1 });
+  await expect.poll(async () => (await firstNode.boundingBox())?.width ?? 0).toBeGreaterThan(200);
+  const assignments = page.locator('.assignments');
+  await assignments.getByText('Saved assignments · read-only').click();
+  await expect(assignments.locator('li')).toHaveText([
+    'Сбор материалов · Редактор (research)',
+    'Подготовка обзора · Редактор (research)',
+    'Проверка обзора · Редактор (review)',
+    'Messages · Редактор (research) → Редактор (review)',
+    'Observe · Редактор (review) → Редактор (research)',
+  ]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole('button', { name: 'Run', exact: true }).click();
+  await expect(page.locator('.stage__title h2')).toHaveText('Shared reviewer');
+  expect(viewer.requests.some(({ command }) => command === 'orchestration_save_graph_v6')).toBe(false);
+  const starts = viewer.requests.filter(({ command }) => command === 'orchestration_start_run_v6');
+  expect(starts).toHaveLength(1);
+  const { request: { runId: retryKey } } = starts[0]!.args as { request: { runId: string } };
+  const recordedId = 'nano-remote-v1-' + createHash('sha256').update(retryKey, 'utf8').digest('hex');
+  expect(viewer.requests.some(({ command, args }) => command === 'orchestration_get_run_v6'
+    && (args as { request: { runId: string } }).request.runId === recordedId)).toBe(true);
+});
+
+test('a native script graph remains inspectable with its start and editing controls restricted', async ({ page }) => {
+  lab.options.approval = 'auto';
+  await page.goto(lab.launch('light', 'en', OTHER_DEVICE_ID));
+  await page.getByRole('button', { name: 'Pipelines', exact: true }).click();
+  await page.getByRole('button', { name: 'Open', exact: true }).click();
+  await page.locator('.piui-picker').getByText('Release check', { exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'Pipeline name' })).toHaveValue('Release check');
+  await expect(page.getByRole('textbox', { name: 'Pipeline name' })).toBeDisabled();
+  await expect(page.getByText('Start this pipeline on the computer.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Run', exact: true })).toHaveCount(0);
+});
+
+test('a runs-only host shows run history without offering its unavailable editor', async ({ page }) => {
+  lab.options.approval = 'auto';
+  lab.options.commands = NANO_REMOTE_COMMANDS.filter((cmd) => !cmd.startsWith('orchestration_')
+    || ['orchestration_list_runs_v6', 'orchestration_get_run_v6', 'orchestration_run_usage_v6'].includes(cmd));
+  await page.goto(lab.launch());
+  await page.getByRole('button', { name: 'Runs', exact: true }).first().click();
+  await page.locator('.run-row').first().click();
+  await expect(page.locator('.stage__title h2')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open pipeline', exact: true })).toHaveCount(0);
+  await page.locator('.pipelines button.project').click();
+  await page.locator('.piui-picker').getByText('Personal chats', { exact: true }).click();
+  await expect(page.getByText('No runs yet', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open editor', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Pipelines', exact: true })).toHaveCount(0);
+});
+
+test('a chat-only desktop keeps chats available and explains where pipelines are', async ({ page }) => {
+  lab.options.approval = 'auto';
+  lab.options.commands = NANO_REMOTE_COMMANDS.filter((command) => !command.startsWith('orchestration_') && command !== 'board_command_v1' && command !== 'teammates_command_v1');
+  await page.goto(lab.launch());
+  await expect(page.getByText('This computer shares chats.', { exact: false })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Pipelines', exact: true })).toHaveCount(0);
+  await expect(page.getByText(CHAT, { exact: true }).first()).toBeVisible();
+});
+
 test('a desktop on other shell contracts is refused before anything mounts or any command is sent', async ({ page }) => {
   lab.options.approval = 'auto';
   lab.options.shell = { workspace: 99 };
@@ -220,4 +344,61 @@ test('drafts and the open chat belong to one device: A, then B, then A again', a
   const keys = Object.keys(await nativeStorage(page));
   expect(keys.length).toBeGreaterThan(0);
   expect(keys.filter((key) => !key.startsWith('nano-remote:'))).toEqual([]);
+});
+
+
+test('a touch-only phone opens project actions, board cards, teammates and schedules', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const touch = await page.context().newCDPSession(page);
+  await touch.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  const tap = async (item: Locator) => {
+    await expect(item).toBeVisible();
+    await item.scrollIntoViewIfNeeded();
+    const box = await item.boundingBox();
+    if (!box) throw new Error('Touch target has no bounds.');
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }] });
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  };
+  lab.options.approval = 'auto';
+  const next = lab.nextViewer();
+  await page.goto(lab.launch('light', 'ru'));
+  const viewer = await next;
+  expect(await page.evaluate(() => matchMedia('(hover: none)').matches && navigator.maxTouchPoints > 0)).toBe(true);
+  await tap(page.getByRole('button', { name: 'Открыть навигацию' }));
+  const project = page.locator('.project__row').filter({ has: page.getByTitle('video-studio', { exact: true }) });
+  await expect(project.locator('.project__actions')).toHaveCSS('opacity', '1');
+  await tap(project.getByRole('button', { name: 'Параметры: video-studio', exact: true }));
+  await tap(page.getByRole('menuitem', { name: 'Доска', exact: true }));
+  const board = page.locator('.board');
+  const card = board.getByText('Route every host call through transport.ts', { exact: true });
+  await expect(card).toBeVisible();
+  await expect(board.getByRole('button', { name: 'Новая карточка' })).toHaveCount(0);
+  await testInfo.attach('phone-board', { body: await page.screenshot({ animations: 'disabled' }), contentType: 'image/png' });
+
+  await tap(card);
+  const drawer = page.getByRole('complementary', { name: /Route every host call/ });
+  await expect(drawer.getByText('No component may import Tauri directly.', { exact: false })).toBeVisible();
+  await expect(drawer.getByRole('textbox')).toHaveCount(0);
+  await expect(drawer.getByRole('button', { name: /Отменить|Отвязать|Удалить карточку|Освободить/ })).toHaveCount(0);
+  await testInfo.attach('phone-card', { body: await page.screenshot({ animations: 'disabled' }), contentType: 'image/png' });
+  await tap(drawer.getByRole('button', { name: 'Закрыть', exact: true }));
+  await tap(board.getByRole('button', { name: 'Команда', exact: true }));
+  const team = page.locator('.team');
+  await tap(team.getByRole('button', { name: /@coder/ }).first());
+  await expect(team.getByRole('heading', { name: '@coder', exact: true })).toBeVisible();
+  await expect(team.getByRole('switch')).toHaveCount(0);
+  await expect(team.getByRole('button', { name: /Новый участник|Изменить|Удалить/ })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await testInfo.attach('phone-team', { body: await page.screenshot({ animations: 'disabled' }), contentType: 'image/png' });
+
+  await tap(page.getByRole('button', { name: 'Автоматизации', exact: true }).first());
+  const schedules = page.locator('.automations');
+  await expect(schedules.getByText('Weekly trailer refresh')).toBeVisible();
+  await expect(schedules.getByRole('switch')).toHaveCount(0);
+  await expect(schedules.getByRole('button', { name: /Новая автоматизация|Удалить|Приостановить|Возобновить/ })).toHaveCount(0);
+  await testInfo.attach('phone-schedules', { body: await page.screenshot({ animations: 'disabled' }), contentType: 'image/png' });
+  const types = (command: string) => viewer.requests.filter((r) => r.command === command)
+    .map((r) => (r.args as { command: { type: string } }).command.type);
+  expect(new Set(types('board_command_v1'))).toEqual(new Set(['get']));
+  expect(new Set(types('teammates_command_v1'))).toEqual(new Set(['list']));
 });

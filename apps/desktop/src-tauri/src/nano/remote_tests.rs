@@ -139,6 +139,75 @@ fn valid_arguments() -> Vec<(&'static str, Value)> {
         ("get_personal_timeline_page", json!({ "sessionId": "s1" })),
         ("search_sessions", json!({ "query": "needle" })),
         ("nano_account_status_v1", json!({})),
+        (
+            "orchestration_catalog_v6",
+            json!({"request":{"workspaceId":"w"}}),
+        ),
+        (
+            "orchestration_get_profile_v6",
+            json!({"request":{"workspaceId":"w","id":"item"}}),
+        ),
+        (
+            "orchestration_get_team_v6",
+            json!({"request":{"workspaceId":"w","id":"item"}}),
+        ),
+        (
+            "orchestration_get_pipeline_v6",
+            json!({"request":{"workspaceId":"w","id":"item"}}),
+        ),
+        (
+            "orchestration_get_launch_command_v6",
+            json!({"request":{"workspaceId":"w","id":"item"}}),
+        ),
+        (
+            "orchestration_save_graph_v6",
+            json!({"request":{"workspaceId":"w","profiles":[],"team":{"workspaceId":"w","value":{"id":"team","name":"T","members":[],"sendEdges":[],"observeEdges":[],"orchestratorMemberId":"agent"}},"pipeline":{"workspaceId":"w","value":{"id":"pipe","name":"P","steps":[]}},"command":{"workspaceId":"w","value":{"id":"cmd","name":"C","teamId":"team","pipelineId":"pipe"}}}}),
+        ),
+        (
+            "orchestration_list_runs_v6",
+            json!({"request":{"workspaceId":"w"}}),
+        ),
+        (
+            "orchestration_get_run_v6",
+            json!({"request":{"workspaceId":"w","runId":"run"}}),
+        ),
+        (
+            "orchestration_run_usage_v6",
+            json!({"request":{"workspaceId":"w","runId":"run"}}),
+        ),
+        (
+            "orchestration_start_run_v6",
+            json!({"request":{"workspaceId":"w","runId":"run","pipelineId":"pipe","teamId":"team","launchCommandId":"cmd"}}),
+        ),
+        (
+            "orchestration_cancel_run_v6",
+            json!({"request":{"workspaceId":"w","runId":"run","expectedRunRevision":1}}),
+        ),
+        (
+            "orchestration_cancel_task_v6",
+            json!({"request":{"workspaceId":"w","runId":"run","expectedRunRevision":1,"stepId":"step"}}),
+        ),
+        (
+            "orchestration_control_flow_v6",
+            json!({"request":{"workspaceId":"w","runId":"run","expectedRunRevision":1,"action":{"type":"pause"}}}),
+        ),
+        (
+            "orchestration_run_outputs_v1",
+            json!({"request":{"workspaceId":"w","runId":"run"}}),
+        ),
+        (
+            "orchestration_list_schedules_v7",
+            json!({"request":{"workspaceId":"w"}}),
+        ),
+        ("orchestration_automations_v7", json!({"request":{}})),
+        (
+            "board_command_v1",
+            json!({"command":{"workspaceId":"w","type":"get"}}),
+        ),
+        (
+            "teammates_command_v1",
+            json!({"command":{"workspaceId":"w","type":"list"}}),
+        ),
     ]
 }
 
@@ -1646,4 +1715,54 @@ fn switching_off_says_bye_to_everyone_then_closes_the_link() {
     );
     assert!(core.status().viewers.is_empty());
     assert!(core.status().pending.is_none());
+}
+
+#[test]
+fn old_chat_grant_requires_new_local_consent() {
+    let directory = test_dir("remote-scope");
+    let path = directory.join("nano-remote-v1.json");
+    let key = fixture_key();
+    let old = json!({"issuer":ISSUER,"deviceId":device().id,"enabled":true,
+        "browsers":[{"id":"br_old","label":LABEL,"fingerprint":"","key":encode_key(&key),"createdAt":"2026-11-15T10:00:00Z"}]});
+    std::fs::write(&path, serde_json::to_vec(&old).expect("old schema")).expect("seed store");
+    let clock = Clock::new();
+    let mut core = Core::new(
+        CoreConfig {
+            store_path: Some(path.clone()),
+            ..config(false)
+        },
+        signed_in(0),
+    );
+    core.start(clock.at(0));
+    core.link_event(LinkEvent::State(LinkState::Online), clock.at(0));
+    let effects = pair_up(&mut core, VIEWER, &key, clock.at(1));
+    assert!(shows_main(&effects));
+    assert_eq!(core.welcomed(), 0);
+    let (result, _) = decide(&mut core, Decision::Always, clock.at(2));
+    result.expect("approved workbench");
+    let store = RemoteStore::load(&path, ISSUER, &device().id);
+    assert!(
+        store
+            .find_by_key(&encode_key(&key))
+            .expect("remembered")
+            .workbench
+    );
+    assert_eq!(store.browsers().len(), 1);
+    std::fs::remove_dir_all(directory).expect("clean test");
+}
+
+#[test]
+fn board_and_teammates_admit_only_their_read_variants() {
+    for (command, args) in [
+        (
+            "board_command_v1",
+            json!({"command":{"type":"startRun","workspaceId":"w","cardId":"card"}}),
+        ),
+        (
+            "teammates_command_v1",
+            json!({"command":{"type":"setEnabled","workspaceId":"w","teammateId":"t","enabled":true}}),
+        ),
+    ] {
+        assert!(matches!(admit(command, &args), Err(Refusal::NotAllowed)));
+    }
 }

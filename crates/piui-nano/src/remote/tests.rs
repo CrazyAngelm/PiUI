@@ -591,6 +591,7 @@ fn browser(seed: u8) -> StoredBrowser {
         key: encode_key(&key),
         created_at: "2026-11-15T09:00:00Z".to_owned(),
         last_used_at: None,
+        workbench: true,
     }
 }
 

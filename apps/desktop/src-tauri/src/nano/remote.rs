@@ -118,6 +118,11 @@ pub(crate) struct RemoteHost {
 }
 
 impl RemoteHost {
+    #[cfg(all(windows, debug_assertions, feature = "native-remote-workbench-test"))]
+    pub(super) fn subscribe_for_tests(&self) -> watch::Receiver<NanoRemoteStatusV1> {
+        self.status.clone()
+    }
+
     /// The last published status; never touches the network.
     pub(crate) fn status(&self) -> NanoRemoteStatusV1 {
         self.status.borrow().clone()
@@ -454,7 +459,12 @@ fn register_taps(
 /// Creates and manages the remote-access host and starts its actor. Nothing
 /// here contacts a server: the actor opens the link only when it is wanted,
 /// and never in safe mode.
-pub(crate) fn install(app: AppHandle, app_data_dir: &Path, nano: Arc<NanoHost>, safe_mode: bool) {
+pub(crate) fn install(
+    app: AppHandle,
+    app_data_dir: &Path,
+    nano: Arc<NanoHost>,
+    safe_mode: bool,
+) -> tauri::async_runtime::JoinHandle<()> {
     // Subscribe before reading the status: a change in between is not missed.
     let started = nano.account().ok().map(|account| {
         let account = account.clone();
@@ -515,5 +525,5 @@ pub(crate) fn install(app: AppHandle, app_data_dir: &Path, nano: Arc<NanoHost>, 
         welcomed,
         overflow,
     };
-    tauri::async_runtime::spawn(actor.run());
+    tauri::async_runtime::spawn(actor.run())
 }

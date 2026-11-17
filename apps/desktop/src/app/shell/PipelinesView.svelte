@@ -5,6 +5,7 @@
   import { t } from '../../features/locale/language';
   import { orchestrationHost, type OrchestrationRunV6 } from '../../host-api/orchestrationClient';
   import { Button, EmptyState, Menu, Picker, Skeleton, type PickerItem } from '../../lib/ui';
+  import { remoteMode, pipelineSectionAvailable } from '../nano/remoteMode';
   import type { PipelineSection } from '../workspaceStore.svelte';
   import type { AgentGraph } from '../../features/orchestration/agentGraph';
   import { pendingDrafts, type DraftSource } from '../pipelines/pendingDraft.svelte';
@@ -40,7 +41,7 @@
   );
   const librarySection = $derived(section === 'agents' || section === 'teams' || section === 'pipelines');
   // The Library menu belongs to the editor and the library lists; Runs and Automations have no use for it.
-  const showLibrary = $derived(section !== 'runs' && section !== 'schedules');
+  const showLibrary = $derived(section !== 'runs' && section !== 'schedules' && ['agents', 'teams', 'pipelines'].some((item) => pipelineSectionAvailable(item as PipelineSection)));
 
   // "Edit pipeline" from a run opens that run's saved pipeline in the editor.
   let editCommand = $state<string | undefined>();
@@ -89,6 +90,8 @@
     store.guard(() => {
       store.pipelineDirty = false;
       store.selectWorkspace(id);
+      // A run belongs to its project. Opening another project's history starts at its own list.
+      if (section === 'runs' && runId) store.navigate({ name: 'pipelines', section: 'runs' });
       startedRun = undefined;
       epoch += 1;
     });
@@ -125,9 +128,9 @@
       <Menu
         align="end"
         items={[
-          { label: $t('Agents'), checked: section === 'agents', onSelect: () => setSection('agents') },
-          { label: $t('Teams'), checked: section === 'teams', onSelect: () => setSection('teams') },
-          { label: $t('Step lists'), checked: section === 'pipelines', onSelect: () => setSection('pipelines') },
+          ...(['agents', 'teams', 'pipelines'] as const).filter(pipelineSectionAvailable).map((item) => ({
+            label: $t({ agents: 'Agents', teams: 'Teams', pipelines: 'Step lists' }[item]), checked: section === item, onSelect: () => setSection(item),
+          })),
         ]}
       >
         {#snippet trigger(props)}
@@ -145,7 +148,7 @@
     {#if !workspace}
       <EmptyState title={$t('Choose a project')} description={$t('Pipelines belong to a project folder.')} />
     {:else if !workspace.personal && workspace.trust !== 'trusted'}
-      <EmptyState title={$t('This folder is restricted')} description={$t('Trust the folder from the sidebar to build and run pipelines in it.')} />
+      <EmptyState title={$t('This folder is restricted')} description={$t(remoteMode ? 'Trust this folder on the computer to open its pipelines.' : 'Trust the folder from the sidebar to build and run pipelines in it.')} />
     {:else if section === 'runs'}
       {#await runsView}
         <div class="loading"><Skeleton lines={5} /></div>
@@ -159,7 +162,7 @@
             initialRun={startedRun?.id === runId ? startedRun : undefined}
             onOpenRun={(id) => store.navigate({ name: 'pipelines', section: 'runs', runId: id })}
             onEdit={editPipeline}
-            onDebug={debugRun}
+            onDebug={remoteMode ? undefined : debugRun}
           />
         {/key}
       {:catch}
@@ -208,7 +211,7 @@
             modelsFor={(harness) => store.modelsFor(harness)}
             workspaceId={workspace.id}
             {section}
-            safeMode={store.safeMode}
+            safeMode={store.safeMode || remoteMode}
             initialRun={startedRun}
             onSectionChange={(next) => setSection(next)}
             onOpenSession={(sessionId) => void store.openSession(sessionId)}
@@ -258,6 +261,9 @@
     color: var(--piui-text-muted);
     font-weight: var(--piui-weight-regular);
   }
+  .project { min-width: 0; }
+  .project span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .project :global(svg), .library { flex-shrink: 0; }
   .project:hover,
   .library:hover,
   .library--active {

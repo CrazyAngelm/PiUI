@@ -39,24 +39,37 @@ Nano server and has exactly one listener, the loopback relay (ADR-048).
    shell with its transport replaced by a WebSocket transport; Nano Web shows it
    in a same-origin iframe. Whatever the shell cannot do remotely is hidden
    there and refused by the desktop.
-5. **An allowlist, called directly.** A welcomed browser reaches 16 host
-   commands and receives 5 event channels (`contracts/nano-remote-v1.ts`,
-   mirrored in `nano/remote_dispatch.rs` and checked against
-   `contracts/fixtures/nano-remote-v1.json`): the project and chat lists, native
-   history, new chat, prompt, steer, follow-up, cancel, close, rename,
-   approvals, model and reasoning picks, session modes and text-only queued
-   messages. Settings, project add, trust and removal, plugins, pipelines, runs,
-   automations, review, worktrees, attachments and file mentions, dictation,
-   avatars, harness sign-in, Nano account actions and every `nano_remote_*`
-   command are refused. The harness registry is list-only. The dispatcher calls
-   the same command functions as the IPC and replaces `guarded_commands` (a
-   guard for the WebView's origin) with this stricter allowlist.
-6. **Events by a tap.** The host listens to the five channels with
-   `listen_any` and forwards each payload to every welcomed browser. No emitter
-   changes.
-7. **A paired browser is the keyboard, for chats.** It may answer approvals. The
-   desktop shows who is connected in the shell and lets the person disconnect
-   any browser at once; switching the toggle off sends `bye` and closes the link.
+5. **Advertised workspace commands.** The host lists its admitted commands and
+   event channels in `welcome`. Older hosts advertise the chat surface. The web
+   shell checks the list before showing workspace actions. The authoritative
+   lists and wire fixture live in `contracts/nano-remote-v1.ts` and
+   `contracts/fixtures/nano-remote-v1.json`. Dispatch parses typed requests and
+   calls the same local services that own the selected project.
+6. **Workbench scope requires local consent.** An entry created by a chat-only
+   desktop lacks the workbench grant. After proving possession of the browser
+   key the owner sees the pairing prompt again. Allow once grants this session.
+   Always allow replaces that key's grant atomically. Selecting Deny grants
+   nothing. No account, shell, filesystem or plugin administration enters the
+   allowlist.
+7. **Graph and run authority.** A paired browser can inspect saved pipelines,
+   teams, agents, launches, run state and outputs, the board, teammates and
+   schedules. It can edit agent graphs atomically in trusted projects and run
+   matching saved launch commands. The host checks the definition that is
+   actually committed or started. Writing or running a graph requires read-only
+   agent profiles without enabled resource grants, allow tool rules, network
+   access or spawn grants, and agent or LLM steps. Script, plugin and nested
+   pipeline execution remains local. Editing a command targeted or observed by
+   an enabled automation, used by a saved sub-pipeline step, or assigned to a
+   board teammate requires the desktop. A command with an enabled run-finished
+   automation can only be started on the computer. Run cancellations
+   are revision-checked. The host assigns remote runs the reserved ID
+   `nano-remote-v1-` plus the lowercase SHA-256 hex digest of the request ID
+   (UTF-8). A retried request resolves to the same ID. This preserves the
+   persisted v6 journal format. The `pairedBrowser` field is a projection in
+   remote responses.
+   Only these runs accept remote flow control and cancellation, receive no
+   session board tool and cannot fire run-finished automations even if a rule
+   is enabled later. The host forwards the negotiated event channels.
 
 ## Alternatives rejected
 
@@ -94,7 +107,7 @@ Nano server and has exactly one listener, the loopback relay (ADR-048).
 - Presence is in the memory of one server process. A server restart closes every
   link; the desktop reconnects with backoff (1 s to 60 s).
 - Follow-ups: frame encryption between browser and desktop, attachments,
-  pipelines and runs, more channels and commands (advertised in `welcome`, so
+  more channels and commands (advertised in `welcome`, so
   additive within `nano-remote.v1`).
 
 See [NANO_DESKTOP.md](../NANO_DESKTOP.md) section 15 and

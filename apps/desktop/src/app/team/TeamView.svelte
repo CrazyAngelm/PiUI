@@ -13,6 +13,7 @@
   import { useWorkspace } from '../shell/context';
   import { errorMessage } from '../workspaceStore.svelte';
   import { chatPipelines } from '../chatPipelines/chatPipelines.svelte';
+  import { remoteMode, pipelineSectionAvailable } from '../nano/remoteMode';
   import { boards } from '../board/boardStore.svelte';
   import { boardIntents } from '../board/intents.svelte';
   import { byPriority, isClosed, STATUS_LABEL } from '../board/boardModel';
@@ -63,7 +64,7 @@
     if (board.board?.revision !== undefined) untrack(() => void teammates.load(workspaceId));
   });
   $effect(() => {
-    if (boardIntents.newTeammate === workspaceId && untrack(() => boardIntents.takeNewTeammate(workspaceId))) dialog = { teammate: undefined };
+    if (!remoteMode && boardIntents.newTeammate === workspaceId && untrack(() => boardIntents.takeNewTeammate(workspaceId))) dialog = { teammate: undefined };
   });
 
   function select(teammate: TeammateV1): void {
@@ -139,15 +140,18 @@
     <div class="head__title">
       <UsersRound size={18} aria-hidden="true" />
       <h1 id="team-title">{$t('Team')}</h1>
+      {#if remoteMode}<Badge>{$t('Read-only')}</Badge>{/if}
       {#if workspace}<span class="head__project">{workspace.name}</span>{/if}
     </div>
     <div class="head__tools">
       <Button size="sm" variant="ghost" onclick={() => store.navigate({ name: 'board', workspaceId })}>
         {#snippet leading()}<KanbanSquare size={14} />{/snippet}{$t('Board')}
       </Button>
-      <Button size="sm" variant="primary" onclick={() => (dialog = { teammate: undefined })} disabled={store.safeMode}>
-        {#snippet leading()}<UserPlus size={14} />{/snippet}{$t('New teammate')}
-      </Button>
+      {#if !remoteMode}
+        <Button size="sm" variant="primary" onclick={() => (dialog = { teammate: undefined })} disabled={store.safeMode}>
+          {#snippet leading()}<UserPlus size={14} />{/snippet}{$t('New teammate')}
+        </Button>
+      {/if}
     </div>
   </header>
 
@@ -162,10 +166,12 @@
       <EmptyState
         icon={UsersRound}
         title={$t('No teammates yet')}
-        description={$t('A teammate is an @handle for one agent or one saved pipeline. Assign it cards, or mention it in a comment.')}
+        description={remoteMode ? $t('Add teammates on your computer to see them here.') : $t('A teammate is an @handle for one agent or one saved pipeline. Assign it cards, or mention it in a comment.')}
       >
         {#snippet actions()}
-          <Button variant="primary" onclick={() => (dialog = { teammate: undefined })} disabled={store.safeMode}>{$t('New teammate')}</Button>
+          {#if !remoteMode}
+            <Button variant="primary" onclick={() => (dialog = { teammate: undefined })} disabled={store.safeMode}>{$t('New teammate')}</Button>
+          {/if}
         {/snippet}
       </EmptyState>
     </div>
@@ -186,7 +192,9 @@
                 {statusLabel(status)}
               </span>
             </button>
-            <Switch label={$t('@{0} enabled', [teammate.handle])} hideLabel checked={teammate.enabled} disabled={store.safeMode} onCheckedChange={(value) => void toggle(teammate, value)} />
+            {#if !remoteMode}
+              <Switch label={$t('@{0} enabled', [teammate.handle])} hideLabel checked={teammate.enabled} disabled={store.safeMode} onCheckedChange={(value) => void toggle(teammate, value)} />
+            {/if}
           </li>
         {/each}
       </ul>
@@ -202,12 +210,14 @@
             <Badge tone={selected.kind.type === 'simple' ? 'accent' : 'info'}>{selected.kind.type === 'simple' ? $t('One agent') : $t('Pipeline')}</Badge>
             {#if !selected.enabled}<Badge tone="warning">{$t('Turned off')}</Badge>{/if}
             <span class="spacer"></span>
-            <Button size="sm" onclick={() => (dialog = { teammate: selected })} disabled={store.safeMode}>
-              {#snippet leading()}<Pencil size={13} />{/snippet}{$t('Edit')}
-            </Button>
-            <Button size="sm" variant="ghost" onclick={() => (deleteTarget = selected)} disabled={store.safeMode}>
-              {#snippet leading()}<Trash size={13} />{/snippet}{$t('Delete')}
-            </Button>
+            {#if !remoteMode}
+              <Button size="sm" onclick={() => (dialog = { teammate: selected })} disabled={store.safeMode}>
+                {#snippet leading()}<Pencil size={13} />{/snippet}{$t('Edit')}
+              </Button>
+              <Button size="sm" variant="ghost" onclick={() => (deleteTarget = selected)} disabled={store.safeMode}>
+                {#snippet leading()}<Trash size={13} />{/snippet}{$t('Delete')}
+              </Button>
+            {/if}
           </header>
 
           {#if selectedStatus?.notAssignableReason}
@@ -227,8 +237,14 @@
           </dl>
 
           <h3>{$t('Assigned cards')} <span class="count">{openAssigned.length}</span></h3>
-          {#if assigned.length === 0}
-            <p class="muted">{board.enabled ? $t('Nothing assigned. Assign a card from the board.') : $t('The board of this project is off.')}</p>
+          {#if board.loading && !board.board}
+            <Skeleton lines={1} />
+          {:else if board.error && !board.board}
+            <p class="muted">{$t('The board could not be loaded')} <Button size="sm" variant="ghost" onclick={() => void board.load()}>{$t('Retry')}</Button></p>
+          {:else if !board.enabled}
+            <p class="muted">{$t('The board of this project is off.')}</p>
+          {:else if assigned.length === 0}
+            <p class="muted">{remoteMode ? $t('No assigned cards') : $t('Nothing assigned. Assign a card from the board.')}</p>
           {:else}
             <ul class="cards">
               {#each assigned as card (card.id)}
@@ -244,6 +260,7 @@
             </ul>
           {/if}
 
+          {#if board.board}
           <h3>{$t('Runs')} <span class="count">{runLinks.length}</span></h3>
           {#if runLinks.length === 0}
             <p class="muted">{$t('No board runs yet.')}</p>
@@ -253,15 +270,20 @@
                 {#if entry.link.kind === 'run'}
                   {@const runId = entry.link.runId}
                   <li>
+                    {#if pipelineSectionAvailable('runs')}
                     <button type="button" class="cards__item" onclick={() => store.openRun(workspaceId, runId)}>
                       <Route size={13} aria-hidden="true" />
                       <span class="cards__title">{$t('Run {0} for #{1}', [runId.slice(0, 8), entry.card.number])}</span>
                       {#if selectedStatus?.liveRunIds.includes(runId)}<StatusDot status="running" label={$t('Running')} />{/if}
                     </button>
+                    {:else}
+                      <span class="cards__item">{$t('Run {0} for #{1}', [runId.slice(0, 8), entry.card.number])}</span>
+                    {/if}
                   </li>
                 {/if}
               {/each}
             </ul>
+          {/if}
           {/if}
         </article>
       {/if}
@@ -538,5 +560,12 @@
     margin: 0;
     color: var(--piui-text-muted);
     line-height: var(--piui-leading-normal);
+  }
+  @media (max-width: 600px) {
+    .head { padding: var(--piui-space-3); }
+    .head__title, .detail, .detail__title, .facts dd { min-width: 0; overflow-wrap: anywhere; }
+    .layout { padding: 0 var(--piui-space-3) var(--piui-space-3); }
+    .facts { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--piui-space-2); }
+    .cards__item { height: auto; min-height: 44px; }
   }
 </style>

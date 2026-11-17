@@ -2,6 +2,7 @@
   import '@xyflow/svelte/dist/style.css';
   import './nodeCard.css';
   import { Background, BackgroundVariant, MarkerType, MiniMap, Panel, SvelteFlow, type Connection } from '@xyflow/svelte';
+  import { MediaQuery } from 'svelte/reactivity';
   import { untrack } from 'svelte';
   import Minus from '@lucide/svelte/icons/minus';
   import Plus from '@lucide/svelte/icons/plus';
@@ -30,6 +31,7 @@
   const INPUT_ISSUES: ReadonlySet<string> = new Set(
     [RUN_INPUT_ISSUES.count, RUN_INPUT_ISSUES.names, RUN_INPUT_ISSUES.labels, RUN_INPUT_ISSUES.options, RUN_INPUT_ISSUES.defaults],
   );
+  import { remoteMode } from '../../nano/remoteMode';
   import FlowBridge, { type FlowApi } from './FlowBridge.svelte';
   import { connectionLabel } from './connectionLabel';
   import { outputConnections } from './outputConnections';
@@ -47,6 +49,8 @@
   type FlowNode = AgentFlowNode | RouterFlowNode | StartFlowNode | OutputFlowNode;
   const nodeTypes = { agent: AgentNodeCard, router: RouterNodeCard, start: StartNodeCard, end: OutputNodeCard };
   /** Start and Output: blocks of every pipeline with steps; never steps, never deleted. */
+  const phone = new MediaQuery('(max-width: 640px)');
+  const firstVisibleStep = $derived(remoteMode && phone.current ? editor.graph.nodes[0]?.id : undefined);
   const blocks = $derived(presentationNodeIds(editor.graph.nodes.map(node => node.id)));
   const BLOCK_IDS: ReadonlySet<string> = $derived(new Set([blocks.start, blocks.output]));
   const edgeTypes = { piui: PiuiEdge };
@@ -354,18 +358,18 @@
     { value: 'result' as const, label: $t('Result'), title: $t('The next agent starts after this one and receives its result') },
     { value: 'send' as const, label: $t('Messages'), title: $t('The agent may send messages to the other one') },
     { value: 'observe' as const, label: $t('Observe'), title: $t('The agent may read the other one’s progress and wait for its result') },
-    { value: 'spawn' as const, label: $t('Delegate'), title: $t('The agent may start new instances of the other one') },
+    ...(!remoteMode ? [{ value: 'spawn' as const, label: $t('Delegate'), title: $t('The agent may start new instances of the other one') }] : []),
   ]);
 </script>
 
-<div class="canvas" bind:this={container}>
+<div class="canvas" class:canvas--remote={remoteMode} bind:this={container}>
   <SvelteFlow
     bind:nodes
     bind:edges
     {nodeTypes}
     {edgeTypes}
     {colorMode}
-    fitView
+    fitView={!remoteMode || !phone.current}
     fitViewOptions={{ padding: 0.25, maxZoom: 1.1 }}
     minZoom={0.2}
     maxZoom={1.8}
@@ -427,6 +431,7 @@
   >
     <FlowBridge
       {container}
+      {firstVisibleStep}
       onready={(next) => {
         api = next;
         onready(next);
@@ -445,7 +450,13 @@
     <Panel position="top-left">
       <div class="floating connect" role="group" aria-label={$t('New connections mean')}>
         <span class="floating__label">{$t('Connect as')}</span>
-        <Segmented size="sm" label={$t('New connections mean')} bind:value={editor.connectKind} options={kindOptions} />
+        {#if remoteMode}
+          <select class="connection-kind" aria-label={$t('New connections mean')} bind:value={editor.connectKind} disabled={editor.readOnly}>
+            {#each kindOptions as choice (choice.value)}<option value={choice.value}>{choice.label}</option>{/each}
+          </select>
+        {:else}
+          <Segmented size="sm" label={$t('New connections mean')} bind:value={editor.connectKind} options={kindOptions} />
+        {/if}
         <IconButton
           size="sm"
           label={editor.showCollaboration ? $t('Hide collaboration links') : $t('Show collaboration links')}
@@ -479,6 +490,11 @@
 </div>
 
 <style>
+  @media (max-width: 760px) {
+    .canvas--remote :global(.svelte-flow__minimap), .canvas--remote .floating__label { display: none; }
+    .canvas--remote .connect { flex-wrap: wrap; }
+  }
+  .connection-kind { border:0; border-radius:var(--piui-radius-sm); background:var(--piui-bg-raised); color:var(--piui-text); padding:var(--piui-space-1); }
   .canvas {
     position: relative;
     width: 100%;

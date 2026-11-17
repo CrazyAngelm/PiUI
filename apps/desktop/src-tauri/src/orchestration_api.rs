@@ -5,6 +5,11 @@
 //! authenticated agent sender or report native completion. Those operations
 //! are available only on `OrchestrationApiState` for trusted host integration.
 
+mod remote;
+pub(crate) use remote::{
+    WorkbenchCaller, check_existing_run, paired_browser_run, save_remote_graph,
+};
+
 use crate::api::verified_project_directory;
 use crate::orchestration_schedule::{
     EventTrigger, MissedRunPolicy, OverlapPolicy, ScheduleDefinition, ScheduleOccurrence,
@@ -384,14 +389,14 @@ impl OrchestrationApiState {
 
     #[cfg(any(test, feature = "native-prime-scheduler-test"))]
     pub fn create_run(&self, request: StartRunRequest) -> Result<Run, OrchestrationApiError> {
-        self.create_run_with_trigger(request, None)
+        self.create_scoped_run(request, None, WorkbenchCaller::Desktop)
     }
 
-    /// A start requested by a person, optionally from a chat (v7.2).
-    pub fn create_run_with_trigger(
+    pub(crate) fn create_scoped_run(
         &self,
         request: StartRunRequest,
         trigger: Option<StartRunTrigger>,
+        caller: WorkbenchCaller,
     ) -> Result<Run, OrchestrationApiError> {
         validate_workspace_id(&request.workspace_id)?;
         let trigger = trigger.map(StartRunTrigger::into_run_trigger);
@@ -402,7 +407,7 @@ impl OrchestrationApiState {
             return Err(OrchestrationApiError::invalid());
         }
         self.store
-            .transact(|workspaces| create_run_in(workspaces, request, trigger))
+            .transact(|workspaces| create_run_for(workspaces, request, trigger, caller))
             .map_err(Into::into)
     }
 
@@ -2965,8 +2970,40 @@ pub async fn orchestration_start_run_v6(
     app: AppHandle,
     request: StartRunCommand,
 ) -> Result<Run, OrchestrationApiError> {
+    start_scoped_run(
+        state,
+        scheduler,
+        host_state,
+        app,
+        request,
+        WorkbenchCaller::Desktop,
+    )
+    .await
+}
+
+pub(crate) async fn start_scoped_run(
+    state: State<'_, OrchestrationApiState>,
+    scheduler: State<'_, OrchestrationScheduler>,
+    host_state: State<'_, HostState>,
+    app: AppHandle,
+    request: StartRunCommand,
+    caller: WorkbenchCaller,
+) -> Result<Run, OrchestrationApiError> {
     let (request, trigger) = request.split();
     let operation = host_state.live_runtime_operation_gate.lock().await;
+    if caller == WorkbenchCaller::PairedBrowser
+        && let Some(StartRunTrigger::Chat {
+            session_id: Some(session_id),
+        }) = &trigger
+        && host_state
+            .workspace
+            .session_workspace_id(session_id)
+            .ok()
+            .as_deref()
+            != Some(request.workspace_id.as_str())
+    {
+        return Err(OrchestrationApiError::denied());
+    }
     validate_live_workspace_scope(&host_state, &request.workspace_id)?;
     // A plugin node whose plugin is missing, disabled, unverified or no
     // longer declares it refuses the start before any step runs (v6.5).
@@ -2980,8 +3017,8 @@ pub async fn orchestration_start_run_v6(
         }
     }
     let workspace_id = request.workspace_id.clone();
-    let run_id = request.run_id.clone();
-    let created = state.create_run_with_trigger(request, trigger)?;
+    let created = state.create_scoped_run(request, trigger, caller)?;
+    let run_id = created.id().to_owned();
     emit_run_changed(&app, &workspace_id, &created);
     drop(operation);
     scheduler
@@ -3016,6 +3053,28 @@ pub async fn orchestration_cancel_run_v6(
     Ok(run)
 }
 
+pub(crate) async fn cancel_remote_run(
+    scheduler: State<'_, OrchestrationScheduler>,
+    host_state: State<'_, HostState>,
+    app: AppHandle,
+    request: RunMutationRequest,
+) -> Result<Run, OrchestrationApiError> {
+    validate_live_workspace_scope(&host_state, &request.workspace_id)?;
+    let run = scheduler
+        .cancel_scope(
+            &app,
+            &request.workspace_id,
+            &request.run_id,
+            request.expected_run_revision,
+            None,
+            WorkbenchCaller::PairedBrowser,
+        )
+        .await
+        .map_err(scheduler_error)?;
+    emit_run_changed(&app, &request.workspace_id, &run);
+    Ok(run)
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FlowControlRequest {
@@ -3041,17 +3100,51 @@ pub async fn orchestration_cancel_task_v6(
     app: AppHandle,
     request: CancelTaskRequest,
 ) -> Result<Run, OrchestrationApiError> {
+    cancel_scoped_task(
+        scheduler,
+        host_state,
+        app,
+        request,
+        WorkbenchCaller::Desktop,
+    )
+    .await
+}
+
+pub(crate) async fn cancel_scoped_task(
+    scheduler: State<'_, OrchestrationScheduler>,
+    host_state: State<'_, HostState>,
+    app: AppHandle,
+    request: CancelTaskRequest,
+    caller: WorkbenchCaller,
+) -> Result<Run, OrchestrationApiError> {
     validate_workspace_scope(&host_state, &request.workspace_id)?;
-    let run = scheduler
-        .cancel_task(
-            &app,
-            &request.workspace_id,
-            &request.run_id,
-            request.expected_run_revision,
-            &request.step_id,
-        )
-        .await
-        .map_err(scheduler_error)?;
+    let run = match caller {
+        WorkbenchCaller::Desktop => {
+            scheduler
+                .cancel_task(
+                    &app,
+                    &request.workspace_id,
+                    &request.run_id,
+                    request.expected_run_revision,
+                    &request.step_id,
+                )
+                .await
+        }
+        WorkbenchCaller::PairedBrowser => {
+            validate_live_workspace_scope(&host_state, &request.workspace_id)?;
+            scheduler
+                .cancel_scope(
+                    &app,
+                    &request.workspace_id,
+                    &request.run_id,
+                    request.expected_run_revision,
+                    Some(&request.step_id),
+                    WorkbenchCaller::PairedBrowser,
+                )
+                .await
+        }
+    }
+    .map_err(scheduler_error)?;
     emit_run_changed(&app, &request.workspace_id, &run);
     if run.status() == piui_orchestration::RunStatus::Running && !run.paused() {
         scheduler
@@ -3070,8 +3163,30 @@ pub async fn orchestration_control_flow_v6(
     app: AppHandle,
     request: FlowControlRequest,
 ) -> Result<Run, OrchestrationApiError> {
+    control_scoped_flow(
+        state,
+        scheduler,
+        host_state,
+        app,
+        request,
+        WorkbenchCaller::Desktop,
+    )
+    .await
+}
+
+pub(crate) async fn control_scoped_flow(
+    state: State<'_, OrchestrationApiState>,
+    scheduler: State<'_, OrchestrationScheduler>,
+    host_state: State<'_, HostState>,
+    app: AppHandle,
+    request: FlowControlRequest,
+    caller: WorkbenchCaller,
+) -> Result<Run, OrchestrationApiError> {
     let operation = host_state.live_runtime_operation_gate.lock().await;
     validate_live_workspace_scope(&host_state, &request.workspace_id)?;
+    if caller == WorkbenchCaller::PairedBrowser {
+        remote::check_existing_run(&state, &request.workspace_id, &request.run_id)?;
+    }
     let workspace_id = request.workspace_id.clone();
     let run_id = request.run_id.clone();
     let run = state.control_flow(request)?;
@@ -3217,6 +3332,16 @@ fn create_run_in(
     request: StartRunRequest,
     trigger: Option<RunTrigger>,
 ) -> Result<Run, StoreError> {
+    create_run_for(workspaces, request, trigger, WorkbenchCaller::Desktop)
+}
+
+fn create_run_for(
+    workspaces: &mut [WorkspaceOrchestration],
+    mut request: StartRunRequest,
+    trigger: Option<RunTrigger>,
+    caller: WorkbenchCaller,
+) -> Result<Run, StoreError> {
+    request.run_id = remote::assign_run_id(request.run_id, caller)?;
     let workspace = workspaces
         .iter_mut()
         .find(|workspace| workspace.workspace_id == request.workspace_id)
@@ -3268,6 +3393,9 @@ fn create_run_in(
                 CoordinatorError::NoPinnedData => StoreError::Conflict,
                 _ => StoreError::Invalid,
             })?;
+    if caller == WorkbenchCaller::PairedBrowser {
+        remote::check_remote_run(workspace, &run)?;
+    }
     workspace.runs.push(run.clone());
     Ok(run)
 }
@@ -3957,6 +4085,193 @@ mod graph_tests {
             "pipeline":{"workspaceId":"workspace","value":{"id":"pipeline","name":"System","steps":[{"id":"node","name":"Task","assignedMemberId":"node","instructions":"Work","dependencyStepIds":[]}]}},
             "command":{"workspaceId":"workspace","value":{"id":"command","name":"System","teamId":"team","pipelineId":"pipeline"}}
         })).unwrap()
+    }
+
+    #[test]
+    fn paired_browser_graphs_require_read_only_agents_and_inert_executors() {
+        let mut graph = request();
+        assert!(remote::check_remote_save(&[], &graph).is_ok());
+        graph.profiles[0].value.permission_mode = piui_orchestration::PermissionMode::FullAccess;
+        assert!(matches!(
+            remote::check_remote_save(&[], &graph),
+            Err(StoreError::Denied)
+        ));
+        graph.profiles[0].value.permission_mode = piui_orchestration::PermissionMode::ReadOnly;
+        graph.pipeline.value.steps[0].executor = Some(piui_orchestration::StepExecutor::Pipeline {
+            launch_command_id: "another".into(),
+            inputs: BTreeMap::new(),
+        });
+        assert!(matches!(
+            remote::check_remote_save(&[], &graph),
+            Err(StoreError::Denied)
+        ));
+    }
+
+    #[test]
+    fn paired_browser_preserves_enabled_automation_targets_sources_and_pins() {
+        use crate::orchestration_schedule::{FinishedOutcome, IntervalUnit, ScheduleTrigger};
+        let root =
+            std::env::temp_dir().join(format!("piui-remote-schedule-{}", uuid::Uuid::new_v4()));
+        let state = OrchestrationApiState::open(&root).unwrap();
+        let mut graph = request();
+        save_graph(&state, graph.clone()).unwrap();
+        let mut other = graph.clone();
+        other.command.value.id = "other".into();
+        other.command.value.team_id = "other-team".into();
+        other.command.value.pipeline_id = "other-pipeline".into();
+        other.team.value.id = "other-team".into();
+        other.pipeline.value.id = "other-pipeline".into();
+        other.team.value.members[0].profile_id = "other-agent".into();
+        other.profiles[0].value.id = "other-agent".into();
+        save_graph(&state, other).unwrap();
+        for revision in [
+            &mut graph.profiles[0].expected_revision,
+            &mut graph.team.expected_revision,
+            &mut graph.pipeline.expected_revision,
+            &mut graph.command.expected_revision,
+        ] {
+            *revision = Some(0);
+        }
+        graph.pipeline.value.steps[0].instructions = "New work".into();
+        let triggers = [
+            (
+                "command",
+                ScheduleTrigger::Interval {
+                    every: 1,
+                    unit: IntervalUnit::Hours,
+                    anchor_at: Utc::now(),
+                    time_zone: "UTC".into(),
+                },
+            ),
+            (
+                "command",
+                ScheduleTrigger::Event {
+                    event: EventTrigger::FilesChanged {
+                        include: vec!["*.md".into()],
+                        exclude: vec![],
+                        debounce_seconds: 3,
+                    },
+                },
+            ),
+            (
+                "other",
+                ScheduleTrigger::Event {
+                    event: EventTrigger::RunFinished {
+                        launch_command_id: "command".into(),
+                        outcomes: vec![FinishedOutcome::Succeeded],
+                    },
+                },
+            ),
+        ];
+        for (index, (target, trigger)) in triggers.into_iter().enumerate() {
+            let id = format!("rule-{index}");
+            let saved = save_schedule(
+                &state,
+                SaveScheduleRequest {
+                    workspace_id: "workspace".into(),
+                    expected_revision: None,
+                    value: ScheduleDefinition {
+                        id: id.clone(),
+                        name: id.clone(),
+                        launch_command_id: target.into(),
+                        trigger,
+                        missed_run_policy: MissedRunPolicy::Skip,
+                        overlap_policy: OverlapPolicy::Skip,
+                        inputs: BTreeMap::new(),
+                    },
+                },
+            )
+            .unwrap();
+            let set = |enabled, revision| {
+                set_schedule_enabled(
+                    &state,
+                    SetScheduleEnabledRequest {
+                        workspace_id: "workspace".into(),
+                        id: id.clone(),
+                        expected_revision: revision,
+                        enabled,
+                    },
+                )
+                .unwrap()
+            };
+            let enabled = set(true, saved.revision);
+            let before = state.snapshot().unwrap();
+            assert_eq!(
+                remote::save_browser_graph(&state, graph.clone())
+                    .unwrap_err()
+                    .code,
+                "denied"
+            );
+            assert_eq!(
+                serde_json::to_value(state.snapshot().unwrap().workspace("workspace")).unwrap(),
+                serde_json::to_value(before.workspace("workspace")).unwrap()
+            );
+            set(false, enabled.revision);
+        }
+        remote::save_browser_graph(&state, graph).unwrap();
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn paired_browser_start_checks_the_saved_snapshot_in_the_creation_transaction() {
+        let directory =
+            std::env::temp_dir().join(format!("piui-remote-run-{}", uuid::Uuid::new_v4()));
+        let state = OrchestrationApiState::open(&directory).unwrap();
+        let mut graph = request();
+        save_graph(&state, graph.clone()).unwrap();
+        let start = |run_id: &str| StartRunRequest {
+            workspace_id: "workspace".into(),
+            run_id: run_id.into(),
+            team_id: "team".into(),
+            pipeline_id: "pipeline".into(),
+            launch_command_id: Some("command".into()),
+            inputs: BTreeMap::new(),
+            use_pinned_data: false,
+        };
+        let created = state
+            .create_scoped_run(start("ok"), None, WorkbenchCaller::PairedBrowser)
+            .unwrap();
+        assert!(paired_browser_run(created.id()));
+        assert!(
+            serde_json::to_value(&created)
+                .unwrap()
+                .get("pairedBrowser")
+                .is_none()
+        );
+        assert!(remote::check_existing_run(&state, "workspace", created.id()).is_ok());
+        assert!(state.create_run(start(created.id())).is_err());
+        assert!(
+            state
+                .create_scoped_run(start("ok"), None, WorkbenchCaller::PairedBrowser)
+                .is_err()
+        );
+        let local = state.create_run(start("local")).unwrap();
+        assert!(!paired_browser_run(local.id()));
+        assert_eq!(
+            remote::check_existing_run(&state, "workspace", "local")
+                .unwrap_err()
+                .code,
+            "denied"
+        );
+        graph.profiles[0].value.permission_mode = piui_orchestration::PermissionMode::FullAccess;
+        for rev in [
+            &mut graph.profiles[0].expected_revision,
+            &mut graph.team.expected_revision,
+            &mut graph.pipeline.expected_revision,
+            &mut graph.command.expected_revision,
+        ] {
+            *rev = Some(0);
+        }
+        save_graph(&state, graph).unwrap();
+        let rejection = state
+            .create_scoped_run(start("refused"), None, WorkbenchCaller::PairedBrowser)
+            .unwrap_err();
+        assert_eq!(rejection.code, "denied");
+        let refused =
+            remote::assign_run_id("refused".into(), WorkbenchCaller::PairedBrowser).unwrap();
+        assert!(state.get_run("workspace", &refused).unwrap().is_none());
+        std::fs::remove_dir_all(directory).expect("clean test");
     }
     #[test]
     fn graph_save_is_atomic_and_preserves_settings_across_reopen() {

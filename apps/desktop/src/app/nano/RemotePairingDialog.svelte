@@ -45,6 +45,7 @@
     <p class="browser">{pending.label}</p>
     <p class="code" role="img" aria-label={$t('Code {0}', [spoken])}>{grouped}</p>
     <p class="hint">{$t('Check that the same code is shown in Nano Web. If you did not start this, choose Deny.')}</p>
+    <p class="hint">{$t('This browser can read your projects, chats, boards and pipelines, send messages, answer approvals and edit and run supported pipelines on this computer.')}</p>
     {#if remote.error}<p class="error" role="alert">{$t(remote.error)}</p>{/if}
   </div>
   {#snippet footer()}

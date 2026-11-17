@@ -34,6 +34,8 @@ mod orchestration_run_debugging;
 mod orchestration_schedule;
 mod orchestration_scheduler;
 mod orchestration_script_test;
+#[cfg(all(windows, debug_assertions, feature = "native-remote-workbench-test"))]
+pub use nano::remote_native_proof::run_native_remote_workbench_proof;
 #[cfg(feature = "native-prime-scheduler-test")]
 pub use orchestration_scheduler::run_native_prime_scheduler_two_step_dependency_dag;
 mod orchestration_store;
@@ -957,7 +959,7 @@ pub fn run() -> Result<(), tauri::Error> {
             let nano_host = nano::install(app, &app_data_dir, safe_mode, e2e_isolated);
             // Remote access from Nano Web (ADR-062): off by default; the link
             // is opened only while switched on, signed in and outside safe mode.
-            nano::remote::install(
+            let _actor = nano::remote::install(
                 app.handle().clone(),
                 &app_data_dir,
                 std::sync::Arc::clone(&nano_host),

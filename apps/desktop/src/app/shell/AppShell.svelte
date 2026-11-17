@@ -29,6 +29,12 @@
     if (!remoteMode) syncTrayLabels($t);
   });
 
+  const mobileTitle = $derived.by(() => {
+    const route = store.route;
+    if (route.name === 'chat') return store.selectedSession?.title || $t('Chat');
+    if (route.name === 'pipelines') return $t(({ systems: 'Pipelines', runs: 'Runs', schedules: 'Automations', agents: 'Agents', teams: 'Teams', pipelines: 'Step lists' })[route.section]);
+    return $t(({ home: 'New chat', inbox: 'Inbox', history: 'Session history', board: 'Board', team: 'Team', settings: 'Settings' })[route.name]);
+  });
   let paletteOpen = $state(false);
   let drawerOpen = $state(false);
   let narrow = $state(false);
@@ -280,7 +286,7 @@
 <svelte:window onkeydown={keydown} />
 
 <TooltipPrimitive.Provider delayDuration={450} skipDelayDuration={150}>
-  <div class="app" class:app--narrow={narrow} class:app--no-sidebar={!narrow && sidebarCollapsed}>
+  <div class="app" class:app--remote={remoteMode} class:app--narrow={narrow} class:app--no-sidebar={!narrow && sidebarCollapsed}>
     <a class="skip-link" href="#main">{$t('Skip to main content')}</a>
     {#if store.safeMode}
       <div class="safe-mode" role="status">{$t('Safe mode: history is read-only and agents are not started.')}</div>
@@ -315,7 +321,7 @@
         {#if narrow}
           <div class="narrow-bar">
             <IconButton label={$t('Open navigation')} onclick={() => (drawerOpen = true)}><Menu /></IconButton>
-            <strong>Nano Desktop</strong>
+            <strong>{remoteMode ? mobileTitle : 'Nano Desktop'}</strong>
             {#if remoteShell.Indicator}
               <remoteShell.Indicator placement="bar" onOpen={() => store.navigate({ name: 'settings', section: 'nano' })} />
             {/if}
@@ -506,6 +512,13 @@
   .view {
     flex: 1;
     min-height: 0;
+  }
+  @media (max-width: 640px) {
+    .app--remote.app--narrow .frame { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+    .app--remote main { grid-row: 1; grid-column: 1; }
+    .app--remote .sidebar-slot--drawer { left: 0; bottom: 0; width: min(88vw, 320px); }
+    .app--remote .scrim { left: 0; }
+    .app--remote .narrow-bar strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   }
   .view-loading {
     width: min(760px, calc(100% - 48px));

@@ -36,7 +36,7 @@ describe('Settings → remote access', () => {
     expect(body).toContain('aria-checked="false"');
     // The disclosure names all open chats, not only the ones the browser opens.
     expect(body).toContain('the content of all open chats pass through');
-    expect(body).toContain('server to it and are not stored there.');
+    expect(body).toContain('server to the browser and are not stored there.');
     expect(body).not.toContain('Waiting for connections');
     expect(body).not.toContain('Connected now');
     expect(body).not.toContain('Allowed browsers');

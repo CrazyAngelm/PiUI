@@ -4,22 +4,31 @@
   import NewChatComposer from './NewChatComposer.svelte';
   import { newChatPlacement } from '../worktrees/newChatPlacement.svelte';
   import { useWorkspace } from './context';
-  import { remoteMode } from '../nano/remoteMode';
+  import RemoteAccessDetails from '../nano/RemoteAccessDetails.svelte';
+  import { remoteMode, remoteChatOnly } from '../nano/remoteMode';
 
   interface Props {
     onTrust: (workspace: WorkspaceSummary) => void;
   }
   let { onTrust }: Props = $props();
   const store = useWorkspace();
+  let accessOpen = $state(false);
   const loadHandoffBanner = () => import('../handoff/HandoffBanner.svelte');
 
   const noHarness = $derived(!store.catalogLoading && !store.catalog.harnesses.some((item) => item.status === 'available'));
 </script>
 
-<section class="home" aria-labelledby="home-title">
+<section class="home" class:home--remote={remoteMode} aria-labelledby="home-title">
   <div class="home__inner">
     <div class="hero">
       <h1 id="home-title">{$t('What should we work on?')}</h1>
+      {#if remoteChatOnly()}
+        <p class="hero__hint">{$t('This computer shares chats. Update Nano Desktop on it to open pipelines and runs here.')}</p>
+      {/if}
+      {#if remoteMode}
+        <button type="button" class="link" onclick={() => (accessOpen = true)}>{$t('Remote access details')}</button>
+        <RemoteAccessDetails bind:open={accessOpen} />
+      {/if}
       {#if noHarness}
         <p class="hero__hint">
           {$t('No agent harness is ready yet.')}
@@ -50,6 +59,9 @@
     width: min(760px, calc(100% - 48px));
     margin: 0 auto;
     padding: clamp(40px, 14vh, 140px) 0 var(--piui-space-12);
+  }
+  @media (max-width: 640px) {
+    .home--remote .home__inner { width: calc(100% - 24px); padding-block: clamp(24px, 9dvh, 72px) var(--piui-space-6); }
   }
   .hero {
     display: grid;

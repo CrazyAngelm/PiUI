@@ -6,6 +6,8 @@
   import PenLine from '@lucide/svelte/icons/pen-line';
   import History from '@lucide/svelte/icons/history';
   import { onMount, untrack } from 'svelte';
+  import { hostSupports, pipelineSectionAvailable, remoteMode } from '../nano/remoteMode';
+  import { remoteRunSupported } from '../pipelines/remotePolicy';
   import { t } from '../../features/locale/language';
   import type { OrchestrationClient, OrchestrationRunV6 } from '../../host-api/orchestrationClient';
   import { Badge, Button, Dialog, EmptyState, IconButton, Popover, Segmented, Skeleton, Spinner, StatusDot } from '../../lib/ui';
@@ -120,7 +122,7 @@
   }
 </script>
 
-<div class="runs" class:runs--panel={!!selected}>
+<div class="runs" class:runs--remote={remoteMode} class:runs--panel={!!selected}>
   <nav class="list" aria-label={$t('Runs')}>
     <div class="list__head">
       <Segmented
@@ -194,20 +196,24 @@
         {/if}
         <div class="stage__actions">
           {#if run.status === 'running'}
+            {#if hostSupports('orchestration_control_flow_v6') && (!remoteMode || remoteRunSupported(run))}
             <Button size="sm" variant="ghost" loading={runs.busy === 'pause'} disabled={!!runs.busy || safeMode} onclick={() => void runs.setPaused(!run.paused)}>
               {#snippet leading()}{#if run.paused}<Play />{:else}<Pause />{/if}{/snippet}
               {run.paused ? $t('Resume') : $t('Pause')}
             </Button>
+            {/if}
+            {#if hostSupports('orchestration_cancel_run_v6') && (!remoteMode || remoteRunSupported(run))}
             <Button size="sm" variant="ghost" disabled={!!runs.busy || safeMode} onclick={() => (confirmCancel = true)}>
               {#snippet leading()}<Square />{/snippet}
               {$t('Stop run')}
             </Button>
+            {/if}
           {/if}
-          <Button size="sm" variant="ghost" onclick={() => onEdit(run?.definition.launchCommand?.id)}>
+          {#if pipelineSectionAvailable('systems')}<Button size="sm" variant="ghost" onclick={() => onEdit(run?.definition.launchCommand?.id)}>
             {#snippet leading()}<PenLine />{/snippet}
-            {$t('Edit pipeline')}
-          </Button>
-          <RunActions {runs} {run} {onDebug} onDeleted={deleted} />
+            {$t(remoteMode ? 'Open pipeline' : 'Edit pipeline')}
+          </Button>{/if}
+          {#if !remoteMode}<RunActions {runs} {run} {onDebug} onDeleted={deleted} />{/if}
         </div>
       </header>
       {#if runs.actionError}<p class="error error--bar" role="alert">{$t(runs.actionError)}</p>{/if}
@@ -227,9 +233,9 @@
     {:else if runs.summaries.length > 0 || runs.listError}
       <EmptyState icon={History} title={$t('No run selected')} />
     {:else}
-      <EmptyState icon={History} title={$t('No runs yet')} description={$t('Press Run in the editor to start one.')}>
+      <EmptyState icon={History} title={$t('No runs yet')} description={pipelineSectionAvailable('systems') ? $t('Press Run in the editor to start one.') : $t('Runs started on this computer appear here.')}>
         {#snippet actions()}
-          <Button size="sm" onclick={() => onEdit(undefined)}>{$t('Open editor')}</Button>
+          {#if pipelineSectionAvailable('systems')}<Button size="sm" onclick={() => onEdit(undefined)}>{$t('Open editor')}</Button>{/if}
         {/snippet}
       </EmptyState>
     {/if}
@@ -402,6 +408,13 @@
     .runs {
       grid-template-columns: 220px minmax(0, 1fr);
     }
+  }
+  @media (max-width: 760px) {
+    .runs.runs--remote { position: relative; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(90px, 32%) minmax(0, 1fr); }
+    .runs--remote .list { border-right: 0; border-bottom: 1px solid var(--piui-border); }
+    .runs--remote .stage__head { flex-wrap: wrap; }
+    .runs--remote .stage__actions { flex-wrap: wrap; }
+    .runs--remote > :global(aside) { position: absolute; inset: 0; width: 100%; max-width: 100%; z-index: 2; overflow: auto; }
   }
   .run-row__child {
     color: var(--piui-decoration-secondary);

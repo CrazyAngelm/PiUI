@@ -9,7 +9,7 @@ use crate::harness_configuration::PI_NATIVE_TOOL_NAMES;
 use crate::harness_configuration::{LaunchPolicy, launch_policy, one_shot_launch_policy};
 use crate::orchestration_api::{
     AgentRequestAdmission, AgentToolOperation, AgentToolRequest, ManagedAgentContext,
-    ORCHESTRATION_EVENT_V4, OrchestrationApiState, OrchestrationRunChangedEventV4,
+    ORCHESTRATION_EVENT_V4, OrchestrationApiState, OrchestrationRunChangedEventV4, WorkbenchCaller,
     emit_run_changed, emit_schedule_changed, validate_live_workspace_scope,
 };
 use crate::state::HostState;
@@ -642,8 +642,15 @@ impl OrchestrationScheduler {
         run_id: &str,
         expected_run_revision: u64,
     ) -> Result<Run, OrchestrationSchedulerError> {
-        self.cancel_scope(app, workspace_id, run_id, expected_run_revision, None)
-            .await
+        self.cancel_scope(
+            app,
+            workspace_id,
+            run_id,
+            expected_run_revision,
+            None,
+            WorkbenchCaller::Desktop,
+        )
+        .await
     }
 
     pub(crate) async fn cancel_task<R: Runtime>(
@@ -660,6 +667,7 @@ impl OrchestrationScheduler {
             run_id,
             expected_run_revision,
             Some(step_id),
+            WorkbenchCaller::Desktop,
         )
         .await
     }
@@ -671,6 +679,7 @@ impl OrchestrationScheduler {
         run_id: &str,
         expected_run_revision: u64,
         step_id: Option<&str>,
+        caller: WorkbenchCaller,
     ) -> Result<Run, OrchestrationSchedulerError> {
         if !self.admits_work() {
             return Err(OrchestrationSchedulerError::unavailable());
@@ -678,6 +687,13 @@ impl OrchestrationScheduler {
         let cancellation = self.begin_cancellation(workspace_id, run_id)?;
         let run_gate = self.run_gate(workspace_id, run_id)?;
         let dispatch = run_gate.lock().await;
+        if caller == WorkbenchCaller::PairedBrowser {
+            let api = app
+                .try_state::<OrchestrationApiState>()
+                .ok_or_else(OrchestrationSchedulerError::unavailable)?;
+            crate::orchestration_api::check_existing_run(&api, workspace_id, run_id)
+                .map_err(|error| OrchestrationSchedulerError::new(error.code))?;
+        }
         // Sub-pipeline child runs (v6.7, ADR-042) are cancelled first,
         // deepest first. Holding a run's gate keeps it from starting another
         // child, and marking every held run as cancelling keeps the

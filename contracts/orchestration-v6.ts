@@ -514,6 +514,8 @@ export type RunTrigger =
     };
 
 export interface OrchestrationRunV6 {
+  /** Set by the host when the saved run was started from a paired browser. */
+  readonly pairedBrowser?: boolean;
   /** Additive (v6.1): validated run inputs, frozen when the run starts. */
   readonly inputs?: Readonly<Record<string, RunInputValue>>;
   /** Additive (v6.3): what started the run; absent for a person's manual start. */

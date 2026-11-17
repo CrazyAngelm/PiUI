@@ -22,6 +22,7 @@
     type CommentMentionV1,
   } from '../../host-api/boardClient';
   import type { TeammateV1 } from '../../host-api/teammatesClient';
+  import { remoteMode, pipelineSectionAvailable } from '../nano/remoteMode';
   import { useWorkspace } from '../shell/context';
   import { errorMessage } from '../workspaceStore.svelte';
   import { harnessMeta } from '../harnessMeta';
@@ -268,11 +269,28 @@
     </h2>
     {#if liveRun}<StatusDot status="running" label={$t('A run is working on it')} />{/if}
     <span class="drawer__spacer"></span>
-    <IconButton label={$t('Delete card')} onclick={() => (deleteOpen = true)} disabled={store.safeMode}><Trash size={15} /></IconButton>
+    {#if !remoteMode}
+      <IconButton label={$t('Delete card')} onclick={() => (deleteOpen = true)} disabled={store.safeMode}><Trash size={15} /></IconButton>
+    {/if}
     <IconButton label={$t('Close')} shortcut="Escape" onclick={onClose}><X size={16} /></IconButton>
   </header>
 
   <div class="drawer__body">
+    {#if remoteMode}
+      <h3 class="summary-title">{card.title}</h3>
+      <dl class="summary-facts">
+        <dt>{$t('Status')}</dt><dd>{$t(STATUS_LABEL[card.status])}</dd>
+        <dt>{$t('Priority')}</dt><dd>{$t(PRIORITY_LABEL[card.priority])}</dd>
+        <dt>{$t('Assignee')}</dt><dd>{assignee ? `@${assignee.handle} · ${assignee.name}` : $t('Unassigned')}</dd>
+      </dl>
+      {#if pendingStart}
+        <p class="muted">{$t('{0} waits for you to start a run.', [handleOf(pendingStart.teammateId)])}</p>
+      {:else if card.claim}
+        <p class="muted">{liveRun ? $t('A run of {0} is working on it.', [handleOf(assignee?.id)]) : $t('The card is claimed.')}
+          {#if liveRun && pipelineSectionAvailable('runs')}<button type="button" class="link" onclick={() => openRun(liveRun)}>{$t('Open run')}</button>{/if}
+        </p>
+      {/if}
+    {:else}
     <label class="field">
       <span class="field__label">{$t('Title')}</span>
       <Input
@@ -374,15 +392,25 @@
       {/if}
     </div>
 
+    {/if}
+
     {#each proposals as proposal (proposal.id)}
       {@const copy = operationCopy(proposal.operation, board.board, handleOf)}
       <div class="proposal" role="group" aria-label={$t('Proposal')}>
         <span class="proposal__text">{$t('An agent proposes: {0}', [$t(copy.text, copy.params.map((value) => (typeof value === 'string' && Object.values(STATUS_LABEL).includes(value) ? $t(value) : value)))])}</span>
-        <Button size="sm" variant="primary" onclick={() => void act(() => board.resolveProposal(proposal.id, true), 'Could not accept the proposal')} disabled={busy || store.safeMode}>{$t('Accept')}</Button>
-        <Button size="sm" variant="ghost" onclick={() => void act(() => board.resolveProposal(proposal.id, false), 'Could not reject the proposal')} disabled={busy || store.safeMode}>{$t('Reject')}</Button>
+        {#if !remoteMode}
+          <Button size="sm" variant="primary" onclick={() => void act(() => board.resolveProposal(proposal.id, true), 'Could not accept the proposal')} disabled={busy || store.safeMode}>{$t('Accept')}</Button>
+          <Button size="sm" variant="ghost" onclick={() => void act(() => board.resolveProposal(proposal.id, false), 'Could not reject the proposal')} disabled={busy || store.safeMode}>{$t('Reject')}</Button>
+        {/if}
       </div>
     {/each}
 
+    {#if remoteMode}
+      {#if card.description}<p class="summary-description">{card.description}</p>{/if}
+      {#if card.labels.length}
+        <ul class="chips" aria-label={$t('Labels')}>{#each card.labels as label}<li class="chip">{label}</li>{/each}</ul>
+      {/if}
+    {:else}
     <label class="field">
       <span class="field__label">{$t('Description')}</span>
       <Textarea bind:value={description} minRows={3} maxRows={14} disabled={store.safeMode} placeholder={$t('What should be done, and how will you know it is done?')} />
@@ -399,6 +427,9 @@
       <Input bind:value={labels} placeholder={$t('bug, docs')} disabled={store.safeMode} onblur={commitLabels} onkeydown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commitLabels(); } }} />
     </label>
 
+    {/if}
+
+    {#if !remoteMode || blockers.length > 0}
     <div class="field">
       <span class="field__label" id="card-blockers">{$t('Blocked by')}</span>
       {#if blockers.length}
@@ -407,23 +438,32 @@
             <li class="chip">
               <button type="button" class="chip__open" onclick={() => store.navigate({ name: 'board', workspaceId, cardId: blocker.id })}>#{blocker.number} {blocker.title}</button>
               {#if isClosed(blocker.status)}<span class="muted">{$t(STATUS_LABEL[blocker.status])}</span>{/if}
-              <button type="button" class="chip__remove" aria-label={$t('Remove blocker #{0}', [blocker.number])} onclick={() => void patch({ blockedBy: card.blockedBy.filter((id) => id !== blocker.id) })} disabled={busy || store.safeMode}><X size={12} /></button>
+              {#if !remoteMode}
+                <button type="button" class="chip__remove" aria-label={$t('Remove blocker #{0}', [blocker.number])} onclick={() => void patch({ blockedBy: card.blockedBy.filter((id) => id !== blocker.id) })} disabled={busy || store.safeMode}><X size={12} /></button>
+              {/if}
             </li>
           {/each}
         </ul>
       {/if}
-      <form class="add" onsubmit={(event) => { event.preventDefault(); void addBlocker(); }}>
-        <Input bind:value={blockerInput} size="sm" placeholder="#12" aria-label={$t('Add a blocker by card number')} disabled={store.safeMode} />
-        <Button size="sm" type="submit" disabled={!blockerInput.trim() || busy}>{$t('Add')}</Button>
-      </form>
+      {#if !remoteMode}
+        <form class="add" onsubmit={(event) => { event.preventDefault(); void addBlocker(); }}>
+          <Input bind:value={blockerInput} size="sm" placeholder="#12" aria-label={$t('Add a blocker by card number')} disabled={store.safeMode} />
+          <Button size="sm" type="submit" disabled={!blockerInput.trim() || busy}>{$t('Add')}</Button>
+        </form>
+      {/if}
     </div>
 
+    {/if}
+
+    {#if !remoteMode || parent}
     <div class="field">
       <span class="field__label">{$t('Parent card')}</span>
       {#if parent}
         <div class="chip">
           <button type="button" class="chip__open" onclick={() => store.navigate({ name: 'board', workspaceId, cardId: parent.id })}>#{parent.number} {parent.title}</button>
-          <button type="button" class="chip__remove" aria-label={$t('Remove parent card')} onclick={() => void patch({ parentId: null })} disabled={busy || store.safeMode}><X size={12} /></button>
+          {#if !remoteMode}
+            <button type="button" class="chip__remove" aria-label={$t('Remove parent card')} onclick={() => void patch({ parentId: null })} disabled={busy || store.safeMode}><X size={12} /></button>
+          {/if}
         </div>
       {:else}
         <form class="add" onsubmit={(event) => { event.preventDefault(); void setParent(); }}>
@@ -432,6 +472,8 @@
         </form>
       {/if}
     </div>
+
+    {/if}
 
     {#if sessions.length || runs.length}
       <div class="field">
@@ -442,13 +484,19 @@
                 <HarnessMark kind={link.harness} size={14} />
                 <button type="button" class="link" onclick={() => openChat(link.sessionId)}>{sessionTitle(link.sessionId)}</button>
                 <span class="muted">{harnessMeta(link.harness).label}</span>
-                <button type="button" class="chip__remove" aria-label={$t('Unlink this chat')} onclick={() => void act(() => board.unlinkSession(card.id, link.sessionId), 'Could not unlink the chat')} disabled={busy || store.safeMode}><X size={12} /></button>
+                {#if !remoteMode}
+                  <button type="button" class="chip__remove" aria-label={$t('Unlink this chat')} onclick={() => void act(() => board.unlinkSession(card.id, link.sessionId), 'Could not unlink the chat')} disabled={busy || store.safeMode}><X size={12} /></button>
+                {/if}
               </li>
           {/each}
           {#each runs as link (link.runId)}
               <li>
                 <Route size={14} aria-hidden="true" />
-                <button type="button" class="link" onclick={() => openRun(link.runId)}>{$t('Run {0}', [link.runId.slice(0, 8)])}</button>
+                {#if pipelineSectionAvailable('runs')}
+                  <button type="button" class="link" onclick={() => openRun(link.runId)}>{$t('Run {0}', [link.runId.slice(0, 8)])}</button>
+                {:else}
+                  <span>{$t('Run {0}', [link.runId.slice(0, 8)])}</span>
+                {/if}
                 {#if link.teammateId}<span class="muted">{handleOf(link.teammateId)}</span>{/if}
                 {#if card.claim?.runId === link.runId}<StatusDot status="running" label={$t('Running')} />{/if}
               </li>
@@ -463,19 +511,21 @@
         {card}
         teammates={team}
         {busy}
-        onUndo={(activityId) => void act(() => board.undo(card.id, activityId), 'Could not undo the change', $t('Undid a change on #{0}', [card.number]))}
+        onUndo={remoteMode ? undefined : (activityId) => void act(() => board.undo(card.id, activityId), 'Could not undo the change', $t('Undid a change on #{0}', [card.number]))}
         onOpenChat={openChat}
-        onOpenRun={openRun}
+        onOpenRun={pipelineSectionAvailable('runs') ? openRun : undefined}
       />
-      <MentionTextarea
-        teammates={team}
-        label={$t('Comment on #{0}', [card.number])}
-        placeholder={$t('Leave a note, or @mention a teammate…')}
-        submitLabel={$t('Comment')}
-        disabled={store.safeMode}
-        {busy}
-        onSubmit={comment}
-      />
+      {#if !remoteMode}
+        <MentionTextarea
+          teammates={team}
+          label={$t('Comment on #{0}', [card.number])}
+          placeholder={$t('Leave a note, or @mention a teammate…')}
+          submitLabel={$t('Comment')}
+          disabled={store.safeMode}
+          {busy}
+          onSubmit={comment}
+        />
+      {/if}
     </section>
   </div>
 </aside>
@@ -511,6 +561,11 @@
     box-shadow: var(--piui-shadow-3);
     animation: drawer-in var(--piui-duration) var(--piui-ease-out);
   }
+  .summary-title { margin: 0; font-size: var(--piui-text-xl); overflow-wrap: anywhere; }
+  .summary-facts { display: grid; grid-template-columns: auto 1fr; gap: var(--piui-space-2) var(--piui-space-4); margin: 0; }
+  .summary-facts dt { color: var(--piui-text-muted); }
+  .summary-facts dd { margin: 0; overflow-wrap: anywhere; }
+  .summary-description { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
   @keyframes drawer-in {
     from {
       transform: translateX(16px);

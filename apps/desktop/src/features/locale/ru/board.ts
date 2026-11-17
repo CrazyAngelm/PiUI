@@ -8,6 +8,9 @@ export const boardRu: Readonly<Record<string, string>> = {
   Blocked: 'Заблокирована',
   Urgent: 'Срочно',
   Normal: 'Обычный',
+  'Enable the board on your computer to see its cards here.': 'Включите доску на компьютере, чтобы здесь появились карточки.',
+  'Use the arrow keys to browse cards, Enter to open and / to filter.': 'Переходите между карточками стрелками. Enter открывает карточку, / — фильтр.',
+  'Nano Desktop': 'Нано Десктоп',
   // Board view
   Board: 'Доска',
   'Board of {0}': 'Доска проекта {0}',

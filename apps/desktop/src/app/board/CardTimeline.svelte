@@ -16,9 +16,9 @@
     card: CardV1;
     teammates: readonly TeammateV1[];
     busy: boolean;
-    onUndo: (activityId: string) => void;
+    onUndo?: (activityId: string) => void;
     onOpenChat: (sessionId: string) => void;
-    onOpenRun: (runId: string) => void;
+    onOpenRun?: (runId: string) => void;
   }
   let { card, teammates, busy, onUndo, onOpenChat, onOpenRun }: Props = $props();
 
@@ -66,10 +66,11 @@
   {:else if view.kind === 'runMember'}
     <span class="actor">
       <Route size={13} aria-hidden="true" />
-      <button type="button" class="actor__link" onclick={() => onOpenRun(view.runId)}>{$t('A pipeline run')}</button>
+      {#if onOpenRun}<button type="button" class="actor__link" onclick={() => onOpenRun?.(view.runId)}>{$t('A pipeline run')}</button>
+      {:else}<strong>{$t('A pipeline run')}</strong>{/if}
     </span>
   {:else}
-    <span class="actor"><Cpu size={13} aria-hidden="true" /><strong>Nano Desktop</strong></span>
+    <span class="actor"><Cpu size={13} aria-hidden="true" /><strong>{$t('Nano Desktop')}</strong></span>
   {/if}
 {/snippet}
 
@@ -94,8 +95,8 @@
         {@render actor(entry.activity.actor)}
         <span class="entry__text">{$t(copy.text, params(copy.params))}</span>
         <time datetime={entry.at} class="entry__time">{relativeTime(entry.at, $language)}</time>
-        {#if entry.activity.undoable}
-          <button type="button" class="undo" onclick={() => onUndo(entry.activity.id)} disabled={busy} aria-label={$t('Undo: {0}', [$t(copy.text, params(copy.params))])}>
+        {#if onUndo && entry.activity.undoable}
+          <button type="button" class="undo" onclick={() => onUndo?.(entry.activity.id)} disabled={busy} aria-label={$t('Undo: {0}', [$t(copy.text, params(copy.params))])}>
             <Undo2 size={12} aria-hidden="true" />{$t('Undo')}
           </button>
         {/if}

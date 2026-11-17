@@ -3,9 +3,8 @@
 //!
 //! [`admit`] is the only admission: a command name outside
 //! [`REMOTE_COMMANDS`] is refused, every argument object is read into a
-//! private struct that rejects unknown fields, and the two commands that carry
-//! sensitive variants are narrowed (the harness registry may only list, and a
-//! composer send may not carry attachments). Nothing of settings, projects'
+//! private struct that rejects unknown fields, and sensitive variants are narrowed. The
+//! workbench routes use the typed requests and policies in `remote_workbench`. Nothing of settings, projects'
 //! trust, plugins, files, accounts or the `nano_remote_*` commands themselves
 //! is reachable.
 //!
@@ -34,7 +33,7 @@ use crate::workspace_api::{
 use piui_nano::remote::frames::ShellContracts;
 
 /// `NANO_REMOTE_COMMANDS`: the host commands a welcomed viewer may call.
-pub(crate) const REMOTE_COMMANDS: [&str; 16] = [
+pub(crate) const REMOTE_COMMANDS: [&str; 34] = [
     "bootstrap_v10",
     "workspace_command_v15",
     "workspace_history_v1",
@@ -51,15 +50,38 @@ pub(crate) const REMOTE_COMMANDS: [&str; 16] = [
     "get_personal_timeline_page",
     "search_sessions",
     "nano_account_status_v1",
+    "orchestration_catalog_v6",
+    "orchestration_get_profile_v6",
+    "orchestration_get_team_v6",
+    "orchestration_get_pipeline_v6",
+    "orchestration_get_launch_command_v6",
+    "orchestration_save_graph_v6",
+    "orchestration_list_runs_v6",
+    "orchestration_get_run_v6",
+    "orchestration_run_usage_v6",
+    "orchestration_start_run_v6",
+    "orchestration_cancel_run_v6",
+    "orchestration_cancel_task_v6",
+    "orchestration_control_flow_v6",
+    "orchestration_run_outputs_v1",
+    "orchestration_list_schedules_v7",
+    "orchestration_automations_v7",
+    "board_command_v1",
+    "teammates_command_v1",
 ];
 
 /// `NANO_REMOTE_CHANNELS`: the host events forwarded to every welcomed viewer.
-pub(crate) const REMOTE_CHANNELS: [&str; 5] = [
+pub(crate) const REMOTE_CHANNELS: [&str; 10] = [
     "piui://workspace-event",
     "piui://composer-v19",
     "piui://session-catalog",
     "piui://harness-registry-v1",
     "piui://nano-account-v1",
+    "piui://orchestration-event",
+    "piui://orchestration-schedule-event",
+    "piui://orchestration-automations-event",
+    "piui://board-changed-v1",
+    "piui://teammates-changed-v1",
 ];
 
 /// `NANO_REMOTE_SHELL_CONTRACTS`: the protocol numbers the shell was built for.
@@ -83,6 +105,7 @@ pub(crate) enum Refusal {
 /// An admitted request with its typed arguments. `Debug` prints the command
 /// only: arguments carry chat content.
 pub(crate) enum Admitted {
+    Workbench(Box<super::remote_workbench::WorkbenchRequest>),
     Bootstrap,
     WorkspaceCommand(WorkspaceCommand),
     WorkspaceHistory(WorkspaceHistoryRequestV1),
@@ -121,6 +144,7 @@ impl Admitted {
     /// The wire name of the command.
     pub(crate) const fn command(&self) -> &'static str {
         match self {
+            Self::Workbench(request) => request.name(),
             Self::Bootstrap => "bootstrap_v10",
             Self::WorkspaceCommand(_) => "workspace_command_v15",
             Self::WorkspaceHistory(_) => "workspace_history_v1",
@@ -158,14 +182,14 @@ struct NoArguments {}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CommandArgument<T> {
-    command: T,
+pub(super) struct CommandArgument<T> {
+    pub(super) command: T,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RequestArgument<T> {
-    request: T,
+pub(super) struct RequestArgument<T> {
+    pub(super) request: T,
 }
 
 #[derive(Deserialize)]
@@ -201,7 +225,7 @@ struct QueryArgument {
     query: String,
 }
 
-fn read<T: DeserializeOwned>(arguments: &Value) -> Result<T, Refusal> {
+pub(super) fn read<T: DeserializeOwned>(arguments: &Value) -> Result<T, Refusal> {
     T::deserialize(arguments).map_err(|_| Refusal::Invalid)
 }
 
@@ -290,18 +314,19 @@ pub(crate) fn admit(command: &str, arguments: &Value) -> Result<Admitted, Refusa
         "nano_account_status_v1" => {
             read::<NoArguments>(arguments).map(|_| Admitted::NanoAccountStatus)
         }
-        _ => Err(Refusal::NotAllowed),
+        _ => super::remote_workbench::WorkbenchRequest::parse(command, arguments)
+            .map(|request| Admitted::Workbench(Box::new(request))),
     }
 }
 
 /// What a command that cannot run because the host is not ready answers.
-fn not_ready() -> Value {
+pub(super) fn not_ready() -> Value {
     json!({ "code": "io", "message": "Nano Desktop is not ready.", "recoverable": true })
 }
 
 /// The answer or the rejection of a command as the JSON the IPC would have
 /// carried.
-fn to_json<T: Serialize, E: Serialize>(result: Result<T, E>) -> Result<Value, Value> {
+pub(super) fn to_json<T: Serialize, E: Serialize>(result: Result<T, E>) -> Result<Value, Value> {
     match result {
         Ok(value) => serde_json::to_value(value).map_err(|_| not_ready()),
         Err(error) => Err(serde_json::to_value(error).unwrap_or_else(|_| not_ready())),
@@ -332,6 +357,7 @@ pub(crate) async fn run(app: &AppHandle, admitted: Admitted) -> Result<Value, Va
         };
     }
     match admitted {
+        Admitted::Workbench(request) => request.run(app).await,
         Admitted::Bootstrap => {
             blocking(app, |app| {
                 let state = app.try_state::<HostState>().ok_or_else(not_ready)?;

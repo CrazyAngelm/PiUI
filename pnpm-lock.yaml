@@ -98,6 +98,9 @@ importers:
 
   packages/nano-ui:
     dependencies:
+      '@lucide/svelte':
+        specifier: 1.48.0
+        version: 1.48.0(svelte@5.57.1)
       svelte:
         specifier: 5.57.1
         version: 5.57.1

@@ -33,6 +33,8 @@
   import { modelSelectionKey, resolveModelSelection } from '../../host-api/modelSelection';
   import { useWorkspace } from '../shell/context';
   import type { PipelineEditorStore } from './editorStore.svelte';
+  import { remoteHarnessSupported } from './remotePolicy';
+  import { remoteMode } from '../nano/remoteMode';
   import NodeTypeMenu from './NodeTypeMenu.svelte';
   import ScriptEditor from './code/ScriptEditor.svelte';
   import ScriptTestPanel from './ScriptTestPanel.svelte';
@@ -144,12 +146,14 @@
   const harnessItems = $derived<PickerItem[]>(
     profileHarnesses(workspace.catalog.harnesses).map((kind) => {
       const status = workspace.catalog.harnesses.find((item) => item.kind === kind);
-      const oneShotMissing = llm && !harnessConfiguration(kind).oneShot;
+      const disabledReason = remoteMode && !remoteHarnessSupported(kind)
+        ? $t('This harness cannot enforce read-only access.')
+        : llm && !harnessConfiguration(kind).oneShot ? $t('Cannot answer read-only without tools') : undefined;
       return {
         value: kind,
         label: status?.name ?? harnessConfiguration(kind).name,
         description: status?.status === 'available' ? (status.version ? `v${status.version}` : $t('Ready')) : $t(status?.reason ?? 'Not found on this computer'),
-        ...(oneShotMissing ? { disabled: true, disabledReason: $t('Cannot answer read-only without tools') } : {}),
+        ...(disabledReason ? { disabled: true, disabledReason } : {}),
       };
     }),
   );
@@ -171,7 +175,7 @@
   }
 
   function setHarness(harness: AgentProfile['harness']): void {
-    if (harness === profile.harness) return;
+    if (harness === profile.harness || (remoteMode && !remoteHarnessSupported(harness))) return;
     const next = profileForHarness(profile, harness);
     // Explicit undefined clears settings the new harness cannot honour.
     patch({
@@ -183,7 +187,7 @@
       baseInstructions: next.baseInstructions,
       networkAccess: next.networkAccess,
       // A model call stays read-only, offline and without tools.
-      ...(llm ? { permissionMode: 'read-only' as const, networkAccess: undefined, resourceRules: undefined, toolPolicy: { rules: [] } } : {}),
+      ...(llm || remoteMode ? { permissionMode: 'read-only' as const, networkAccess: undefined, resourceRules: undefined, toolPolicy: { rules: [] } } : {}),
     });
   }
 
@@ -236,7 +240,7 @@
       oninput={(event) => patch({ name: event.currentTarget.value }, true)}
       onblur={() => editor.settle()}
     />
-    {#if !isRouter}
+    {#if !isRouter && !remoteMode}
       <NodeTypeMenu {editor} {node} />
     {/if}
     <Menu
@@ -329,7 +333,7 @@
             <pre>{'{ "inputs": {…}, "dependencies": { "<step id>": { "text": "…", "data": {…} } }, "step": { "id": "…", "name": "…" } }'}</pre>
             <p>{$t('Print one JSON object to return named fields, or any text. A non-zero exit code fails the step; the end of stderr is shown in the run.')}</p>
           </details>
-          <ScriptTestPanel {editor} {node} />
+          {#if !remoteMode}<ScriptTestPanel {editor} {node} />{/if}
         {:else if current === 'basics'}
           {#if !isRouter || agentRouter}
             <Field
@@ -461,7 +465,7 @@
           <Field label={$t('Permissions')} description={configuration.filesystemSandbox ? $t('Enforced by the harness sandbox.') : $t('This harness has no file sandbox; the mode is advisory.')}>
             <Picker items={permissionItems} value={profile.permissionMode} label={$t('Permissions')} width={300} onSelect={(value) => patch({ permissionMode: value })}>
               {#snippet trigger(props)}
-                <button type="button" class="select" {...props} disabled={readOnly}>
+                <button type="button" class="select" {...props} disabled={remoteMode || readOnly}>
                   <span>{$t(permissionLabels[profile.permissionMode])}</span>
                   <ChevronDown size={13} />
                 </button>
@@ -469,11 +473,11 @@
             </Picker>
           </Field>
           {#if configuration.networkAccess && (profile.permissionMode === 'read-only' || profile.permissionMode === 'workspace-write')}
-            <Switch label={$t('Allow network access')} checked={profile.networkAccess === true} disabled={readOnly} onCheckedChange={(checked) => patch({ networkAccess: checked || undefined })} />
+            <Switch label={$t('Allow network access')} checked={profile.networkAccess === true} disabled={remoteMode || readOnly} onCheckedChange={(checked) => patch({ networkAccess: checked || undefined })} />
           {/if}
           <div class="section">
             <h3>{$t('Skills, MCP and tools')}</h3>
-            <ResourcePicker {profile} items={catalog?.resources.items ?? []} loading={(!catalog && !catalogError) || editor.resourcesLoading[profile.harness] === true} disabled={readOnly} onchange={(change) => patch(change)} />
+            <ResourcePicker {profile} items={catalog?.resources.items ?? []} loading={(!catalog && !catalogError) || editor.resourcesLoading[profile.harness] === true} disabled={remoteMode || readOnly} onchange={(change) => patch(change)} />
             {#each catalog?.resources.warnings ?? [] as warning (warning)}
               <p class="hint" role="status">{$t(warning)}</p>
             {/each}
@@ -489,7 +493,7 @@
                   <Checkbox
                     label={other.profile.name || $t('Untitled agent')}
                     checked={editor.hasEdge(node.id, other.id, 'spawn')}
-                    disabled={readOnly}
+                    disabled={remoteMode || readOnly}
                     onCheckedChange={() => toggleSpawn(other.id)}
                   />
                 {/each}

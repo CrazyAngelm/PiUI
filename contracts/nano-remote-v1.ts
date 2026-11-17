@@ -32,6 +32,12 @@ export function nanoRemoteViewerSocketPath(deviceId: string): string {
   return `${NANO_REMOTE_DEVICES_PATH}/${encodeURIComponent(deviceId)}/socket`;
 }
 
+/** A paired start sends its retry key unchanged. Rust persists the run under this ID. */
+export async function nanoRemoteRunId(retryKey: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(retryKey)));
+  return 'nano-remote-v1-' + Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 export const NANO_REMOTE_LIMITS = {
   maxFrameBytes: 262144,
   /** A `res` frame larger than this is sent as `part` frames. */
@@ -75,6 +81,24 @@ export const NANO_REMOTE_COMMANDS = [
   'get_personal_timeline_page',
   'search_sessions',
   'nano_account_status_v1',
+  'orchestration_catalog_v6',
+  'orchestration_get_profile_v6',
+  'orchestration_get_team_v6',
+  'orchestration_get_pipeline_v6',
+  'orchestration_get_launch_command_v6',
+  'orchestration_save_graph_v6',
+  'orchestration_list_runs_v6',
+  'orchestration_get_run_v6',
+  'orchestration_run_usage_v6',
+  'orchestration_start_run_v6',
+  'orchestration_cancel_run_v6',
+  'orchestration_cancel_task_v6',
+  'orchestration_control_flow_v6',
+  'orchestration_run_outputs_v1',
+  'orchestration_list_schedules_v7',
+  'orchestration_automations_v7',
+  'board_command_v1',
+  'teammates_command_v1',
 ] as const;
 export type NanoRemoteCommandV1 = (typeof NANO_REMOTE_COMMANDS)[number];
 
@@ -85,6 +109,11 @@ export const NANO_REMOTE_CHANNELS = [
   'piui://session-catalog',
   'piui://harness-registry-v1',
   'piui://nano-account-v1',
+  'piui://orchestration-event',
+  'piui://orchestration-schedule-event',
+  'piui://orchestration-automations-event',
+  'piui://board-changed-v1',
+  'piui://teammates-changed-v1',
 ] as const;
 export type NanoRemoteChannelV1 = (typeof NANO_REMOTE_CHANNELS)[number];
 
