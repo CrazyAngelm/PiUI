@@ -2070,3 +2070,11 @@ See [the decision](adr/071-turn-work-folding.md).
 The chat details panel now leads with the subagents and shell commands the live agent runs, including background ones, with elapsed time and a stop control. Claude Code reports them through an additive `SessionSnapshot.tasks` field and `tasks` event (bounded to 32 one-line entries, no native ids, prompts, output or file paths); harnesses that report nothing still show the tool calls that are running in the timeline. `workspace_task_stop_v1` stops one running task through Claude Code's `stop_task` control request; it is refused in safe mode, for run members and for a Fusion sidekick, and is not in the remote allowlist. Tasks belong to the live native process and are not persisted. The panel has no block of session facts or capabilities: the first version kept one behind "About this chat" and it was removed the same day.
 
 See [the decision](adr/072-session-activity.md).
+
+## ADR-073 — A calm chat feed: one process control per answer
+
+**Status:** Accepted 2026-11-17. Revises the fold rules of ADR-071.
+
+Every turn's tool and reasoning groups, and the replies written between them, now fold behind one quiet control; only the answer after the last group stays in the chat. A working turn is one line that names the current action, and a turn that ended badly opens its control. A finished turn never folds its last reply. The time and actions of a message appear on hover or focus and stay on the last answer. The shared transcript is the same component as the Nano web feed.
+
+See [the decision](adr/073-calm-feed.md).

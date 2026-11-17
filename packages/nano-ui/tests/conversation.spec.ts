@@ -306,7 +306,12 @@ for (const location of ['native', 'cloud'] as const) {
     await root.getByRole('button', { name: 'notes.txt', exact: true }).click();
     await expect(root.getByRole('alert')).toContainText('Could not open attachment.');
 
-    await root.locator('.group__head').press('Enter');
+    // The turn's work is one quiet line; opening it lists the single call, whose generic output needs no renderer choice.
+    const work = root.getByRole('button', { name: /^Used 1 tool/ });
+    await expect(work).toHaveAttribute('aria-expanded', 'false');
+    await expect(root.getByText('Generic tool output', { exact: true })).toHaveCount(0);
+    await work.press('Enter');
+    await expect(work).toHaveAttribute('aria-expanded', 'true');
     await expect(root.getByText('Generic tool output', { exact: true })).toBeVisible();
     await expect(root.getByRole('group', { name: 'How to show this tool' })).toHaveCount(0);
     await root.getByText('Future event', { exact: true }).click();

@@ -21,14 +21,15 @@ const thought = (id: string, patch: Partial<TimelineBlock> = {}): TimelineBlock 
 
 function groupOf(blocks: readonly TimelineBlock[], running = false): TimelineActivityGroup {
   const item = groupTranscriptBlocks(blocks, running)[0];
-  if (item?.type !== 'activity-group') throw new Error('Expected an activity group.');
-  return item;
+  const part = item?.type === 'turn-process' ? item.parts[0] : undefined;
+  if (part?.type !== 'activity-group') throw new Error('Expected an activity group.');
+  return part;
 }
 
-function view(blocks: readonly TimelineBlock[], language: 'en' | 'ru' = 'en', running = false, open = false): string {
+function view(blocks: readonly TimelineBlock[], language: 'en' | 'ru' = 'en', running = false, open = false, flat = false): string {
   const group = groupOf(blocks, running);
   return render(ActivityGroupView, {
-    props: { group, language, openState: open ? { [group.id]: true } : {}, onOpenChange: () => {} },
+    props: { group, language, openState: open ? { [group.id]: true } : {}, onOpenChange: () => {}, flat },
   }).body;
 }
 
@@ -154,6 +155,20 @@ describe('ActivityGroupView', () => {
     it('caps its rows in a region that scrolls', () => {
       const markup = view([command('a', { text: 'out' }), command('b', { text: 'out' })], 'en', false, true);
       expect(bare(markup)).toContain('group__rows');
+    });
+  });
+
+  describe('flat', () => {
+    it('shows the rows at once and no header', () => {
+      const markup = view([command('a', { text: 'out' }), command('b', { text: 'out' })], 'en', false, false, true);
+      expect(bare(markup)).not.toContain('group__head');
+      expect(bare(markup).match(/class="row /g)).toHaveLength(2);
+    });
+
+    it('still marks a running call with a spinner', () => {
+      const markup = view([command('a'), command('b', { status: 'streaming', title: 'Bash: npm test' })], 'en', true, false, true);
+      expect(markup).toContain('spinner');
+      expect(bare(markup)).not.toContain('group__head');
     });
   });
 });

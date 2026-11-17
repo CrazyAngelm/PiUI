@@ -1,6 +1,6 @@
 import type { Language } from '../../../features/locale/language';
-import type { TimelineTurnProcess } from '../../../features/sessions/timelineView';
-import { activitySummary } from './toolKinds';
+import type { TimelineActivityGroup, TimelineTurnProcess } from '../../../features/sessions/timelineView';
+import { activityDiffTotals, activityLive, activitySummary } from './toolKinds';
 
 type Translate = (value: string, parameters?: readonly unknown[]) => string;
 
@@ -23,4 +23,29 @@ export function turnProcessLabel(item: TimelineTurnProcess, language: Language, 
   const seconds = turnSeconds(item);
   if (seconds === undefined) return summary;
   return `${workedFor(seconds, translate)} · ${summary.charAt(0).toLocaleLowerCase(language) + summary.slice(1)}`;
+}
+
+/** What the process is doing now, while the turn is still at work: the running call, else the reasoning. */
+export function processLive(item: TimelineTurnProcess, language: Language): { label: string; detail?: string } | undefined {
+  if (item.live !== true) return undefined;
+  const last = item.parts[item.parts.length - 1];
+  return last?.type === 'activity-group' ? activityLive(last.blocks, language) : { label: activityLive([], language).label };
+}
+
+// A streamed token replaces only the live group; every earlier group keeps its object, so its diff is parsed once.
+const groupDiffs = new WeakMap<TimelineActivityGroup, { added: number; removed: number } | undefined>();
+
+/** Lines added and removed by the edits of the whole process, when there are any. */
+export function processDiffTotals(item: TimelineTurnProcess): { added: number; removed: number } | undefined {
+  let added = 0;
+  let removed = 0;
+  for (const part of item.parts) {
+    if (part.type !== 'activity-group') continue;
+    if (!groupDiffs.has(part)) groupDiffs.set(part, activityDiffTotals(part.blocks));
+    const totals = groupDiffs.get(part);
+    if (totals === undefined) continue;
+    added += totals.added;
+    removed += totals.removed;
+  }
+  return added === 0 && removed === 0 ? undefined : { added, removed };
 }

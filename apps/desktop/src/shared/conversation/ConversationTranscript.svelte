@@ -24,10 +24,10 @@
   import { createTimelineGrouper, type TimelineViewItem } from '../../features/sessions/timelineView';
   import type { TimelineBlock } from '../../host-api/types';
   import { Button, IconButton, Input, Skeleton, Spinner } from '../../lib/ui';
-  import ActivityGroupView from '../../app/chat/transcript/ActivityGroupView.svelte';
   import ReasoningView from '../../app/chat/transcript/ReasoningView.svelte';
   import TurnProcessView from '../../app/chat/transcript/TurnProcessView.svelte';
   import { createReasoningClock } from '../../app/chat/transcript/reasoningClock';
+  import { activityLive } from '../../app/chat/transcript/toolKinds';
   import { interleave, timeOf, type TimedInsert } from '../../app/chatPipelines/interleave';
   import { splitPipelineContext } from '../../app/chatPipelines/chatPipeline';
 
@@ -127,7 +127,6 @@
   // Unchanged rows keep their identity while a reply streams.
   const groupBlocks = createTimelineGrouper();
   const reasoningClock = createReasoningClock();
-  const items = $derived<TimelineViewItem[]>(printMode ? blocks.map(block => ({ type: 'block', block })) : groupBlocks(blocks, running ?? 'unknown'));
   const controlsByBlock = $derived(new Map(messageControls?.map(item => [item.blockId, item])));
   const appearanceByBlock = $derived(new Map(messagePresentation.map(item => [item.blockId, item])));
   const decorator = untrack(() => decorateMessage);
@@ -151,6 +150,12 @@
     }
     return grouped;
   });
+  // A reply that carries a file, or a person's name or note, stays in the chat: folding it would hide that.
+  function keepVisible(block: TimelineBlock): boolean {
+    const appearance = appearanceByBlock.get(block.id);
+    return attachmentsByBlock.has(block.id) || !!appearance?.author || !!appearance?.note;
+  }
+  const items = $derived<TimelineViewItem[]>(printMode ? blocks.map(block => ({ type: 'block', block })) : groupBlocks(blocks, running ?? 'unknown', keepVisible));
   const hidden = $derived(printMode ? 0 : Math.max(0, items.length - limit));
   const visible = $derived(hidden > 0 ? items.slice(hidden) : items);
   // A window-only owner keeps publishing streaming/paged snapshots. Search those
@@ -188,11 +193,27 @@
   const shown = $derived<TimelineViewItem[]>(
     searching ? (matches[currentMatch] ? [{ type: 'block', block: matches[currentMatch] }] : []) : visible,
   );
-  // A turn's groups stay shown when the page window cut its control off.
-  const turnControls = $derived(new Set(visible.flatMap(item => (item.type === 'turn-process' ? [item.id] : []))));
-  const folded = (turnId: string | undefined): boolean => turnId !== undefined && turnControls.has(turnId) && !openState[turnId];
-  // A turn's control takes the time of its first block, like the first group it folds.
-  const itemTime = (item: TimelineViewItem): number => timeOf(item.type === 'block' ? item.block.createdAt : item.blocks[0]?.createdAt);
+  // The chat's last answer keeps its actions in view; every other message shows them on hover or focus.
+  const latestAnswer = $derived.by(() => {
+    if (searching) return undefined;
+    for (let index = visible.length - 1; index >= 0; index -= 1) {
+      const item = visible[index]!;
+      if (item.type === 'block') return item.block.kind === 'assistant' ? item.block.id : undefined;
+    }
+    return undefined;
+  });
+  // The agent works and has shown nothing yet for the last message: say so instead of leaving a gap.
+  const awaiting = $derived.by(() => {
+    if (running !== true || printMode || searching) return false;
+    const last = visible[visible.length - 1];
+    return last?.type === 'block' && last.block.kind === 'user' && last.block.status !== 'streaming';
+  });
+  // A process takes the time of the first thing it folds.
+  const itemTime = (item: TimelineViewItem): number => {
+    if (item.type === 'block') return timeOf(item.block.createdAt);
+    const first = item.parts[0];
+    return timeOf(first === undefined ? undefined : first.type === 'block' ? first.block.createdAt : first.blocks[0]?.createdAt);
+  };
   // Runs before the first shown message wait until earlier messages are shown.
   const placed = $derived.by(() => {
     if (searching || !insert) return [];
@@ -423,7 +444,7 @@
 {#snippet messageFooter(block: TimelineBlock)}
   {@const controls = controlsByBlock.get(block.id)}
   {#if controls && !printMode}
-    <div class="message-footer" class:message-footer--user={block.kind === 'user'}>
+    <div class="message-footer" class:message-footer--user={block.kind === 'user'} class:message-footer--latest={block.id === latestAnswer}>
       {#key controls.id}
       <MessageControls {controls} createdAt={block.createdAt} available={!!onMessageAction}
         busyActions={busyMessageActions} error={messageActionErrors[JSON.stringify(controls.id)] ?? ''} onAction={onMessageAction} />
@@ -486,18 +507,8 @@
         {@const item = row.item}
         {#if item.type === 'turn-process'}
           <div class="item item--turn">
-            <TurnProcessView {item} {language} open={openState[item.id] ?? false} onToggle={(open) => setOpen(item.id, open)} />
+            <TurnProcessView {item} {language} open={openState[item.id] ?? item.attention === true} onToggle={(open) => setOpen(item.id, open)} {openState} onOpenChange={setOpen} />
           </div>
-        {:else if item.type === 'activity-group'}
-          {#if !folded(item.turnId)}
-            <div class="item">
-              <ActivityGroupView group={item} {language} {openState} onOpenChange={setOpen} />
-              {#each item.blocks as block (block.id)}
-                {@render attachmentList(attachmentsByBlock.get(block.id) ?? [])}
-                {@render messageFooter(block)}
-              {/each}
-            </div>
-          {/if}
         {:else}
           {@const block = item.block}
           {@const appearance = appearanceByBlock.get(block.id)}
@@ -593,6 +604,13 @@
         {/if}
         {/if}
       {/each}
+
+      {#if awaiting}
+        <div class="item item--awaiting" role="status">
+          <Spinner size={12} />
+          <span>{activityLive([], language).label}</span>
+        </div>
+      {/if}
     </div>
   </div>
 
@@ -625,9 +643,15 @@
   .literal { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
   .message-author { color: var(--piui-text-muted); font-size: var(--piui-text-sm); font-weight: 600; margin-bottom: var(--piui-space-2); }
   .message-note { color: var(--piui-text-muted); font-size: var(--piui-text-xs); }
-  .message-footer { margin-bottom: var(--piui-space-3); }
+  .message-footer { margin-bottom: var(--piui-space-2); }
   .message-footer--user { display: flex; flex-direction: column; align-items: flex-end; }
-  .item--controls > .user, .item--controls > .assistant { margin-bottom: var(--piui-space-1); }
+  /* The time and actions of a message stay out of the way until the reader reaches for it; the last answer keeps them in view. */
+  .message-footer :global(.message-controls) { opacity: 0; transition: opacity var(--piui-duration-fast) var(--piui-ease-out); }
+  .item:hover .message-footer :global(.message-controls),
+  .item:focus-within .message-footer :global(.message-controls),
+  .message-footer--latest :global(.message-controls) { opacity: 1; }
+  @media (hover: none) { .message-footer :global(.message-controls) { opacity: 1; } }
+  .item--controls > .user, .item--controls > .assistant { margin-bottom: 2px; }
   .attachments { display: flex; flex-wrap: wrap; gap: var(--piui-space-2); padding: 0; margin: 0 0 var(--piui-space-2); list-style: none; }
   .transcript {
     position: relative;
@@ -693,6 +717,18 @@
   .item--turn {
     contain-intrinsic-size: auto 32px;
   }
+  .item--awaiting {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 28px;
+    margin: 0 0 var(--piui-space-3);
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-md);
+  }
+  .item--awaiting :global(.spinner) {
+    color: var(--piui-accent);
+  }
   .handed {
     width: fit-content;
     max-width: min(80%, var(--piui-chat-reading-width));
@@ -715,8 +751,8 @@
     width: fit-content;
     max-width: min(80%, var(--piui-chat-reading-width));
     margin: 0 0 var(--piui-space-6) auto;
-    padding: 10px 14px;
-    border-radius: 14px;
+    padding: 10px 16px;
+    border-radius: 18px;
     background: var(--piui-user-surface);
   }
   .user--pending {
