@@ -763,7 +763,6 @@
         <!-- Attachments, dictation and pipelines need this computer's files, microphone and library: not offered to a remote browser. -->
         {#if !remoteMode}
           <AttachButton images={imageState} busy={attachments.busy} disabled={busy || Boolean(pipelineId)} onPick={() => void attachments.pick(workspaceId, imageState)} />
-          <DictateButton onText={dictated} scope={`chat:${sessionId}`} disabled={busy || safeMode} />
           <ExecutorPicker
             {workspaceId}
             value={executor}
@@ -786,8 +785,8 @@
             label={$t('Send mode')}
             bind:value={() => mode, (value) => { chosenMode = value === 'follow-up' ? 'follow-up' : 'steer'; }}
             options={[
-              { value: 'steer', label: $t('Steer'), title: $t('Redirect the running turn now') },
-              { value: 'follow-up', label: $t('Follow up'), title: $t('Send after the current turn finishes') },
+              { value: 'steer', label: $t('Right away'), title: $t('Right away: the agent reads this message at its next step, while it is still working') },
+              { value: 'follow-up', label: $t('After this turn'), title: $t('After this turn: the message waits in the queue and is sent when the agent finishes') },
             ]}
           />
         {/if}
@@ -797,6 +796,9 @@
           <IconButton data-nano-composer="action" label={interruptBusy || stopping ? $t('Stopping…') : $t('Stop turn')} shortcut="Mod+." variant="subtle" disabled={interruptBusy || stopping} onclick={() => void interrupt()}>
             <Square />
           </IconButton>
+        {/if}
+        {#if !remoteMode}
+          <DictateButton onText={dictated} onSend={() => void send()} scope={`chat:${sessionId}`} disabled={busy || safeMode} />
         {/if}
         <button
           type="button"

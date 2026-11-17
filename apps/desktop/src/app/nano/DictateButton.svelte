@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onDestroy, untrack } from 'svelte';
+  import { onDestroy, tick, untrack } from 'svelte';
+  import ArrowUp from '@lucide/svelte/icons/arrow-up';
   import Mic from '@lucide/svelte/icons/mic';
   import Square from '@lucide/svelte/icons/square';
   import { t } from '../../features/locale/language';
@@ -15,6 +16,8 @@
   interface Props {
     /** Receives the recognized words; the composer puts them at its caret. */
     onText: (text: string) => void;
+    /** Sends the composer after a recording that was stopped with "stop and send" has been turned into text. */
+    onSend?: () => void;
     /** The composer this button belongs to: `chat:<sessionId>` or `new:<workspaceId or "personal">`. One unsent recording is kept per scope. */
     scope: string;
     /** The composer cannot take input now (safe mode, sending). */
@@ -28,6 +31,7 @@
   }
   let {
     onText,
+    onSend = undefined,
     scope,
     disabled = false,
     client = nanoAccountHost,
@@ -37,6 +41,9 @@
     pending = dictationPending,
   }: Props = $props();
 
+  // Set by "stop and send"; cleared when the text arrives or the recording ends without text.
+  let sendAfter = false;
+
   const dictation = untrack(
     () =>
       new Dictation(
@@ -44,7 +51,13 @@
         dictationTransport(source, client, provider),
         {
           maxBytes: () => source.maxBytes,
-          onText: (text) => onText(text),
+          onText: (text) => {
+            const send = sendAfter;
+            sendAfter = false;
+            onText(text);
+            // The words are in the draft after a tick; then the message goes out.
+            if (send && onSend) void tick().then(() => onSend());
+          },
           errorCopy: dictationErrorCopy,
           scope: () => scope,
           pending,
@@ -60,6 +73,15 @@
   const status = $derived(
     recording ? $t('Recording {0}', [dictationClockWithLimit(dictation.elapsedMs)]) : dictation.phase === 'sending' ? $t('Transcribing…') : '',
   );
+
+  $effect(() => {
+    if (dictation.phase === 'idle') untrack(() => void (sendAfter = false));
+  });
+
+  function stopAndSend(): void {
+    sendAfter = true;
+    dictation.stop();
+  }
 
   // A failure is told once, then forgotten with the toast.
   $effect(() => {
@@ -122,6 +144,15 @@
       </button>
     {/snippet}
   </Tooltip>
+  {#if recording && onSend}
+    <Tooltip content={$t('Stop dictation and send')}>
+      {#snippet trigger(props)}
+        <button {...props} type="button" class="dictate dictate--send" aria-label={$t('Stop dictation and send')} disabled={disabled} onclick={stopAndSend}>
+          <ArrowUp size={16} />
+        </button>
+      {/snippet}
+    </Tooltip>
+  {/if}
   <span class="visually-hidden" role="status">{status}</span>
 {/if}
 
@@ -163,6 +194,14 @@
     color: var(--piui-decoration-primary);
     box-shadow: 0 0 10px var(--piui-decoration-glow);
     animation: dictate-pulse 1.4s ease-in-out infinite;
+  }
+  .dictate--send {
+    background: var(--piui-action);
+    color: var(--piui-action-ink);
+  }
+  .dictate--send:hover:not(:disabled) {
+    background: var(--piui-action-hover);
+    color: var(--piui-action-ink);
   }
   .dictate__clock {
     font-family: var(--piui-font-mono);

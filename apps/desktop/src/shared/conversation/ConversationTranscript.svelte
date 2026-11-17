@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { isServiceJson } from './serviceJson';
   import { onDestroy, tick, untrack, type Snippet } from 'svelte';
   import Route from '@lucide/svelte/icons/route';
   import ArrowDown from '@lucide/svelte/icons/arrow-down';
@@ -533,7 +534,12 @@
               {#if block.status === 'streaming'}<p class="user-pending">{$t('The agent reads this at its next step')}</p>{/if}
             {:else if block.kind === 'assistant'}
               <article class="assistant" class:assistant--end={turnEnds.has(block.id)} class:assistant--failed={block.status === 'failed'} class:assistant--stopped={block.status === 'interrupted'}>
-                {#if block.text}
+                {#if block.text && !printMode && isServiceJson(block.text, block.status === 'streaming')}
+                  <details class="service-data">
+                    <summary>{$t('Service data')}</summary>
+                    <pre>{block.text}</pre>
+                  </details>
+                {:else if block.text}
                   <div class="message-markdown" use:decorate={block}>
                     {#if appearance?.literal}<p class="literal">{block.text}</p>{:else}<MarkdownContent source={fullAnswers[block.id] ?? block.text} rich={richMarkdown ?? !!decorator} widgets={!!decorator} {printMode} />{/if}
                   </div>
@@ -596,6 +602,21 @@
 </div>
 
 <style>
+  .service-data {
+    color: var(--piui-text-disabled);
+    font-size: var(--piui-text-xs);
+  }
+  .service-data summary {
+    cursor: pointer;
+  }
+  .service-data pre {
+    max-height: 200px;
+    margin: 4px 0 0;
+    overflow: auto;
+    font-family: var(--piui-font-mono);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
   .message-header-host:global([data-active='true']) + .message-author { display: none; }
   .transcript--print, .transcript--print .scroller { display: block; height: auto; overflow: visible; }
   .transcript--print .item { content-visibility: visible; contain-intrinsic-size: none; }

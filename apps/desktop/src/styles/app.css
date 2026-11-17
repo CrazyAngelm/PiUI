@@ -97,6 +97,20 @@ button {
   }
 }
 
+/* A spinner is a status, not decoration: reduced motion slows it down instead of freezing it,
+   so "Thinking…" never looks hung (the blanket rules above would stop it on its first frame). */
+:root[data-reduced-motion="reduce"] .spinner {
+  animation-duration: 2400ms !important;
+  animation-iteration-count: infinite !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-reduced-motion="system"] .spinner {
+    animation-duration: 2400ms !important;
+    animation-iteration-count: infinite !important;
+  }
+}
+
 /* Native-density chrome; conversation type remains independently adjustable. */
 * { scrollbar-width: thin; scrollbar-color: var(--piui-border) transparent; }
 ::selection { background: var(--piui-accent-soft); color: var(--piui-text); }

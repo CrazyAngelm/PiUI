@@ -135,7 +135,10 @@ export function activityLine(block: TimelineBlock): string {
   const first = (block.text ?? '').split('\n', 1)[0] ?? '';
   const line = block.title
     ?? (first.startsWith('Command: ') ? first.slice('Command: '.length) : first.startsWith('$ ') ? first.slice(2) : undefined);
-  return (line?.trim() || block.label || block.toolName || 'Tool').slice(0, 160);
+  const text = line?.trim() || block.label || block.toolName || 'Tool';
+  // A generic tool's title can carry its arguments ("agent_join: id: 1, timeoutMs: 120000"): the row names the tool only.
+  const named = toolKind(block) === 'command' ? undefined : /^([\w.-]+):\s+[\w.-]+:\s/.exec(text);
+  return (named?.[1] ?? text).slice(0, 160);
 }
 
 /** State of a group of tool calls, from the calls themselves. */

@@ -1088,11 +1088,6 @@
       {#if !remoteMode}
         <AttachButton images={imageState} busy={attachments.busy} disabled={busy || store.safeMode || !workspaceId || (usesPipeline && !fusionMode)} onPick={pick} />
       {/if}
-      {#if dictationSource.available && !remoteMode}
-        {#await loadDictate() then { default: DictateButton }}
-          <DictateButton onText={dictated} scope={dictationScope} disabled={busy || store.safeMode} />
-        {/await}
-      {/if}
       {#if !fusionMode}
       {#if lazyPipelines.code}
         {@const ExecutorPicker = lazyPipelines.code.ExecutorPicker}
@@ -1165,9 +1160,16 @@
         }}
       />
     </div>
-    <button type="button" data-nano-composer="send" onclick={() => void send()} disabled={!canSend} aria-label={$t('Start chat')}>
-      {#if busy}<Spinner size={14} />{:else}<ArrowUp size={16} />{/if}
-    </button>
+    <div class="actions">
+      {#if dictationSource.available && !remoteMode}
+        {#await loadDictate() then { default: DictateButton }}
+          <DictateButton onText={dictated} onSend={() => void send()} scope={dictationScope} disabled={busy || store.safeMode} />
+        {/await}
+      {/if}
+      <button type="button" data-nano-composer="send" onclick={() => void send()} disabled={!canSend} aria-label={$t('Start chat')}>
+        {#if busy}<Spinner size={14} />{:else}<ArrowUp size={16} />{/if}
+      </button>
+    </div>
   </div>
   {#if htmlDragging || composerDropTargets.dragging}
     <div class="composer__drop" aria-hidden="true">{$t('Drop images or files to attach')}</div>
@@ -1241,6 +1243,12 @@
     color: var(--piui-text);
     font-size: var(--piui-text-sm);
     pointer-events: none;
+  }
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: none;
   }
   .chips {
     display: flex;
