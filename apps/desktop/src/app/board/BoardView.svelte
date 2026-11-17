@@ -7,7 +7,7 @@
   import Link from '@lucide/svelte/icons/link';
   import UsersRound from '@lucide/svelte/icons/users-round';
   import { t } from '../../features/locale/language';
-  import { Button, EmptyState, IconButton, Input, Skeleton, StatusDot, toasts } from '../../lib/ui';
+  import { Badge, Button, EmptyState, IconButton, Input, Skeleton, StatusDot, toasts } from '../../lib/ui';
   import type { CardStatusV1, CardV1 } from '../../host-api/boardClient';
   import { useWorkspace } from '../shell/context';
   import { errorMessage } from '../workspaceStore.svelte';
@@ -17,6 +17,7 @@
   import { boardIntents } from './intents.svelte';
   import { COLLAPSIBLE, columnsOf, hasLiveRun, linkCount, orderAt, PRIORITY_LABEL, STATUS_LABEL, type BoardFilter } from './boardModel';
   import { boardKey, clampFocus, focusOf, type BoardFocus, type KeyColumn } from './boardKeyboard';
+  import { remoteMode } from '../nano/remoteMode';
   import BoardSettings from './BoardSettings.svelte';
   import CardDrawer from './CardDrawer.svelte';
 
@@ -68,7 +69,7 @@
   const filtered = $derived(filter.text.trim() !== '' || filter.teammate !== '');
 
   $effect(() => {
-    if (board.enabled && boardIntents.newCard === workspaceId) untrack(() => {
+    if (!remoteMode && board.enabled && boardIntents.newCard === workspaceId) untrack(() => {
       if (boardIntents.takeNewCard(workspaceId)) void startNewCard('todo');
     });
   });
@@ -101,7 +102,7 @@
   }
 
   async function move(card: CardV1, to: CardStatusV1, order: number | undefined = undefined): Promise<void> {
-    if (card.status === to && order === undefined) return;
+    if (remoteMode || store.safeMode || (card.status === to && order === undefined)) return;
     if (COLLAPSIBLE.has(to) && !expanded.includes(to)) expanded = [...expanded, to];
     const label = statusText(to);
     announce($t('Moved #{0} to {1}', [card.number, label]));
@@ -115,6 +116,7 @@
   }
 
   async function startNewCard(status: CardStatusV1): Promise<void> {
+    if (remoteMode || store.safeMode) return;
     newCardStatus = status;
     newCardTitle = '';
     await tick();
@@ -261,6 +263,7 @@
     <div class="head__title">
       <KanbanSquare size={18} aria-hidden="true" />
       <h1 id="board-title">{$t('Board')}</h1>
+      {#if remoteMode}<Badge>{$t('Read-only')}</Badge>{/if}
       {#if workspace}<span class="head__project">{workspace.name}</span>{/if}
     </div>
     {#if board.enabled}
@@ -285,11 +288,13 @@
           {/each}
         </select>
         <IconButton label={$t('Team')} onclick={() => store.navigate({ name: 'team', workspaceId })}><UsersRound size={16} /></IconButton>
-        <BoardSettings {board} />
-        <Button size="sm" variant="primary" onclick={() => void startNewCard('todo')} disabled={store.safeMode} title={$t('New card (N)')}>
-          {#snippet leading()}<Plus size={14} />{/snippet}
-          {$t('New card')}
-        </Button>
+        {#if !remoteMode}
+          <BoardSettings {board} />
+          <Button size="sm" variant="primary" onclick={() => void startNewCard('todo')} disabled={store.safeMode} title={$t('New card (N)')}>
+            {#snippet leading()}<Plus size={14} />{/snippet}
+            {$t('New card')}
+          </Button>
+        {/if}
       </div>
     {/if}
   </header>
@@ -305,15 +310,17 @@
       <EmptyState
         icon={KanbanSquare}
         title={$t('Plan work on a board')}
-        description={$t('Cards are durable intent for you and every agent of this project. Hand a card to a teammate, and agents in chats keep it up to date.')}
+        description={remoteMode ? $t('Enable the board on your computer to see its cards here.') : $t('Cards are durable intent for you and every agent of this project. Hand a card to a teammate, and agents in chats keep it up to date.')}
       >
         {#snippet actions()}
-          <Button variant="primary" onclick={() => void enable()} disabled={store.safeMode}>{$t('Enable board')}</Button>
+          {#if !remoteMode}
+            <Button variant="primary" onclick={() => void enable()} disabled={store.safeMode}>{$t('Enable board')}</Button>
+          {/if}
         {/snippet}
       </EmptyState>
     </div>
   {:else}
-    <p id="board-keys" class="visually-hidden">{$t('Arrows move between cards, Shift+Left or Right moves a card, Enter opens it, N adds a card and / filters.')}</p>
+    <p id="board-keys" class="visually-hidden">{remoteMode ? $t('Use the arrow keys to browse cards, Enter to open and / to filter.') : $t('Arrows move between cards, Shift+Left or Right moves a card, Enter opens it, N adds a card and / filters.')}</p>
     <div class="columns" role="group" aria-labelledby="board-title" aria-describedby="board-keys" bind:this={columnsElement}>
       {#each columns as column (column.status)}
         {@const collapsible = COLLAPSIBLE.has(column.status)}
@@ -332,7 +339,7 @@
             <span class="column__count" aria-label={filtered ? $t('{0} of {1} cards shown', [column.cards.length, column.total]) : $t('{0} cards', [column.total])}>
               {filtered ? `${column.cards.length}/${column.total}` : column.total}
             </span>
-            {#if !collapsed}
+            {#if !collapsed && !remoteMode}
               <button type="button" class="column__add" aria-label={$t('Add a card to {0}', [statusText(column.status)])} onclick={() => void startNewCard(column.status)} disabled={store.safeMode}>
                 <Plus size={13} />
               </button>
@@ -384,7 +391,7 @@
                   data-card-id={card.id}
                   data-priority={card.priority}
                   tabindex={tabStop === card.id ? 0 : -1}
-                  draggable={!store.safeMode}
+                  draggable={!remoteMode && !store.safeMode}
                   aria-label={`#${card.number} ${card.title}`}
                   aria-describedby={`tile-meta-${card.id}`}
                   onfocus={() => (focus = focusOf(keyColumns, card.id) ?? focus)}
@@ -471,6 +478,7 @@
     font-weight: var(--piui-weight-semibold);
   }
   .head__project {
+    overflow-wrap: anywhere;
     color: var(--piui-text-muted);
     font-size: var(--piui-text-sm);
   }
@@ -718,5 +726,18 @@
   }
   .links {
     background: transparent;
+  }
+  @media (max-width: 600px) {
+    .head { padding: var(--piui-space-3); }
+    .head__tools { width: 100%; }
+    .filter { flex: 1 1 9rem; min-width: 0; }
+    .select { max-width: 100%; }
+    .columns {
+      grid-auto-columns: min(85%, 21rem);
+      padding: 0 var(--piui-space-3) var(--piui-space-3);
+      scroll-snap-type: x proximity;
+    }
+    .column { scroll-snap-align: center; }
+    .tile { min-height: 44px; }
   }
 </style>

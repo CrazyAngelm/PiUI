@@ -26,6 +26,10 @@ interface Registration {
 }
 
 let link: RemoteLink | undefined;
+
+export function hostSupports(...commands: string[]): boolean {
+  return commands.every((command) => link?.commands.includes(command));
+}
 let unsubscribe: (() => void) | undefined;
 const registrations = new Map<string, Set<Registration>>();
 

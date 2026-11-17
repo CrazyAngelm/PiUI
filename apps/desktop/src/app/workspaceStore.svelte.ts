@@ -47,7 +47,7 @@ import {
 import { rememberHarnessNames } from './harnessMeta';
 import { newChatPlacement, type PlacementRequest } from './worktrees/newChatPlacement.svelte';
 import { placementRequest, placements } from './worktrees/placements.svelte';
-import { REMOTE_UNAVAILABLE_COPY, remoteMode } from './nano/remoteMode';
+import { REMOTE_UNAVAILABLE_COPY, remoteMode, routeAvailable } from './nano/remoteMode';
 
 export type PipelineSection = 'systems' | 'runs' | 'schedules' | 'agents' | 'teams' | 'pipelines';
 export type SettingsSection = 'general' | 'nano' | 'harnesses' | 'extensions' | 'projects' | 'worktrees' | 'background' | 'notifications' | 'macros' | 'dictation' | 'shortcuts' | 'about' | 'plugins';
@@ -126,9 +126,8 @@ function writeJson(key: string, value: unknown): void {
  * screens call host commands the remote allowlist refuses, so they land on home.
  * On the desktop nothing changes.
  */
-const REMOTE_BLOCKED_ROUTES: readonly Route['name'][] = ['pipelines', 'settings', 'board', 'team'];
 function allowedRoute(route: Route): Route {
-  return remoteMode && REMOTE_BLOCKED_ROUTES.includes(route.name) ? { name: 'home' } : route;
+  return routeAvailable(route) ? route : { name: 'home' };
 }
 
 /** The refusal of an action this window may not take (remote mode only); it reads as ordinary failure text. */

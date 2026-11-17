@@ -14,7 +14,8 @@
   display: grid;
   gap: var(--piui-space-4);
   justify-items: center;
-  width: min(100%, 26rem);
+  width: min(100%, 28rem);
+  box-shadow: var(--piui-shadow-1);
   padding: var(--piui-space-8) var(--piui-space-6);
   border: 1px solid var(--piui-border-subtle);
   border-radius: var(--piui-radius-lg);
@@ -22,6 +23,11 @@
   text-align: center;
 }
 
+.gate__icon {
+  display: grid; place-items: center; width: 48px; height: 48px;
+  margin-bottom: var(--piui-space-2); border-radius: var(--piui-radius-lg);
+  color: var(--piui-accent); background: var(--piui-selected);
+}
 .gate__state {
   display: grid;
   gap: var(--piui-space-2);
@@ -48,8 +54,9 @@
 }
 
 .gate__device {
-  color: var(--piui-text);
-  font-weight: 500;
+  display: inline-flex; align-items: center; gap: var(--piui-space-2);
+  padding: var(--piui-space-1) var(--piui-space-3); border-radius: var(--piui-radius-full);
+  background: var(--piui-bg-raised); color: var(--piui-text); font-weight: 500;
 }
 
 .gate__note {
@@ -58,7 +65,9 @@
 
 .gate__code {
   margin: 0;
-  font-family: var(--piui-font-mono);
+  width: 100%; padding: var(--piui-space-3);
+  border-block: 1px solid var(--piui-border-subtle); background: var(--piui-bg-raised);
+  color: var(--piui-text); font-family: var(--piui-font-mono);
   font-size: clamp(2rem, 14vw, 3rem);
   font-weight: 600;
   letter-spacing: 0.08em;

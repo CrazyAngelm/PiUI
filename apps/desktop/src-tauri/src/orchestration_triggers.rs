@@ -438,6 +438,9 @@ fn finished_firings(
     outcome: FinishedOutcome,
     wall: DateTime<Utc>,
 ) -> Vec<EventFiring> {
+    if crate::orchestration_api::paired_browser_run(run.id()) {
+        return Vec::new();
+    }
     let Some(source) = run.definition().launch_command.as_ref() else {
         return Vec::new();
     };

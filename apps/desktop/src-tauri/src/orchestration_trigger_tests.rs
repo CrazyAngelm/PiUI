@@ -200,6 +200,42 @@ fn last_outcome(schedule: &ScheduleSnapshot) -> ScheduleOccurrenceOutcome {
 }
 
 #[test]
+fn paired_browser_run_cannot_activate_a_later_completion_rule() {
+    let fixture = Fixture::new();
+    let run = fixture.start("remote", "build");
+    assert!(crate::board_sessions::local_board_run(Some(&run)));
+    assert!(!crate::board_sessions::local_board_run(None));
+    let remote = fixture
+        .state
+        .create_scoped_run(
+            StartRunRequest {
+                workspace_id: WORKSPACE.into(),
+                run_id: "remote".into(),
+                team_id: "build-team".into(),
+                pipeline_id: "build-pipeline".into(),
+                launch_command_id: Some("build".into()),
+                inputs: BTreeMap::new(),
+                use_pinned_data: false,
+            },
+            None,
+            crate::orchestration_api::WorkbenchCaller::PairedBrowser,
+        )
+        .unwrap();
+    assert!(!crate::board_sessions::local_board_run(Some(&remote)));
+    fixture.automation(
+        "after-build",
+        "deploy",
+        run_finished("build", &[FinishedOutcome::Succeeded]),
+    );
+    let snapshot = fixture.snapshot();
+    let workspace = snapshot.workspace(WORKSPACE).unwrap();
+    assert!(
+        super::finished_firings(workspace, &remote, FinishedOutcome::Succeeded, Utc::now())
+            .is_empty()
+    );
+}
+
+#[test]
 fn a_finished_run_fires_only_matching_rules_once_with_its_identity() {
     let fixture = Fixture::new();
     let enabled = fixture.automation(

@@ -17,6 +17,7 @@ vi.mock('../../host-api/transport', () => {
   return {
     desktopAvailable: false,
     hostRemote: true,
+    hostSupports: () => false,
     hostInvoke: async (command: string, args?: Record<string, unknown>) => {
       seen.commands.push(command);
       return (await lab()).invoke(command, args);
@@ -28,6 +29,8 @@ vi.mock('../../host-api/transport', () => {
   };
 });
 
+// Warm the real Lab host module during collection, independently of a single action's test timeout.
+await import('../../host-api/lab/labHost');
 const { boards } = await import('../board/boardStore.svelte');
 const { chatPipelines } = await import('../chatPipelines/chatPipelines.svelte');
 const { fusionMembership } = await import('../fusion/fusionMembership.svelte');
@@ -82,6 +85,35 @@ afterEach(() => {
 });
 
 describe('the shell in a remote browser', () => {
+  it('explains why a draft cannot be saved and sends no command for it', async () => {
+    const { PipelineEditorStore } = await import('../pipelines/editorStore.svelte');
+    const { emptyGraph, newGraphNode } = await import('../../features/orchestration/agentGraph');
+    const editor = new PipelineEditorStore('workspace', false);
+    const node = newGraphNode(0);
+    node.profile = { ...node.profile, networkAccess: true };
+    editor.graph = { ...emptyGraph(), nodes: [node] };
+    expect(await editor.save()).toBe(false);
+    expect(editor.errors).toEqual(['Browser pipelines need read-only agents without network access, enabled resources, tool grants or delegation.']);
+    expect(seen.commands).toEqual([]);
+  });
+
+  it('allows run controls only for browser starts with eligible team members and matching launch definitions', async () => {
+    const { remoteRunSupported, remoteHarnessSupported } = await import('../pipelines/remotePolicy');
+    const { compileGraph, emptyGraph, newGraphNode } = await import('../../features/orchestration/agentGraph');
+    const { pipeline, team, command, profiles } = compileGraph({ ...emptyGraph(), nodes: [newGraphNode(0)] });
+    const member = profiles[0]!;
+    const other = { ...member, id: 'unrelated', permissionMode: 'full-access' as const };
+    const definition = { team, pipeline, launchCommand: command, profiles: [other, member] };
+    expect(remoteRunSupported({ pairedBrowser: true, definition })).toBe(true);
+    expect(remoteRunSupported({ definition })).toBe(false);
+    expect(remoteRunSupported({ pairedBrowser: true, definition: { ...definition, profiles: [other] } })).toBe(false);
+    expect(remoteRunSupported({ pairedBrowser: true, definition: { ...definition, profiles: [{ ...other, id: member.id }] } })).toBe(false);
+    expect(remoteRunSupported({ pairedBrowser: true, definition: { ...definition, launchCommand: { ...command, pipelineId: 'other' } } })).toBe(false);
+    expect(remoteHarnessSupported('hermes')).toBe(false);
+    expect(remoteHarnessSupported('prime-agent')).toBe(false);
+    expect(remoteHarnessSupported('codex')).toBe(true);
+  });
+
   it('is told it runs remotely', () => {
     expect(remoteMode).toBe(true);
   });

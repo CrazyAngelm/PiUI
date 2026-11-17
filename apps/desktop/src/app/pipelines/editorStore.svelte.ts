@@ -5,6 +5,8 @@
  * previous editor: connection checks, structural issues, native catalog
  * preflight and the host's atomic save.
  */
+import { hostSupports, remoteMode } from '../nano/remoteMode';
+import { remoteDefinitionSupported, remoteGraphIssue, remoteGraphSupported } from './remotePolicy';
 import { cachedHarnessModels, catalogSettled, harnessModels } from '../../host-api/harnessModels';
 import { nanoAccount } from '../nano/nanoAccount.svelte';
 import {
@@ -17,6 +19,7 @@ import {
   type PipelineInput,
   type PipelineOutput,
   type RunInputValue,
+  type RunDefinitionSnapshot,
 } from '../../host-api/orchestrationClient';
 import { MAX_PIPELINE_OUTPUTS, SUBPIPELINE_ISSUES, outputFields, parseIssue, referencedCommands, resolvePipelineName, type SubpipelineInfo } from '../../host-api/subpipelines';
 import type { HarnessModelsResult } from '../../../../../contracts/harness-models-v18';
@@ -99,6 +102,14 @@ export class PipelineEditorStore {
   /** The project's launch commands were read at least once. */
   systemsLoaded = $state(false);
 
+  /** Eligibility of the original graph. A draft cannot turn a protected definition into an editable one. */
+  remoteEditable = $state(true);
+  sourceDefinition = $state.raw<RunDefinitionSnapshot | undefined>();
+
+  get remoteRunnable(): boolean {
+    return this.sourceDefinition ? remoteDefinitionSupported(this.sourceDefinition) : this.remoteEditable;
+  }
+
   private revisions: Revisions = new Map();
   private history = new GraphHistory(this.graph);
   private pendingRunId: string | undefined;
@@ -129,7 +140,7 @@ export class PipelineEditorStore {
   }
 
   get readOnly(): boolean {
-    return this.safeMode || this.busy;
+    return this.safeMode || this.busy || (remoteMode && (!hostSupports('orchestration_save_graph_v6') || !this.remoteEditable));
   }
 
   // ---- document ------------------------------------------------------------
@@ -219,9 +230,11 @@ export class PipelineEditorStore {
     await action?.();
   }
 
-  private load(graph: AgentGraph, revisions: Revisions): void {
+  private load(graph: AgentGraph, revisions: Revisions, sourceDefinition?: RunDefinitionSnapshot): void {
     const settled = withBlockPositions(graph);
     this.graph = settled;
+    this.sourceDefinition = sourceDefinition;
+    this.remoteEditable = !remoteMode || (!sourceDefinition && remoteGraphSupported(settled));
     this.baseline = JSON.stringify(settled);
     this.revisions = revisions;
     this.history.reset(settled);
@@ -302,11 +315,11 @@ export class PipelineEditorStore {
       this.busy = true;
       this.operation = 'open';
       try {
-        const opened = await openGraph(this.client, this.workspaceId, id);
+        const opened = await openGraph(this.client, this.workspaceId, id, remoteMode);
         if (generation !== this.openGeneration) return;
         // Lay out graphs that have no canvas positions yet, before the baseline,
         // so opening one never reports unsaved changes.
-        this.load(opened.needsLayout ? autoLayout(opened.graph) : opened.graph, opened.revisions);
+        this.load(opened.needsLayout ? autoLayout(opened.graph) : opened.graph, opened.revisions, opened.sourceDefinition);
         rememberLastPipeline(this.workspaceId, this.graph.id);
       } catch (error) {
         if (generation === this.openGeneration) this.errors = [message(error)];
@@ -743,19 +756,32 @@ export class PipelineEditorStore {
 
   /** `usePinnedData` (v6.4): a run started from here admits pinned steps from their pinned data. */
   async save(run = false, inputs: Readonly<Record<string, RunInputValue>> | undefined = undefined, usePinnedData = false): Promise<boolean> {
-    if (this.readOnly) return false;
+    // Starting a saved remote pipeline uses its stored definition without rewriting it.
+    const launchStored = remoteMode && run && !this.dirty && this.systems.some((item) => item.id === this.graph.id);
+    if (this.safeMode || this.busy) return false;
+    const launchPreview = launchStored && !!this.sourceDefinition && this.remoteRunnable;
+    if (remoteMode && !launchPreview) {
+      const reason = remoteGraphIssue(this.graph) ?? (!this.remoteEditable ? 'Open the desktop app to change this pipeline.' : undefined);
+      if (reason) {
+        this.errors = [reason];
+        return false;
+      }
+    }
+    if ((!launchStored && this.readOnly) || (run && !hostSupports('orchestration_start_run_v6'))) return false;
     this.validationShown = true;
     this.errors = [];
-    this.issues = this.structuralIssues();
+    this.issues = launchPreview ? [] : this.structuralIssues();
     if (this.issues.length) return false;
     this.busy = true;
     this.operation = run ? 'run' : 'save';
     try {
-      if (run && !(await this.check())) return false;
-      this.revisions = await saveGraph(this.client, this.workspaceId, this.graph, this.revisions);
-      this.baseline = JSON.stringify(this.graph);
-      rememberLastPipeline(this.workspaceId, this.graph.id);
-      await this.refresh();
+      if (run && !launchPreview && !(await this.check())) return false;
+      if (!launchStored) {
+        this.revisions = await saveGraph(this.client, this.workspaceId, this.graph, this.revisions);
+        this.baseline = JSON.stringify(this.graph);
+        rememberLastPipeline(this.workspaceId, this.graph.id);
+        await this.refresh();
+      }
       if (run) {
         this.pendingRunId ??= crypto.randomUUID();
         const outcome = await performRunAction(

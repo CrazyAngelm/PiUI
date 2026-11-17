@@ -1,4 +1,7 @@
 <script lang="ts">
+  import Monitor from '@lucide/svelte/icons/monitor';
+  import ShieldCheck from '@lucide/svelte/icons/shield-check';
+  import Unplug from '@lucide/svelte/icons/unplug';
   import { gateModel } from './gateModel.svelte';
   import { GATE_WORDS, gateText, groupCode, retryText, spokenCode } from './gateCopy';
 
@@ -24,10 +27,12 @@
 <main class="gate" aria-busy={busy}>
   <div class="gate__card">
     <div role="status" class="gate__state">
-      {#if busy}<span class="gate__spinner" aria-hidden="true"></span>{/if}
+      <div class="gate__icon" aria-hidden="true">
+        {#if busy}<span class="gate__spinner"></span>{:else if view.kind === 'approval'}<ShieldCheck size={24} />{:else}<Unplug size={24} />{/if}
+      </div>
       <h1 class="gate__title">{text.title}</h1>
       {#if view.kind === 'approval'}
-        <p class="gate__device">{view.deviceName}</p>
+        <p class="gate__device"><Monitor size={15} aria-hidden="true" />{view.deviceName}</p>
       {/if}
       {#if text.detail}
         <p class="gate__detail">{text.detail}</p>

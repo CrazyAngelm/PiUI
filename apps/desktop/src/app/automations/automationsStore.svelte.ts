@@ -11,6 +11,7 @@ import {
   type ScheduleSnapshot,
 } from '../../host-api/orchestrationClient';
 import { automationsHost, type AutomationsClient } from '../../host-api/automationsClient';
+import { remoteMode } from '../nano/remoteMode';
 import { coalesceReads } from '../../lib/coalescedReads';
 
 export class AutomationsStore {
@@ -88,8 +89,8 @@ export class AutomationsStore {
       const [schedules, catalog, automations] = await Promise.all([
         this.client.orchestration_list_schedules_v7({ workspaceId: this.workspaceId }),
         this.client.orchestration_catalog_v6({ workspaceId: this.workspaceId }),
-        // An older host without the switch reads as "not paused".
-        this.automations.state().catch(() => ({ paused: false })),
+        // Only older local hosts predate the pause switch. A paired host advertised it.
+        remoteMode ? this.automations.state() : this.automations.state().catch(() => ({ paused: false })),
       ]);
       if (generation !== this.generation) return;
       this.schedules = [...schedules].sort((left, right) => left.value.name.localeCompare(right.value.name));

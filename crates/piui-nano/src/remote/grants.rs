@@ -29,6 +29,9 @@ pub struct StoredBrowser {
     /// RFC 3339, UTC.
     pub created_at: String,
     pub last_used_at: Option<String>,
+    /// Older keys only authorized chats; the owner must approve workbench access locally.
+    #[serde(default)]
+    pub workbench: bool,
 }
 
 /// Why a store operation failed.

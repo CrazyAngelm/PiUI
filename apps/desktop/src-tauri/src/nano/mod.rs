@@ -29,8 +29,11 @@ mod provider_prompt;
 pub(crate) mod remote;
 mod remote_core;
 mod remote_dispatch;
+#[cfg(all(windows, debug_assertions, feature = "native-remote-workbench-test"))]
+pub(crate) mod remote_native_proof;
 #[cfg(test)]
 mod remote_tests;
+mod remote_workbench;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

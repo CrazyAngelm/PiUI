@@ -800,6 +800,7 @@ impl Core {
                         key: who.key_text.clone(),
                         created_at: stamp(moment.wall),
                         last_used_at: Some(stamp(moment.wall)),
+                        workbench: true,
                     })
                     .map_err(RemoteError::from)?;
                 self.pending = None;
@@ -1029,6 +1030,7 @@ impl Core {
             .store
             .as_ref()
             .and_then(|store| store.find_by_key(&key_text))
+            .filter(|browser| browser.workbench)
             .map(|browser| (browser.id.clone(), browser.label.clone()));
         if let Some((browser_id, stored_label)) = known {
             if let Some(store) = self.store.as_mut() {

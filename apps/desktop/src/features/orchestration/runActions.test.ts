@@ -1,9 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createOrchestrationClient,
   type OrchestrationCommandName, type OrchestrationRequest, type OrchestrationRunV6, type StartRunRequest,
 } from '../../host-api/orchestrationClient';
 import { performRunAction, uncertainTaskMutation } from './runActions';
+
+const environment = vi.hoisted(() => ({ paired: false }));
+vi.mock('../../host-api/transport', async (original) => ({
+  ...await original<typeof import('../../host-api/transport')>(),
+  get hostRemote() { return environment.paired; },
+}));
+afterEach(() => { environment.paired = false; });
 
 const run: OrchestrationRunV6 = {
   schemaVersion: 6, id: 'fixture-run', revision: 4, status: 'uncertain',
@@ -29,6 +36,26 @@ function testClient(handler: (route: OrchestrationCommandName, request: Orchestr
 }
 
 describe('real run action requests', () => {
+  it('validates paired starts and recovers only the persisted run identified by their retry key', async () => {
+    environment.paired = true;
+    const request = { ...start, runId: 'test-paired-start' };
+    const id = 'nano-remote-v1-90e16720e55cf14335b8ad05532bb3d0914f89f88f2a4f05ef259941efe0b22c';
+    const recorded = { ...run, id, pairedBrowser: true };
+    const action = { type: 'start' as const, request };
+    const direct = testClient(() => recorded);
+    expect(await performRunAction(direct.client, action, false)).toEqual({ type: 'recorded', run: recorded });
+    expect(direct.calls).toEqual([{ route: 'orchestration_start_run_v6', request }]);
+
+    const recovery = testClient((route) => route === 'orchestration_start_run_v6' ? { ...run, id: request.runId } : recorded);
+    expect(await performRunAction(recovery.client, action, false)).toMatchObject({ type: 'recorded', run: recorded, actionError: { code: 'conflict' } });
+    expect(recovery.calls).toEqual([
+      { route: 'orchestration_start_run_v6', request },
+      { route: 'orchestration_get_run_v6', request: { workspaceId: request.workspaceId, runId: id } },
+    ]);
+    const wrong = testClient(() => run);
+    expect(await performRunAction(wrong.client, action, false)).toMatchObject({ type: 'unconfirmed', recovery: 'unavailable' });
+  });
+
   it('shows the durable failed run when host-native preflight rejects, not a fabricated launch success', async () => {
     const failed = { ...run, revision: 5, status: 'failed' as const };
     const { client, calls } = testClient((route) => {

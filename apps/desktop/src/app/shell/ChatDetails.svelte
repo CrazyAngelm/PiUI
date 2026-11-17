@@ -11,7 +11,7 @@
   import PluginChatPanels from '../plugins/PluginChatPanels.svelte';
   import SessionActivity from '../chat/activity/SessionActivity.svelte';
   import { useWorkspace } from './context';
-  import { remoteMode } from '../nano/remoteMode';
+  import { remoteMode, pipelineSectionAvailable } from '../nano/remoteMode';
 
   interface Props {
     snapshot: SessionSnapshot;
@@ -46,7 +46,7 @@
       </dl>
     {/if}
 
-    {#if session.runId && !remoteMode}
+    {#if session.runId && pipelineSectionAvailable('runs')}
       <Button size="sm" onclick={() => store.openRun(session.workspaceId, session.runId)}>
         {#snippet leading()}<Workflow />{/snippet}
         {$t('Part of a pipeline run')}

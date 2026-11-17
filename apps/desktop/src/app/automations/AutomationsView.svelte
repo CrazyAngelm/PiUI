@@ -11,6 +11,7 @@
   import { Badge, Button, Dialog, EmptyState, IconButton, Skeleton, Switch } from '../../lib/ui';
   import { AutomationsStore } from './automationsStore.svelte';
   import { cadenceText, OUTCOME, triggerTimeZone } from './cadence';
+  import { remoteMode, pipelineSectionAvailable } from '../nano/remoteMode';
   import ScheduleDialog from './ScheduleDialog.svelte';
 
   interface Props {
@@ -36,7 +37,7 @@
   function when(iso: string | null | undefined, schedule: ScheduleSnapshot): string {
     if (!iso) return '';
     const timeZone = triggerTimeZone(schedule.value.trigger, localZone);
-    return new Date(iso).toLocaleString(locale, { timeZone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    return new Date(iso).toLocaleString(locale, { timeZone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' });
   }
 
   function cadence(schedule: ScheduleSnapshot): string {
@@ -60,27 +61,32 @@
 <section class="automations" aria-labelledby="automations-title">
   <header class="head">
     <h2 id="automations-title">{$t('Automations')}</h2>
-    <div class="head__actions">
-      {#if !automations.paused}
-        <Button variant="ghost" onclick={() => void automations.setPaused(true)} disabled={safeMode || automations.busy !== ''}>
-          {#snippet leading()}<Pause />{/snippet}
-          {$t('Pause all')}
+    {#if remoteMode}<Badge>{$t('Read-only')}</Badge>{/if}
+    {#if !remoteMode}
+      <div class="head__actions">
+        {#if !automations.paused}
+          <Button variant="ghost" onclick={() => void automations.setPaused(true)} disabled={safeMode || automations.busy !== ''}>
+            {#snippet leading()}<Pause />{/snippet}
+            {$t('Pause all')}
+          </Button>
+        {/if}
+        <Button variant="primary" onclick={() => edit(undefined)} disabled={safeMode}>
+          {#snippet leading()}<Plus />{/snippet}
+          {$t('New automation')}
         </Button>
-      {/if}
-      <Button variant="primary" onclick={() => edit(undefined)} disabled={safeMode}>
-        {#snippet leading()}<Plus />{/snippet}
-        {$t('New automation')}
-      </Button>
-    </div>
+      </div>
+    {/if}
   </header>
 
   {#if automations.paused}
     <div class="paused" role="status">
-      <span>{$t('All automations are paused. Nothing starts until you resume them.')}</span>
-      <Button size="sm" onclick={() => void automations.setPaused(false)} disabled={safeMode || automations.busy !== ''}>
-        {#snippet leading()}<Play />{/snippet}
-        {$t('Resume automations')}
-      </Button>
+      <span>{remoteMode ? $t('All automations are paused on your computer.') : $t('All automations are paused. Nothing starts until you resume them.')}</span>
+      {#if !remoteMode}
+        <Button size="sm" onclick={() => void automations.setPaused(false)} disabled={safeMode || automations.busy !== ''}>
+          {#snippet leading()}<Play />{/snippet}
+          {$t('Resume automations')}
+        </Button>
+      {/if}
     </div>
   {/if}
 
@@ -100,12 +106,12 @@
 
   {#if automations.loading && automations.schedules.length === 0}
     <div class="loading"><Skeleton lines={4} /></div>
-  {:else if automations.schedules.length === 0}
-    <EmptyState icon={AlarmClock} title={$t('No automations yet')} description={automations.launchCommands.length ? $t('Run a pipeline every morning, when another pipeline finishes or when project files change.') : $t('Save a pipeline first, then schedule it here.')}>
+  {:else if automations.schedules.length === 0 && !automations.error}
+    <EmptyState icon={AlarmClock} title={$t('No automations yet')} description={remoteMode ? $t('Schedules created on your computer appear here.') : automations.launchCommands.length ? $t('Run a pipeline every morning, when another pipeline finishes or when project files change.') : $t('Save a pipeline first, then schedule it here.')}>
       {#snippet actions()}
-        {#if automations.launchCommands.length}
+        {#if !remoteMode && automations.launchCommands.length}
           <Button variant="primary" onclick={() => edit(undefined)} disabled={safeMode}>{$t('New automation')}</Button>
-        {:else}
+        {:else if !remoteMode}
           <Button onclick={onEditPipelines}>{$t('Open editor')}</Button>
         {/if}
       {/snippet}
@@ -119,6 +125,7 @@
         <li class="card" class:card--off={!schedule.enabled}>
           <div class="card__main">
             <strong class="card__title">{schedule.value.name}</strong>
+            {#if remoteMode && !schedule.enabled}<span class="muted">{$t('Off')}</span>{/if}
             <p class="muted">
               {automations.pipelineName(schedule.value.launchCommandId) || $t('Missing pipeline')} · {cadence(schedule)}
             </p>
@@ -135,7 +142,7 @@
                   <span>
                     {$t('Last')}: {when(last.nominalAt, schedule)} ·
                     <Badge tone={outcome.tone}>{$t(outcome.label)}</Badge>
-                    {#if last.runId}
+                    {#if last.runId && pipelineSectionAvailable('runs')}
                       <button type="button" class="link" onclick={() => last.runId && onOpenRun(last.runId)}>{$t('Open run')}</button>
                     {/if}
                   </span>
@@ -143,17 +150,19 @@
               </div>
             {/if}
           </div>
-          <div class="card__actions">
-            <Switch
-              label={schedule.enabled ? $t('Turn off {0}', [schedule.value.name]) : $t('Turn on {0}', [schedule.value.name])}
-              hideLabel
-              checked={schedule.enabled}
-              disabled={safeMode || automations.busy !== ''}
-              onCheckedChange={(checked) => void automations.setEnabled(schedule, checked)}
-            />
-            <IconButton size="sm" label={$t('Edit {0}', [schedule.value.name])} disabled={safeMode} onclick={() => edit(schedule)}><Pencil /></IconButton>
-            <IconButton size="sm" label={$t('Delete {0}', [schedule.value.name])} disabled={safeMode} onclick={() => (removing = schedule)}><Trash2 /></IconButton>
-          </div>
+          {#if !remoteMode}
+            <div class="card__actions">
+              <Switch
+                label={schedule.enabled ? $t('Turn off {0}', [schedule.value.name]) : $t('Turn on {0}', [schedule.value.name])}
+                hideLabel
+                checked={schedule.enabled}
+                disabled={safeMode || automations.busy !== ''}
+                onCheckedChange={(checked) => void automations.setEnabled(schedule, checked)}
+              />
+              <IconButton size="sm" label={$t('Edit {0}', [schedule.value.name])} disabled={safeMode} onclick={() => edit(schedule)}><Pencil /></IconButton>
+              <IconButton size="sm" label={$t('Delete {0}', [schedule.value.name])} disabled={safeMode} onclick={() => (removing = schedule)}><Trash2 /></IconButton>
+            </div>
+          {/if}
         </li>
       {/each}
     </ul>
@@ -292,5 +301,12 @@
   }
   .loading {
     padding: var(--piui-space-4) 0;
+  }
+  @media (max-width: 600px) {
+    .automations { width: calc(100% - var(--piui-space-6)); padding: var(--piui-space-4) 0; }
+    .head, .card, .meta span { flex-wrap: wrap; }
+    .card__main { overflow-wrap: anywhere; }
+    .card__title { white-space: normal; }
+    .link { min-height: 44px; }
   }
 </style>

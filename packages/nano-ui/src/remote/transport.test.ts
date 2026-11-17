@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fixture from '../../../../contracts/fixtures/nano-remote-v1.json';
 import type { RemoteLink } from './connection';
 import * as transport from './transport';
-import { desktopAvailable, hostInvoke, hostListen, hostRemote, installRemoteConnection } from './transport';
+import { desktopAvailable, hostInvoke, hostListen, hostRemote, hostSupports, installRemoteConnection } from './transport';
 
 type Handler = (channel: string, payload: unknown) => void;
 
@@ -27,9 +27,13 @@ afterEach(() => installRemoteConnection(undefined));
 
 describe('module surface', () => {
   it('exports what the shell imports from the desktop transport, and the installer', () => {
-    expect(Object.keys(transport).sort()).toEqual(['desktopAvailable', 'hostInvoke', 'hostListen', 'hostRemote', 'installRemoteConnection']);
+    expect(Object.keys(transport).sort()).toEqual(['desktopAvailable', 'hostInvoke', 'hostListen', 'hostRemote', 'hostSupports', 'installRemoteConnection']);
     expect(desktopAvailable).toBe(true);
     expect(hostRemote).toBe(true);
+    expect(hostSupports('orchestration_catalog_v6')).toBe(false);
+    installRemoteConnection(fakeLink(['orchestration_catalog_v6']).link);
+    expect(hostSupports('orchestration_catalog_v6')).toBe(true);
+    expect(hostSupports('orchestration_catalog_v6', 'orchestration_start_run_v6')).toBe(false);
   });
 });
 

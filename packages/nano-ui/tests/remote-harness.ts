@@ -47,10 +47,55 @@ const TYPES: Readonly<Record<string, string>> = {
   '.woff2': 'font/woff2',
 };
 
+/** A saved agent-only pipeline in the fixture desktop, for the browser to open, change and run. */
+export async function seedRemotePipeline(lab: RemoteLab, name: string, reuseMember = false): Promise<void> {
+  const { compileGraph, emptyGraph, newGraphNode } = await import('../../../apps/desktop/src/features/orchestration/agentGraph');
+  const host = await lab.host();
+  const result = await host.invoke('workspace_command_v15', { command: { type: 'catalog' } }) as {
+    catalog: { workspaces: { id: string; name: string }[] };
+  };
+  const workspaceId = result.catalog.workspaces.find((project) => project.name === 'piui')?.id;
+  if (!workspaceId) throw new Error('Expected piui project in the demo desktop.');
+  const graph = emptyGraph();
+  graph.name = name;
+  const titles = ['Сбор материалов', 'Подготовка обзора'];
+  if (reuseMember) titles.push('Проверка обзора');
+  graph.nodes = titles.map((title, index) => {
+    const node = newGraphNode(index);
+    node.profile = { ...node.profile, name: title, modelProvider: 'openai-lab', model: 'gpt-lab-5-codex' };
+    node.task = title;
+    return node;
+  });
+  graph.edges = [{ from: graph.nodes[0]!.id, to: graph.nodes[1]!.id, kind: 'result' }];
+  const definition = compileGraph(graph);
+  const roles = ['research', 'review'];
+  const profiles = reuseMember ? definition.profiles.slice(0, 2).map((profile) => ({ ...profile, name: 'Редактор' })) : definition.profiles;
+  const team = reuseMember ? {
+    ...definition.team,
+    members: roles.map((id, index) => ({ id, profileId: profiles[index]!.id })),
+    orchestratorMemberId: 'research',
+    sendEdges: [{ fromMemberId: 'research', toMemberId: 'review' }],
+    observeEdges: [{ fromMemberId: 'review', toMemberId: 'research' }],
+  } : definition.team;
+  const pipeline = reuseMember ? {
+    ...definition.pipeline,
+    steps: definition.pipeline.steps.map((step, index) => ({ ...step, assignedMemberId: index < 2 ? 'research' : 'review' })),
+  } : definition.pipeline;
+  const entry = <T>(value: T) => ({ workspaceId, value });
+  await host.invoke('orchestration_save_graph_v6', { request: {
+    workspaceId, profiles: profiles.map(entry), team: entry(team),
+    pipeline: entry(pipeline), command: entry(definition.command),
+  } });
+}
+
 export type ApprovalMode = 'manual' | 'auto';
 
 export interface LabOptions {
+  /** Lose the next start acknowledgement after its run has been persisted. */
+  failNextStartReply?: boolean;
   approval: ApprovalMode;
+  /** An older host advertises its original chat-only command list. */
+  commands?: readonly string[];
   /** Shell numbers sent in the welcome; a different one must keep the shell from mounting. */
   shell: Record<string, number>;
 }
@@ -98,7 +143,7 @@ export class Viewer {
       app: { version: '0.0.0-e2e' },
       grant: 'once',
       shell: { ...NANO_REMOTE_SHELL_CONTRACTS, ...this.lab.options.shell },
-      commands: [...NANO_REMOTE_COMMANDS],
+      commands: this.lab.options.commands ?? [...NANO_REMOTE_COMMANDS],
       channels: [...NANO_REMOTE_CHANNELS],
     });
     this.welcomed = true;
@@ -267,13 +312,33 @@ export class Viewer {
     const args = typeof message.args === 'object' && message.args !== null ? message.args as Record<string, unknown> : {};
     this.requests.push({ command: cmd, args });
     this.lab.requests.push({ command: cmd, args });
-    if (!(NANO_REMOTE_COMMANDS as readonly string[]).includes(cmd)) {
+    if (!(this.lab.options.commands ?? NANO_REMOTE_COMMANDS as readonly string[]).includes(cmd)) {
       this.send({ k: 'res', id, ok: false, error: { code: 'remote-not-allowed' } });
       return;
     }
     try {
       const host = await this.lab.host();
-      const value = await host.invoke(cmd, args);
+      let nativeArgs = args;
+      if (cmd === 'orchestration_start_run_v6') {
+        const request = args.request as { runId: string };
+        const runId = 'nano-remote-v1-' + createHash('sha256').update(request.runId, 'utf8').digest('hex');
+        nativeArgs = { ...args, request: { ...request, runId } };
+      }
+      const value = await host.invoke(cmd, nativeArgs);
+      if (value && typeof value === 'object' && 'id' in value && typeof value.id === 'string') {
+        if (cmd === 'orchestration_start_run_v6') {
+          this.lab.pairedRunIds.add(value.id);
+          if (this.lab.options.failNextStartReply) {
+            this.lab.options.failNextStartReply = false;
+            this.answer(id, false, { code: 'native-outcome-uncertain' });
+            return;
+          }
+        }
+        if ((cmd === 'orchestration_start_run_v6' || cmd === 'orchestration_get_run_v6') && this.lab.pairedRunIds.has(value.id)) {
+          this.answer(id, true, { ...value, pairedBrowser: true });
+          return;
+        }
+      }
       this.answer(id, true, value);
     } catch (error) {
       this.answer(id, false, error);
@@ -358,6 +423,7 @@ interface HostLike {
 export class RemoteLab {
   readonly options: LabOptions = { approval: 'manual', shell: {} };
   readonly viewers: Viewer[] = [];
+  readonly pairedRunIds = new Set<string>();
   /** Every request any browser sent, in order. */
   readonly requests: Recorded[] = [];
   /** Handshakes whose proof the desktop side verified. */
@@ -490,6 +556,6 @@ export async function startRemoteLab(preferredPort: number): Promise<RemoteLab> 
   if (bound === null || typeof bound === 'string') throw new Error('The test relay has no port.');
   address = `http://127.0.0.1:${bound.port}`;
   // Loading the Lab takes a moment; do it before the first browser asks for a document.
-  void lab.host();
+  try { await lab.host(); } catch (error) { await lab.close(); throw error; }
   return lab;
 }
