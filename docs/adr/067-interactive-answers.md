@@ -1,6 +1,6 @@
 # ADR-067 — Interactive answers in desktop chats
 
-Status: accepted, 2026-11-16.
+Status: accepted, 2026-11-16. Amended by ADR-077 (2026-11-18): media from chat files, regions, formulas, links and application actions; the paragraphs below marked "amended" describe the first version.
 
 ## Context
 
@@ -20,24 +20,26 @@ slots off. The shared conversation surface retains its existing defaults.
   expression limits. It uses text nodes and `textContent`, its own interpreter,
   and no HTML sinks or executable expressions. Message content cannot supply
   application callbacks.
-- **No network or navigation.** Links are inert spans with the address in a
-  tooltip. The port contains no media loading, frames, embedding, player
-  control, file resolution, network calls or cross-window message listeners.
-  The CSP is unchanged and no dependency is added.
+- **No network or navigation.** The port contains no frames, embedding,
+  network calls or cross-window message listeners. *(Amended by ADR-077: links
+  are https-only buttons that go through a host operation or copy their
+  address; media is loaded only from chat files as `blob:` URLs the host's
+  bytes produced; remote media and embedded players stay unsupported. The CSP
+  needs `blob:` for images and media, and KaTeX is a dependency.)*
 - **Supported subset.** Layout uses row, column, grid, card, tabs, details and
   divider. Content uses heading, text, callout, badge, badges, list, kv, stat,
   progress, steps and link. Data uses table and chart. Controls use slider,
   number, input, date, select, segmented, toggle, checklist and range. Actions
-  use button, buttons, choices and each. Formula retains its existing TeX-text
-  fallback but is not advertised. Image, gallery, video, audio, region and html
-  nodes display an explanatory note; media and custom HTML are outside the
-  desktop's trust boundary.
+  use button, buttons, choices and each. *(Amended by ADR-077: formula, image,
+  gallery, video, audio and region are supported and advertised; html and
+  canvas still display an explanatory note.)*
 - **Replies use the composer.** An interactive send action submits a normalized
   user message through the existing typed composer command, only while the
   direct chat's composer is available and its session is idle. Text is limited
   to 4,000 characters. Optional JSON payloads are validated, limited to 16,000
   characters, and fenced after escaping embedded fence terminators. Read-only
-  views omit the send operation and disable send buttons.
+  views and busy or closed chats disable send buttons and say why (ADR-077
+  reads the reason live).
 - **Instruction placement.** The host appends the fixed instruction after a
   session's own instructions for a direct chat. It excludes Fusion sidekicks,
   coordinator-owned sessions, run-owned sessions and Hermes, whose bridge

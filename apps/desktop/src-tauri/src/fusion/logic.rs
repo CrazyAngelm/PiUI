@@ -1,15 +1,13 @@
-//! Pure Fusion rules: pair admission, brief checks, report parsing and the
+//! Pure Fusion rules: brief checks, report parsing and the
 //! envelope the lead reads. No I/O here.
 
 use super::model::{
     BriefFields, BriefPolicy, FactApprovals, FactChange, FactCommand, FactCommands, FactFile,
-    FactFiles, FactSource, FactTokens, FusionPair, FusionRefusal, FusionRole, FusionRoleName,
-    REPORT_BODY_BYTES, ReportStatus, RoundOutcome, SidekickFacts, SidekickProgress, SidekickReport,
+    FactFiles, FactSource, FactTokens, REPORT_BODY_BYTES, ReportStatus, RoundOutcome,
+    SidekickFacts, SidekickProgress, SidekickReport,
 };
 use crate::review_api::{ReviewArea, ReviewChange, ReviewFileV1};
-use piui_runtime::workspace_runtime::{
-    BlockKind, BlockStatus, HarnessKind, NativeBlock, PermissionMode,
-};
+use piui_runtime::workspace_runtime::{BlockKind, BlockStatus, HarnessKind, NativeBlock};
 
 /// The lead's static instructions. They never name the sidekick's harness or
 /// model, so changing the sidekick never changes the lead's cached prefix.
@@ -18,8 +16,10 @@ pub(crate) const LEAD_INSTRUCTIONS: &str =
 `sidekick` tool. It has its own context and remembers earlier briefs. You talk to the
 person; the sidekick never does.
 
-The sidekick is your default executor. It is not a subagent: rules you have about
-subagents apply to your own subagent tool, not to it. Brief it for implementation,
+The sidekick is your default executor within the limits the person and the project
+instructions (such as AGENTS.md) set on delegation: a rule that forbids subagents or
+delegating some work applies to the sidekick too, and then you do that work yourself.
+Brief it for implementation,
 multi-file or mechanical edits, builds, test runs, reproductions, log digging, fixes and
 verification passes. Keep for yourself: understanding the request, exploration that shapes
 the plan, design decisions, review, and commits or releases. If you are about to run a
@@ -32,13 +32,16 @@ while the sidekick is busy, for independent work outside its scope or read-only 
 and review.
 
 A brief is one coherent task: goal; settled context (decisions, findings, file paths; mark
-guesses as hypotheses); scope and what to leave alone; constraints; doneWhen (observable
-criteria); verify (exact commands); stopIf. Follow the briefing policy that `status` and
-each brief result report; `status` also restores brief and round ids.
+guesses as hypotheses); scope (paths relative to this folder) and what to leave alone;
+constraints; doneWhen (observable criteria); verify (exact commands); stopIf. Match the
+detail to the task: point to files instead of pasting them, and write out the exact change
+only where it is subtle or the policy asks for it. Settle open design questions before you
+brief. Follow the briefing policy that `status` and each brief result report; `status`
+also restores brief and round ids.
 
-Do not poll wait in a loop. Wait once; if the work is still running, do non-overlapping
-work or, when the result says the report will be delivered to you, end your turn saying
-what is running: that is correct, not unfinished work. Do not edit files in the sidekick's
+Do not poll wait. When a result says the report will be delivered to you, end your turn
+saying what is running (or do non-overlapping work first): that is correct, not unfinished
+work, and the report arrives as your next message. Do not edit files in the sidekick's
 scope meanwhile. Judge a report by its PiUI facts and the diff, not its prose; for tests,
 require the exact command and failure lines in the report instead of rerunning the suite.
 Send consolidated corrections with message; if they do not converge, dictate the exact
@@ -57,6 +60,10 @@ commit, push, switch branches, or delete files the brief did not name. Leave iss
 and task notes to the lead. If the brief is ambiguous, contradicts the code, or a stopIf
 condition holds, stop and report instead of guessing. If repeated attempts at the same
 problem do not make progress, stop and report the exact command and error. {PUSHBACK_RULE}
+Finish all work inside this turn: never start background commands or agents, and wait for
+every command you run to end before you report. If a command is still running in a
+background terminal, wait for it to finish or stop it before your final answer; nothing may
+keep running after your turn ends, which tells the lead you are done.
 
 End every turn with this report:
 STATUS: done | partial | blocked | needs-decision
@@ -81,97 +88,11 @@ pub(crate) fn sidekick_instructions(pushback: bool) -> String {
 pub(crate) const fn policy_text(policy: BriefPolicy) -> &'static str {
     match policy {
         BriefPolicy::Prescriptive => {
-            "This sidekick needs prescriptive briefs: name files, functions and the exact change; give literal code for anything subtle."
+            "This sidekick needs concrete briefs: name the files and functions and describe the change; add literal code only where it is subtle or easy to get wrong."
         }
         BriefPolicy::Outline => {
             "This sidekick is strong: give the goal, constraints and criteria, and leave implementation details to it."
         }
-    }
-}
-
-const fn rank(mode: PermissionMode) -> Option<u8> {
-    match mode {
-        PermissionMode::Native => None,
-        PermissionMode::ReadOnly => Some(0),
-        PermissionMode::WorkspaceWrite => Some(1),
-        PermissionMode::FullAccess => Some(2),
-    }
-}
-
-/// Admission of a pair (ADR-043, plan §4.10 and §4.14). The sidekick never
-/// gets more authority than the lead; native modes of different harnesses
-/// are incomparable, so a cross-harness pair needs explicit modes on both
-/// roles. `codex_sandbox` says Codex's Windows sandbox is configured (or the
-/// platform needs none), which a workspace-write Codex sidekick requires.
-pub(crate) fn check_pair(
-    pair: &FusionPair,
-    codex_sandbox: bool,
-) -> Result<(), (FusionRefusal, FusionRoleName)> {
-    let FusionPair { lead, sidekick, .. } = pair;
-    if !lead.harness.supports_sidekick_tool() {
-        return Err((FusionRefusal::LeadHarnessUnsupported, FusionRoleName::Lead));
-    }
-    if !matches!(
-        sidekick.harness,
-        HarnessKind::ClaudeCode | HarnessKind::Codex | HarnessKind::Pi | HarnessKind::Nano
-    ) {
-        return Err((
-            FusionRefusal::SidekickHarnessUnsupported,
-            FusionRoleName::Sidekick,
-        ));
-    }
-    if lead.permission_mode == PermissionMode::ReadOnly {
-        return Err((FusionRefusal::ReadOnlyLead, FusionRoleName::Lead));
-    }
-    match (rank(lead.permission_mode), rank(sidekick.permission_mode)) {
-        // The same harness's native mode is the same policy on both roles.
-        (None, None) if lead.harness == sidekick.harness => {}
-        (Some(lead_rank), Some(sidekick_rank)) => {
-            if sidekick_rank > lead_rank {
-                return Err((FusionRefusal::SidekickExceedsLead, FusionRoleName::Sidekick));
-            }
-        }
-        _ => {
-            return Err((
-                FusionRefusal::ExplicitModesRequired,
-                FusionRoleName::Sidekick,
-            ));
-        }
-    }
-    sidekick_role_supported(sidekick, lead, codex_sandbox)
-}
-
-fn sidekick_role_supported(
-    sidekick: &FusionRole,
-    lead: &FusionRole,
-    codex_sandbox: bool,
-) -> Result<(), (FusionRefusal, FusionRoleName)> {
-    let refuse = |refusal| Err((refusal, FusionRoleName::Sidekick));
-    match sidekick.harness {
-        // Shell approvals of a workspace-write Claude Code sidekick offer only
-        // deny or cancel (spike S5), so it works natively or with full access.
-        HarnessKind::ClaudeCode
-            if !matches!(
-                sidekick.permission_mode,
-                PermissionMode::FullAccess | PermissionMode::Native
-            ) =>
-        {
-            refuse(FusionRefusal::SidekickNeedsFullAccess)
-        }
-        HarnessKind::Codex
-            if sidekick.permission_mode == PermissionMode::WorkspaceWrite && !codex_sandbox =>
-        {
-            refuse(FusionRefusal::CodexSandboxUnverified)
-        }
-        // Pi and Nano (Pi underneath) have no workspace-write mode; both roles
-        // must allow full access.
-        HarnessKind::Pi | HarnessKind::Nano
-            if sidekick.permission_mode != PermissionMode::FullAccess
-                || lead.permission_mode != PermissionMode::FullAccess =>
-        {
-            refuse(FusionRefusal::SidekickNeedsFullAccess)
-        }
-        _ => Ok(()),
     }
 }
 
@@ -221,9 +142,11 @@ pub(crate) fn check_brief(fields: &BriefFields) -> Result<Vec<String>, String> {
             || path.get(1..2) == Some(":")
             || path.split(['/', '\\']).any(|part| part == "..")
     };
+    // The sidekick works, and its file facts are taken, in this folder only:
+    // a brief aimed elsewhere is refused before anything starts (ADR-076).
     if fields.scope.iter().chain(&fields.leave_alone).any(outside) {
-        warnings.push(
-            "A scope or leaveAlone path points outside the project; the sidekick works only in this folder."
+        return Err(
+            "A scope or leaveAlone path points outside this project folder; the sidekick works only here. Give paths relative to the project."
                 .into(),
         );
     }
@@ -548,7 +471,7 @@ pub(crate) fn progress_text(progress: &SidekickProgress, auto_deliver: bool) -> 
         out.push_str(&format!("\nlatest activity: {activity}"));
     }
     out.push_str(if auto_deliver {
-        "\nThe work continues. Plan or review meanwhile, call wait again, or end your turn: the report is delivered to you when it is ready."
+        "\nThe work continues. Do not call wait again: end your turn now (or first do work outside the sidekick's scope); the report is delivered to you automatically when it is ready."
     } else {
         "\nThe work continues. Plan or review meanwhile, then call wait again to collect the report."
     });

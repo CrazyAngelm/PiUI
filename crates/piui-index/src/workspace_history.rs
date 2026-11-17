@@ -5,15 +5,16 @@
 //! launches, resumes, copies, converts, repairs, or writes native sessions.
 
 use super::{
-    BoundedScanError, GenericBlockKind, GenericBlockStatus, GenericTimelineBlock, ParseState,
-    ScanReport, SessionDiscoveryLimits, UnknownEntrySummary, bounded_display, display_content,
-    display_limit, is_session_jsonl, lf_frames, open_session_file_no_follow, redact_display_paths,
-    scan_bytes_for_display_with_root, sha256, string_field, trim_old_display,
+    BlockOrigin, BoundedScanError, GenericBlockKind, GenericBlockStatus, GenericTimelineBlock,
+    OriginItem, ParseState, ScanReport, SessionDiscoveryLimits, UnknownEntrySummary,
+    bounded_display, display_content, display_limit, is_session_jsonl, lf_frames,
+    open_session_file_no_follow, redact_display_paths, scan_bytes_for_display_with_origins, sha256,
+    string_field, trim_old_display,
 };
 use piui_platform::{ProjectDirectory, ProjectDirectoryError};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
@@ -85,9 +86,62 @@ pub enum WorkspaceHistoryError {
 
 struct AssistantHistoryText {
     block_id: String,
+    /// The `timeline-N` id this block had before blocks took their native
+    /// identity. References stored under it keep resolving.
+    legacy_id: String,
     sha256: String,
     text: String,
 }
+
+/// How a chat file relates to the block that names it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HistoryChatFileOrigin {
+    /// The agent wrote or edited it.
+    Written,
+    /// The agent read or viewed it.
+    Read,
+    /// The agent generated it (for example an image).
+    Generated,
+}
+
+/// A file a closed chat's native history says its agent wrote, read or
+/// generated, for the host's per-session file registry.
+///
+/// Host-private: no serde, and the debug form omits the path and the bytes. A
+/// path is exactly as the native record spelled it (a relative one is joined to
+/// the session's directory); the host must canonicalize and scope-check it
+/// before use. Inline bytes are an image decoded from the history itself.
+pub struct HistoryChatFile {
+    /// The id of the history block that names the file, as in the projected
+    /// timeline.
+    pub block_id: String,
+    pub path: Option<PathBuf>,
+    /// Media type (sniffed from the bytes) and decoded bytes.
+    pub inline: Option<(String, Vec<u8>)>,
+    pub origin: HistoryChatFileOrigin,
+}
+
+impl std::fmt::Debug for HistoryChatFile {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HistoryChatFile")
+            .field("block_id", &self.block_id)
+            .field("has_path", &self.path.is_some())
+            .field(
+                "inline_bytes",
+                &self.inline.as_ref().map(|inline| inline.1.len()),
+            )
+            .field("origin", &self.origin)
+            .finish()
+    }
+}
+
+/// At most this many files are returned for one chat (the newest).
+pub const HISTORY_CHAT_FILE_LIMIT: usize = 200;
+/// An inline image larger than this is not returned.
+pub const HISTORY_INLINE_FILE_LIMIT: usize = 20 * 1024 * 1024;
+/// All inline images of one chat together stay under this (the newest win).
+const HISTORY_INLINE_TOTAL_LIMIT: usize = 64 * 1024 * 1024;
 
 /// UI-safe generic history plus exact host-private assistant text resolution.
 ///
@@ -97,6 +151,7 @@ struct AssistantHistoryText {
 pub struct WorkspaceHistoryProjection {
     pub report: ScanReport,
     assistant_texts: Vec<AssistantHistoryText>,
+    files: Vec<HistoryChatFile>,
 }
 
 impl std::fmt::Debug for WorkspaceHistoryProjection {
@@ -105,6 +160,7 @@ impl std::fmt::Debug for WorkspaceHistoryProjection {
             .debug_struct("WorkspaceHistoryProjection")
             .field("report", &"<generic projection>")
             .field("assistant_text_count", &self.assistant_texts.len())
+            .field("chat_file_count", &self.files.len())
             .finish()
     }
 }
@@ -115,7 +171,17 @@ impl WorkspaceHistoryProjection {
         &self.report.timeline_blocks
     }
 
-    /// Resolves exact source text. A scanner block id is accepted only when an
+    /// Files the native history says the agent wrote, read or generated, each
+    /// tied to the id of a block of `timeline_blocks` (at most
+    /// `HISTORY_CHAT_FILE_LIMIT`, newest last). Host-private: see
+    /// `HistoryChatFile`.
+    #[must_use]
+    pub fn chat_files(&self) -> &[HistoryChatFile] {
+        &self.files
+    }
+
+    /// Resolves exact source text. A block id (or the `timeline-N` id blocks
+    /// had before they took their native identity) is accepted only when an
     /// optional hash also matches. If live runtime ids differ from scanner ids,
     /// the exact SHA-256 is the stable fallback. With neither selector, the
     /// newest assistant text is returned.
@@ -135,7 +201,7 @@ impl WorkspaceHistoryProjection {
             && let Some(candidate) = self
                 .assistant_texts
                 .iter()
-                .find(|candidate| candidate.block_id == block_id)
+                .find(|candidate| candidate.block_id == block_id || candidate.legacy_id == block_id)
             && valid_hash.is_none_or(|hash| candidate.sha256.eq_ignore_ascii_case(hash))
         {
             return Some(candidate.text.as_str());
@@ -199,9 +265,14 @@ pub fn project_native_workspace_history(
         WorkspaceHistoryFormat::Hermes | WorkspaceHistoryFormat::ClaudeCode => {
             return Err(WorkspaceHistoryError::InvalidHeader);
         }
-        WorkspaceHistoryFormat::Pi | WorkspaceHistoryFormat::PrimeAgent => {
-            project_pi_history(source_name, &bytes, Path::new(&header_cwd))?
-        }
+        // Prime's bridge numbers its live blocks from the SDK message array,
+        // which the JSONL does not carry: Prime keeps its position ids.
+        WorkspaceHistoryFormat::Pi | WorkspaceHistoryFormat::PrimeAgent => project_pi_history(
+            source_name,
+            &bytes,
+            Path::new(&header_cwd),
+            source.format == WorkspaceHistoryFormat::Pi,
+        )?,
         WorkspaceHistoryFormat::Codex => project_codex_history(
             source_name,
             &bytes,
@@ -215,6 +286,18 @@ pub fn project_native_workspace_history(
         return Err(WorkspaceHistoryError::NoTimelineRecords);
     }
     Ok(projection)
+}
+
+/// The files the native history of one registered chat says its agent wrote,
+/// read or generated (the projection's `chat_files`, on its own), so the host's
+/// per-session file registry can fill itself when the chat is reopened. A
+/// path is host-private and unchecked; see `HistoryChatFile`.
+pub fn history_chat_files(
+    source: &HostNativeHistorySource,
+    project: &ProjectDirectory,
+) -> Result<Vec<HistoryChatFile>, WorkspaceHistoryError> {
+    let mut projection = project_native_workspace_history(source, project)?;
+    Ok(std::mem::take(&mut projection.files))
 }
 
 fn validate_source_path(path: &Path) -> Result<(), WorkspaceHistoryError> {
@@ -316,12 +399,87 @@ fn parse_and_validate_header(
     }
 }
 
+/// The ids the Pi bridge gives the same blocks when they are live: an answer
+/// or thinking part by its message timestamp and rank
+/// (`pi-assistant-*`, `pi-thinking-*`), a tool call by its id (`pi-tool-*`) and
+/// anything else by its entry id (`pi-entry-*`). A block the transcript gives no
+/// identity (or whose identity is already taken) keeps its position id.
+fn pi_native_block_ids(blocks: &[GenericTimelineBlock], origins: &[BlockOrigin]) -> Vec<String> {
+    let mut used = HashSet::<String>::new();
+    let mut ids = Vec::with_capacity(blocks.len());
+    for (index, block) in blocks.iter().enumerate() {
+        let origin = origins.get(index);
+        let mut candidates = Vec::new();
+        if let Some(origin) = origin {
+            let stamped = |prefix: &str, rank: usize| {
+                origin
+                    .message_timestamp
+                    .filter(|timestamp| *timestamp > 0)
+                    .map(|timestamp| opaque_id(prefix, &format!("{timestamp}:{rank}")))
+            };
+            match &origin.item {
+                Some(OriginItem::Text { rank }) => {
+                    candidates.extend(stamped("pi-assistant", *rank))
+                }
+                Some(OriginItem::Thinking { rank }) => {
+                    candidates.extend(stamped("pi-thinking", *rank));
+                }
+                Some(OriginItem::ToolCall {
+                    call_id: Some(call_id),
+                    ..
+                }) => candidates.push(opaque_id("pi-tool", call_id)),
+                _ => {}
+            }
+            if let Some(entry_id) = &origin.entry_id {
+                candidates.push(opaque_id("pi-entry", entry_id));
+                candidates.push(opaque_id("pi-entry", &format!("{entry_id}:{index}")));
+            }
+        }
+        candidates.push(block.id.clone());
+        let id = candidates
+            .into_iter()
+            .find(|candidate| used.insert(candidate.clone()))
+            .unwrap_or_else(|| format!("timeline-{index}"));
+        ids.push(id);
+    }
+    ids
+}
+
+/// The files Pi's `write` and `edit` tool calls name.
+fn pi_chat_files(
+    blocks: &[GenericTimelineBlock],
+    origins: &[BlockOrigin],
+    root: &Path,
+) -> Vec<HistoryChatFile> {
+    let mut files = Vec::new();
+    for (block, origin) in blocks.iter().zip(origins) {
+        if let Some(OriginItem::ToolCall {
+            name: Some(name),
+            path: Some(path),
+            ..
+        }) = &origin.item
+            && matches!(name.to_ascii_lowercase().as_str(), "write" | "edit")
+            && let Some(path) = history_file_path(path, root)
+        {
+            files.push(HistoryChatFile {
+                block_id: block.id.clone(),
+                path: Some(path),
+                inline: None,
+                origin: HistoryChatFileOrigin::Written,
+            });
+        }
+    }
+    files
+}
+
 fn project_pi_history(
     source_name: &str,
     bytes: &[u8],
     display_project_root: &Path,
+    bridge_ids: bool,
 ) -> Result<WorkspaceHistoryProjection, WorkspaceHistoryError> {
-    let report = scan_bytes_for_display_with_root(source_name, bytes, Some(display_project_root));
+    let (mut report, origins) =
+        scan_bytes_for_display_with_origins(source_name, bytes, Some(display_project_root));
     if report.partial_tail_bytes != 0 {
         return Err(WorkspaceHistoryError::PartialTail);
     }
@@ -331,24 +489,40 @@ fn project_pi_history(
         });
     }
     let exact = exact_pi_assistant_texts(bytes)?;
-    let block_ids = report
+    let native_ids = if bridge_ids {
+        pi_native_block_ids(&report.timeline_blocks, &origins)
+    } else {
+        report
+            .timeline_blocks
+            .iter()
+            .map(|block| block.id.clone())
+            .collect()
+    };
+    let mut legacy_ids = Vec::new();
+    for (block, native) in report.timeline_blocks.iter_mut().zip(native_ids) {
+        legacy_ids.push(std::mem::replace(&mut block.id, native));
+    }
+    let assistant_texts = report
         .timeline_blocks
         .iter()
-        .filter(|block| block.kind == GenericBlockKind::Assistant)
-        .map(|block| block.id.clone())
-        .collect::<Vec<_>>();
-    let assistant_texts = block_ids
-        .into_iter()
+        .zip(&legacy_ids)
+        .filter(|(block, _)| block.kind == GenericBlockKind::Assistant)
         .zip(exact)
-        .map(|(block_id, text)| AssistantHistoryText {
+        .map(|((block, legacy_id), text)| AssistantHistoryText {
             sha256: sha256(text.as_bytes()),
-            block_id,
+            block_id: block.id.clone(),
+            legacy_id: legacy_id.clone(),
             text,
         })
         .collect();
+    let files = finalize_chat_files(
+        pi_chat_files(&report.timeline_blocks, &origins, display_project_root),
+        &report.timeline_blocks,
+    );
     Ok(WorkspaceHistoryProjection {
         report,
         assistant_texts,
+        files,
     })
 }
 
@@ -441,15 +615,39 @@ fn exact_display_scalar(value: Option<&Value>) -> Option<String> {
     }
 }
 
+/// Same shape as the runtime bridges' `opaque`: a prefix and the first 24 hex
+/// digits of the SHA-256 of the value. Block ids built here must equal the ids
+/// the bridges give the same block when it is live.
+fn opaque_id(prefix: &str, value: &str) -> String {
+    let digest = sha256(value.as_bytes());
+    format!("{prefix}-{}", &digest[..24])
+}
+
+/// A native identity is usable as a block id when the host accepts it back as a
+/// branch point (non-empty, at most 256 characters, no control characters).
+fn usable_native_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().count() <= 256 && !id.chars().any(char::is_control)
+}
+
 struct CodexProjectionBuilder<'a> {
     project_root: &'a Path,
     blocks: Vec<GenericTimelineBlock>,
     assistants: Vec<AssistantHistoryText>,
+    /// Native call id (or tool-use id) of a tool block to its index.
     tools: HashMap<String, usize>,
+    /// Every block id handed out, to its index. Native ids are used as they
+    /// are; a block without one (or with a repeated one) is `timeline-N`.
+    index_by_id: HashMap<String, usize>,
     unknown_entries: Vec<UnknownEntrySummary>,
     last_visible: Option<(GenericBlockKind, String, CodexTextSource)>,
+    /// The last block, when it is a user prompt that carried only attachments,
+    /// and which kind of record made it.
+    last_attachment_only: Option<(usize, CodexTextSource)>,
     image_entry_count: usize,
     compaction_entry_count: usize,
+    /// Candidate chat files, tied to block ids; filtered when the projection
+    /// is finished (see `finalize_chat_files`).
+    files: Vec<HistoryChatFile>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -465,10 +663,52 @@ impl<'a> CodexProjectionBuilder<'a> {
             blocks: Vec::new(),
             assistants: Vec::new(),
             tools: HashMap::new(),
+            index_by_id: HashMap::new(),
             unknown_entries: Vec::new(),
             last_visible: None,
+            last_attachment_only: None,
             image_entry_count: 0,
             compaction_entry_count: 0,
+            files: Vec::new(),
+        }
+    }
+
+    /// The id for the block about to be pushed: the native identity when it is
+    /// usable and free, else the position-based `timeline-N`.
+    fn next_id(&mut self, native: Option<&str>) -> String {
+        let index = self.blocks.len();
+        let mut id = match native {
+            Some(native) if usable_native_id(native) && !self.index_by_id.contains_key(native) => {
+                native.to_owned()
+            }
+            _ => format!("timeline-{index}"),
+        };
+        while self.index_by_id.contains_key(&id) {
+            id.push('_');
+        }
+        self.index_by_id.insert(id.clone(), index);
+        id
+    }
+
+    /// Gives the last block a native identity when it only has a position id
+    /// (a record seen twice, the second copy being the one that carries the id).
+    fn adopt_native_id(&mut self, native: &str) {
+        let Some(index) = self.blocks.len().checked_sub(1) else {
+            return;
+        };
+        if !usable_native_id(native)
+            || self.index_by_id.contains_key(native)
+            || !self.blocks[index].id.starts_with("timeline-")
+        {
+            return;
+        }
+        let old = std::mem::replace(&mut self.blocks[index].id, native.to_owned());
+        self.index_by_id.remove(&old);
+        self.index_by_id.insert(native.to_owned(), index);
+        for assistant in &mut self.assistants {
+            if assistant.block_id == old {
+                assistant.block_id = native.to_owned();
+            }
         }
     }
 
@@ -479,7 +719,19 @@ impl<'a> CodexProjectionBuilder<'a> {
         created_at: Option<String>,
         text: String,
         source: CodexTextSource,
+        native_id: Option<&str>,
     ) {
+        // The same native record can be persisted twice (a response item and
+        // its typed event); the native id names both.
+        if let Some(native) = native_id
+            && let Some(&index) = self.index_by_id.get(native)
+            && self.blocks[index].kind == kind
+        {
+            if index + 1 == self.blocks.len() {
+                self.last_visible = Some((kind, text, source));
+            }
+            return;
+        }
         // Codex 0.147 persists user/assistant/reasoning projections in both
         // response_item and event_msg records. Collapse only the adjacent
         // opposite-source copy so equal text in later turns remains visible.
@@ -490,10 +742,14 @@ impl<'a> CodexProjectionBuilder<'a> {
                 *last_kind == kind && *last_source != source && last_text == &text
             })
         {
+            if let Some(native) = native_id {
+                self.adopt_native_id(native);
+            }
             self.last_visible = Some((kind, text, source));
             return;
         }
-        let id = format!("timeline-{}", self.blocks.len());
+        let legacy_id = format!("timeline-{}", self.blocks.len());
+        let id = self.next_id(native_id);
         let (preview, truncated) = bounded_display(Some(&text), display_limit(kind));
         let preview = preview.map(|value| redact_display_paths(&value, Some(self.project_root)));
         self.blocks.push(GenericTimelineBlock {
@@ -504,6 +760,7 @@ impl<'a> CodexProjectionBuilder<'a> {
             created_at,
             preview,
             has_image: false,
+            attachment_count: 0,
             title: (kind == GenericBlockKind::Thinking).then(|| "Reasoning".into()),
             tool_name: None,
             collapsible: kind == GenericBlockKind::Thinking,
@@ -514,6 +771,7 @@ impl<'a> CodexProjectionBuilder<'a> {
         if kind == GenericBlockKind::Assistant {
             self.assistants.push(AssistantHistoryText {
                 block_id: id,
+                legacy_id,
                 sha256: sha256(text.as_bytes()),
                 text: text.clone(),
             });
@@ -521,19 +779,78 @@ impl<'a> CodexProjectionBuilder<'a> {
         self.last_visible = Some((kind, text, source));
     }
 
-    /// Marks the user block pushed since `before` (if any) as carrying an
-    /// image; the image itself is never projected.
-    fn mark_user_image(&mut self, before: usize) {
-        if self.blocks.len() > before
+    /// A user prompt that carried only attachments: there is no text to show,
+    /// but the prompt still opens its turn.
+    fn push_attachment_only_user(
+        &mut self,
+        source_type: &str,
+        created_at: Option<String>,
+        source: CodexTextSource,
+        native_id: Option<&str>,
+    ) {
+        // Codex records one prompt twice (a response item and its typed
+        // event): the adjacent copy from the other kind of record is it.
+        if let Some((index, last_source)) = self.last_attachment_only
+            && index + 1 == self.blocks.len()
+            && last_source != source
+        {
+            if let Some(native) = native_id {
+                self.adopt_native_id(native);
+            }
+            self.last_attachment_only = Some((index, source));
+            return;
+        }
+        self.last_attachment_only = Some((self.blocks.len(), source));
+        let id = self.next_id(native_id);
+        self.blocks.push(GenericTimelineBlock {
+            id,
+            parent_id: None,
+            kind: GenericBlockKind::User,
+            source_type: source_type.to_owned(),
+            created_at,
+            preview: None,
+            has_image: false,
+            attachment_count: 0,
+            title: None,
+            tool_name: None,
+            collapsible: false,
+            truncated: false,
+            fallback: false,
+            status: GenericBlockStatus::Complete,
+        });
+        self.last_visible = None;
+    }
+
+    /// Marks the user block pushed since `before` (if any) as carrying
+    /// `count` images or attachments; the bytes are never projected.
+    fn mark_user_attachments(&mut self, before: usize, count: usize) {
+        if count > 0
+            && self.blocks.len() > before
             && let Some(block) = self.blocks.last_mut()
             && block.kind == GenericBlockKind::User
         {
             block.has_image = true;
+            block.attachment_count = block.attachment_count.max(count);
+            self.image_entry_count = self.image_entry_count.saturating_add(1);
         }
     }
 
-    fn push_tool(&mut self, created_at: Option<String>, name: Option<&str>, call_id: Option<&str>) {
-        let id = format!("timeline-{}", self.blocks.len());
+    /// Pushes a tool block. `call_key` is the native id its result names;
+    /// `native_id` is the block's own identity. A call already seen (the same
+    /// call recorded as a response item and as an event) is not shown twice.
+    fn push_tool(
+        &mut self,
+        created_at: Option<String>,
+        name: Option<&str>,
+        call_key: Option<&str>,
+        native_id: Option<&str>,
+    ) {
+        if let Some(call_key) = call_key
+            && self.tools.contains_key(call_key)
+        {
+            return;
+        }
+        let id = self.next_id(native_id);
         let title = name
             .filter(|name| !name.is_empty())
             .map(|name| super::safe_text(name, super::TYPE_LIMIT))
@@ -547,6 +864,7 @@ impl<'a> CodexProjectionBuilder<'a> {
             created_at,
             preview: None,
             has_image: false,
+            attachment_count: 0,
             title: title.clone(),
             tool_name: title,
             collapsible: true,
@@ -554,8 +872,8 @@ impl<'a> CodexProjectionBuilder<'a> {
             fallback: false,
             status: GenericBlockStatus::Running,
         });
-        if let Some(call_id) = call_id {
-            self.tools.insert(call_id.to_owned(), index);
+        if let Some(call_key) = call_key {
+            self.tools.insert(call_key.to_owned(), index);
         }
         self.last_visible = None;
     }
@@ -570,13 +888,15 @@ impl<'a> CodexProjectionBuilder<'a> {
                     preview.map(|value| redact_display_paths(&value, Some(self.project_root)));
                 block.truncated |= truncated;
             }
-            block.status = if failed {
+            // A failure recorded by one copy of a record is not undone by the
+            // other copy that only carries the output.
+            block.status = if failed || block.status == GenericBlockStatus::Failed {
                 GenericBlockStatus::Failed
             } else {
                 GenericBlockStatus::Complete
             };
         } else {
-            let id = format!("timeline-{}", self.blocks.len());
+            let id = self.next_id(None);
             let (preview, truncated) =
                 bounded_display(output.as_deref(), display_limit(GenericBlockKind::Tool));
             let preview =
@@ -589,6 +909,7 @@ impl<'a> CodexProjectionBuilder<'a> {
                 created_at: None,
                 preview,
                 has_image: false,
+                attachment_count: 0,
                 title: Some("Tool result".into()),
                 tool_name: None,
                 collapsible: true,
@@ -604,8 +925,45 @@ impl<'a> CodexProjectionBuilder<'a> {
         self.last_visible = None;
     }
 
-    fn push_compaction(&mut self, created_at: Option<String>, text: Option<String>) {
-        let id = format!("timeline-{}", self.blocks.len());
+    /// A tool whose typed completion record names it by id: it finishes the
+    /// call that is already shown, or is shown for the first time.
+    fn complete_tool(
+        &mut self,
+        created_at: Option<String>,
+        id: &str,
+        name: Option<&str>,
+        preview: Option<String>,
+        failed: bool,
+    ) {
+        if !self.tools.contains_key(id) {
+            self.push_tool(created_at, name, Some(id), Some(id));
+        }
+        self.finish_tool(Some(id), preview, failed);
+    }
+
+    /// The id of the tool block a call key names.
+    fn tool_block_id(&self, call_key: &str) -> Option<String> {
+        self.tools
+            .get(call_key)
+            .map(|index| self.blocks[*index].id.clone())
+    }
+
+    fn push_compaction(
+        &mut self,
+        created_at: Option<String>,
+        text: Option<String>,
+        native: Option<&str>,
+    ) {
+        // The typed item and the `compacted` record describe one compaction;
+        // two in a row with nothing between them are one.
+        if self
+            .blocks
+            .last()
+            .is_some_and(|block| block.kind == GenericBlockKind::Compaction)
+        {
+            return;
+        }
+        let id = self.next_id(native);
         let (preview, truncated) =
             bounded_display(text.as_deref(), display_limit(GenericBlockKind::Compaction));
         let preview = preview.map(|value| redact_display_paths(&value, Some(self.project_root)));
@@ -617,6 +975,7 @@ impl<'a> CodexProjectionBuilder<'a> {
             created_at,
             preview,
             has_image: false,
+            attachment_count: 0,
             title: Some("Context compacted".into()),
             tool_name: None,
             collapsible: true,
@@ -641,7 +1000,7 @@ impl<'a> CodexProjectionBuilder<'a> {
             byte_length: frame.len(),
             sha256: sha256(frame),
         });
-        let id = format!("timeline-{}", self.blocks.len());
+        let id = self.next_id(None);
         self.blocks.push(GenericTimelineBlock {
             id,
             parent_id: None,
@@ -650,6 +1009,7 @@ impl<'a> CodexProjectionBuilder<'a> {
             created_at,
             preview: None,
             has_image: false,
+            attachment_count: 0,
             title: Some("Unrecognized session entry".into()),
             tool_name: None,
             collapsible: true,
@@ -659,6 +1019,149 @@ impl<'a> CodexProjectionBuilder<'a> {
         });
         self.last_visible = None;
     }
+
+    /// Notes a file the block `block_id` names. A relative path is joined to
+    /// the session's directory; nothing is checked here (the host does).
+    fn note_path(&mut self, block_id: &str, raw_path: &str, origin: HistoryChatFileOrigin) {
+        if let Some(path) = history_file_path(raw_path, self.project_root) {
+            self.files.push(HistoryChatFile {
+                block_id: block_id.to_owned(),
+                path: Some(path),
+                inline: None,
+                origin,
+            });
+        }
+    }
+
+    /// Notes an image the history carries as base64 (returned only when it
+    /// decodes within the per-file bound and is a known image format).
+    fn note_inline_image(&mut self, block_id: &str, base64: &str, origin: HistoryChatFileOrigin) {
+        if let Some(inline) = decode_inline_image(base64) {
+            self.files.push(HistoryChatFile {
+                block_id: block_id.to_owned(),
+                path: None,
+                inline: Some(inline),
+                origin,
+            });
+        }
+    }
+}
+
+/// A native path as a `PathBuf`: absolute as written, relative joined to the
+/// session's directory. Over-long, empty and NUL-carrying values are refused.
+fn history_file_path(raw: &str, root: &Path) -> Option<PathBuf> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.len() > 4096 || raw.contains('\0') {
+        return None;
+    }
+    let path = Path::new(raw);
+    Some(if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    })
+}
+
+/// Decodes standard (or URL-safe) base64, ignoring whitespace and padding.
+fn decode_base64(input: &str, limit: usize) -> Option<Vec<u8>> {
+    // Decoded size is at most 3/4 of the encoded size.
+    if input.len() / 4 * 3 > limit.saturating_add(3) {
+        return None;
+    }
+    let mut output = Vec::with_capacity(input.len() / 4 * 3);
+    let mut accumulator = 0_u32;
+    let mut bits = 0_u32;
+    for byte in input.bytes() {
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            b'=' | b' ' | b'\n' | b'\r' | b'\t' => continue,
+            _ => return None,
+        };
+        accumulator = (accumulator << 6) | u32::from(value);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            output.push((accumulator >> bits) as u8);
+            accumulator &= (1 << bits) - 1;
+        }
+    }
+    (output.len() <= limit).then_some(output)
+}
+
+/// The media type of a PNG, JPEG, GIF or WebP, judged by its magic bytes.
+fn sniff_image_media_type(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+/// An inline image from base64 text, or a `data:` URL carrying it.
+fn decode_inline_image(text: &str) -> Option<(String, Vec<u8>)> {
+    let payload = match text.strip_prefix("data:") {
+        Some(rest) => rest.split_once(',')?.1,
+        None => text,
+    };
+    let bytes = decode_base64(payload, HISTORY_INLINE_FILE_LIMIT)?;
+    let media_type = sniff_image_media_type(&bytes)?;
+    Some((media_type.to_owned(), bytes))
+}
+
+/// Keeps the files of blocks that finished, drops repeats, and applies the
+/// per-chat caps: the newest `HISTORY_CHAT_FILE_LIMIT` files, and the newest
+/// inline images within `HISTORY_INLINE_TOTAL_LIMIT`.
+fn finalize_chat_files(
+    files: Vec<HistoryChatFile>,
+    blocks: &[GenericTimelineBlock],
+) -> Vec<HistoryChatFile> {
+    let status_by_id = blocks
+        .iter()
+        .map(|block| (block.id.as_str(), block.status))
+        .collect::<HashMap<_, _>>();
+    let mut seen = HashSet::new();
+    let mut kept = Vec::new();
+    // Newest first, so the caps drop the oldest.
+    for file in files.into_iter().rev() {
+        // A call that failed, was interrupted or never reported back did not
+        // necessarily produce the file.
+        if status_by_id.get(file.block_id.as_str()) != Some(&GenericBlockStatus::Complete) {
+            continue;
+        }
+        if let Some(path) = &file.path
+            && !seen.insert((file.block_id.clone(), path.clone()))
+        {
+            continue;
+        }
+        kept.push(file);
+        if kept.len() >= HISTORY_CHAT_FILE_LIMIT {
+            break;
+        }
+    }
+    let mut inline_total = 0_usize;
+    for file in &mut kept {
+        let size = file.inline.as_ref().map(|(_, bytes)| bytes.len());
+        if let Some(size) = size {
+            if inline_total.saturating_add(size) > HISTORY_INLINE_TOTAL_LIMIT {
+                file.inline = None;
+            } else {
+                inline_total += size;
+            }
+        }
+    }
+    kept.retain(|file| file.path.is_some() || file.inline.is_some());
+    kept.reverse();
+    kept
 }
 
 fn project_codex_history(
@@ -702,13 +1205,16 @@ fn project_codex_history(
                     .get("message")
                     .and_then(Value::as_str)
                     .map(str::to_owned),
+                None,
             ),
             // These are source controls or potentially sensitive execution
-            // context, never user-visible transcript blocks.
+            // context, never user-visible transcript blocks. A token usage
+            // record is accounting, not conversation.
             (
                 "session_meta"
                 | "turn_context"
                 | "world_state"
+                | "token_usage_record"
                 | "inter_agent_communication_metadata"
                 | "inter_agent_communication",
                 _,
@@ -753,11 +1259,42 @@ fn project_codex_history(
     } else {
         ParseState::Unsupported
     };
+    let files = finalize_chat_files(builder.files, &builder.blocks);
     report.timeline_blocks = builder.blocks;
     Ok(WorkspaceHistoryProjection {
         report,
         assistant_texts: builder.assistants,
+        files,
     })
+}
+
+/// A record type spelled any way (`CommandExecution`, `commandExecution`,
+/// `command_execution`) as one lowercase word.
+fn codex_kind(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| *character != '_' && *character != '-')
+        .map(|character| character.to_ascii_lowercase())
+        .collect()
+}
+
+/// Text Codex adds to the conversation as a user message for its own use:
+/// instruction files, environment and skill context and notifications. These
+/// are not what the person typed.
+fn is_codex_contextual_user_text(text: &str) -> bool {
+    let text = text.trim_start();
+    if text.starts_with("# AGENTS.md instructions for ") {
+        return true;
+    }
+    [
+        "<environment_context>",
+        "<user_instructions>",
+        "<skill>",
+        "<subagent_notification>",
+        "<turn_aborted>",
+    ]
+    .iter()
+    .any(|marker| text.starts_with(marker))
 }
 
 fn project_codex_response_item(
@@ -768,6 +1305,7 @@ fn project_codex_response_item(
     created_at: Option<String>,
 ) {
     let item_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
+    let native_id = payload.get("id").and_then(Value::as_str);
     match item_type {
         "message" => {
             let role = payload.get("role").and_then(Value::as_str);
@@ -776,24 +1314,37 @@ fn project_codex_response_item(
             if matches!(role, Some("system" | "developer")) {
                 return;
             }
-            let (text, has_image) = codex_message_content(payload.get("content"));
-            builder.image_entry_count = builder
-                .image_entry_count
-                .saturating_add(usize::from(has_image));
-            let Some(text) = text else { return };
+            let (text, image_count) = codex_message_content(payload.get("content"));
+            if role == Some("user") && text.as_deref().is_some_and(is_codex_contextual_user_text) {
+                return;
+            }
+            let Some(text) = text else {
+                if role == Some("user") && image_count > 0 {
+                    let before = builder.blocks.len();
+                    builder.push_attachment_only_user(
+                        "codex_response_message",
+                        created_at,
+                        CodexTextSource::Response,
+                        None,
+                    );
+                    builder.mark_user_attachments(before, image_count);
+                }
+                return;
+            };
             match role {
                 Some("user") => {
                     let before = builder.blocks.len();
+                    // The typed event names a user prompt; the response item
+                    // does not.
                     builder.push_text(
                         GenericBlockKind::User,
                         "codex_response_message",
                         created_at,
                         text,
                         CodexTextSource::Response,
+                        None,
                     );
-                    if has_image {
-                        builder.mark_user_image(before);
-                    }
+                    builder.mark_user_attachments(before, image_count);
                 }
                 Some("assistant") => builder.push_text(
                     GenericBlockKind::Assistant,
@@ -801,6 +1352,7 @@ fn project_codex_response_item(
                     created_at,
                     text,
                     CodexTextSource::Response,
+                    native_id,
                 ),
                 _ => builder.push_unknown(line, frame, "response_item.message", created_at),
             }
@@ -813,23 +1365,30 @@ fn project_codex_response_item(
                     created_at,
                     text,
                     CodexTextSource::Response,
+                    native_id,
                 );
             }
             // encrypted_content and raw reasoning content are deliberately ignored.
         }
-        "function_call" | "custom_tool_call" => builder.push_tool(
-            created_at,
-            payload.get("name").and_then(Value::as_str),
-            payload.get("call_id").and_then(Value::as_str),
-        ),
-        "local_shell_call" => builder.push_tool(
-            created_at,
-            Some("Command"),
-            payload
+        "function_call" | "custom_tool_call" => {
+            let name = payload.get("name").and_then(Value::as_str);
+            let call_id = payload.get("call_id").and_then(Value::as_str);
+            builder.push_tool(created_at, name, call_id, call_id.or(native_id));
+            if name == Some("apply_patch")
+                && let Some(block_id) = call_id.and_then(|call| builder.tool_block_id(call))
+            {
+                for path in apply_patch_paths(payload) {
+                    builder.note_path(&block_id, &path, HistoryChatFileOrigin::Written);
+                }
+            }
+        }
+        "local_shell_call" => {
+            let call_id = payload
                 .get("call_id")
                 .or_else(|| payload.get("id"))
-                .and_then(Value::as_str),
-        ),
+                .and_then(Value::as_str);
+            builder.push_tool(created_at, Some("Command"), call_id, call_id);
+        }
         "function_call_output" | "custom_tool_call_output" => {
             let output = codex_tool_output(payload.get("output"));
             builder.finish_tool(
@@ -838,21 +1397,81 @@ fn project_codex_response_item(
                 false,
             );
         }
-        "web_search_call" => builder.push_tool(
-            created_at,
-            Some("Web search"),
-            payload.get("id").and_then(Value::as_str),
-        ),
-        // Compaction ciphertext and tool declarations contain no readable
-        // transcript text and can include private native configuration.
-        "compaction"
+        "web_search_call" => {
+            builder.push_tool(created_at, Some("Web search"), native_id, native_id)
+        }
+        "image_generation_call" => {
+            let Some(key) = native_id else {
+                builder.push_unknown(
+                    line,
+                    frame,
+                    "response_item.image_generation_call",
+                    created_at,
+                );
+                return;
+            };
+            let failed = payload.get("status").and_then(Value::as_str) == Some("failed");
+            builder.complete_tool(created_at, key, Some("Image generation"), None, failed);
+            if let Some(block_id) = builder.tool_block_id(key)
+                && let Some(result) = payload.get("result").and_then(Value::as_str)
+            {
+                builder.note_inline_image(&block_id, result, HistoryChatFileOrigin::Generated);
+            }
+        }
+        // Inter-agent messages and configuration changes are native control
+        // records, not conversation. Compaction ciphertext and tool
+        // declarations contain no readable transcript text and can include
+        // private native configuration.
+        "agent_message"
+        | "configuration_update"
+        | "compaction_trigger"
+        | "compaction"
         | "context_compaction"
         | "additional_tools"
         | "tool_search_call"
-        | "tool_search_output"
-        | "image_generation_call" => {}
+        | "tool_search_output" => {}
         _ => builder.push_unknown(line, frame, "response_item", created_at),
     }
+}
+
+/// Paths an `apply_patch` call adds or updates, read from the patch text its
+/// input (or JSON arguments) carries.
+fn apply_patch_paths(payload: &Map<String, Value>) -> Vec<String> {
+    fn collect(value: &Value, depth: usize, out: &mut Vec<String>) {
+        if depth > 4 {
+            return;
+        }
+        match value {
+            Value::String(text) => {
+                for line in text.lines() {
+                    let line = line.trim();
+                    if let Some(path) = line
+                        .strip_prefix("*** Add File: ")
+                        .or_else(|| line.strip_prefix("*** Update File: "))
+                        && out.len() < 64
+                    {
+                        out.push(path.trim().to_owned());
+                    }
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|item| collect(item, depth + 1, out)),
+            Value::Object(object) => object
+                .values()
+                .for_each(|item| collect(item, depth + 1, out)),
+            _ => {}
+        }
+    }
+    let mut paths = Vec::new();
+    if let Some(input) = payload.get("input") {
+        collect(input, 0, &mut paths);
+    }
+    if let Some(Value::String(arguments)) = payload.get("arguments") {
+        match serde_json::from_str::<Value>(arguments) {
+            Ok(parsed) => collect(&parsed, 0, &mut paths),
+            Err(_) => collect(&Value::String(arguments.clone()), 0, &mut paths),
+        }
+    }
+    paths
 }
 
 fn project_codex_event(
@@ -866,29 +1485,29 @@ fn project_codex_event(
     match event_type {
         "user_message" => {
             let before = builder.blocks.len();
-            if let Some(text) = payload.get("message").and_then(Value::as_str) {
-                builder.push_text(
+            let image_count = ["images", "local_images"]
+                .iter()
+                .filter_map(|key| payload.get(*key).and_then(Value::as_array))
+                .map(Vec::len)
+                .sum::<usize>();
+            match payload.get("message").and_then(Value::as_str) {
+                Some(text) if !text.is_empty() => builder.push_text(
                     GenericBlockKind::User,
                     "codex_user_message",
                     created_at,
                     text.to_owned(),
                     CodexTextSource::Event,
-                );
+                    None,
+                ),
+                _ if image_count > 0 => builder.push_attachment_only_user(
+                    "codex_user_message",
+                    created_at,
+                    CodexTextSource::Event,
+                    None,
+                ),
+                _ => {}
             }
-            let has_image = payload
-                .get("images")
-                .and_then(Value::as_array)
-                .is_some_and(|images| !images.is_empty())
-                || payload
-                    .get("local_images")
-                    .and_then(Value::as_array)
-                    .is_some_and(|images| !images.is_empty());
-            builder.image_entry_count = builder
-                .image_entry_count
-                .saturating_add(usize::from(has_image));
-            if has_image {
-                builder.mark_user_image(before);
-            }
+            builder.mark_user_attachments(before, image_count);
         }
         "agent_message" => {
             if let Some(text) = payload.get("message").and_then(Value::as_str) {
@@ -898,6 +1517,7 @@ fn project_codex_event(
                     created_at,
                     text.to_owned(),
                     CodexTextSource::Event,
+                    None,
                 );
             }
         }
@@ -909,16 +1529,20 @@ fn project_codex_event(
                     created_at,
                     text.to_owned(),
                     CodexTextSource::Event,
+                    None,
                 );
             }
         }
         // Raw chain-of-thought is not a user-facing reasoning summary.
         "agent_reasoning_raw_content" | "agent_reasoning_section_break" => {}
-        "exec_command_begin" => builder.push_tool(
-            created_at,
-            Some("Command"),
-            payload.get("call_id").and_then(Value::as_str),
-        ),
+        "item_completed" => match payload.get("item").and_then(Value::as_object) {
+            Some(item) => project_codex_item(builder, line, frame, item, created_at),
+            None => builder.push_unknown(line, frame, "event_msg.item_completed", created_at),
+        },
+        "exec_command_begin" => {
+            let call_id = payload.get("call_id").and_then(Value::as_str);
+            builder.push_tool(created_at, Some("Command"), call_id, call_id);
+        }
         "exec_command_end" => {
             let output = payload
                 .get("aggregated_output")
@@ -942,11 +1566,8 @@ fn project_codex_event(
                 .and_then(Value::as_object)
                 .and_then(|invocation| invocation.get("tool"))
                 .and_then(Value::as_str);
-            builder.push_tool(
-                created_at,
-                name,
-                payload.get("call_id").and_then(Value::as_str),
-            );
+            let call_id = payload.get("call_id").and_then(Value::as_str);
+            builder.push_tool(created_at, name, call_id, call_id);
         }
         "mcp_tool_call_end" => {
             let failed = payload.get("result").is_some_and(|result| {
@@ -957,16 +1578,18 @@ fn project_codex_event(
             });
             builder.finish_tool(payload.get("call_id").and_then(Value::as_str), None, failed);
         }
-        "context_compacted" => builder.push_compaction(created_at, None),
+        "context_compacted" => builder.push_compaction(created_at, None, None),
         // Known lifecycle/settings/error events get no content block. Error
         // payloads can include native environment or provider details.
         "task_started"
         | "turn_started"
         | "task_complete"
         | "turn_complete"
+        | "turn_aborted"
         | "token_count"
         | "session_configured"
         | "thread_settings_applied"
+        | "thread_goal_updated"
         | "error"
         | "warning"
         | "mcp_startup_update"
@@ -975,28 +1598,320 @@ fn project_codex_event(
     }
 }
 
-fn codex_message_content(content: Option<&Value>) -> (Option<String>, bool) {
+/// A typed `item_completed` event: the finished form of one thread item, the
+/// way Codex 0.15x persists it next to the raw response items.
+fn project_codex_item(
+    builder: &mut CodexProjectionBuilder<'_>,
+    line: u64,
+    frame: &[u8],
+    item: &Map<String, Value>,
+    created_at: Option<String>,
+) {
+    let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
+    let id = item.get("id").and_then(Value::as_str);
+    let status = item.get("status").and_then(Value::as_str);
+    let status_failed = matches!(status, Some("failed" | "declined"));
+    match codex_kind(item_type).as_str() {
+        "usermessage" => {
+            let (text, image_count) = codex_item_content(item.get("content"));
+            let before = builder.blocks.len();
+            match text {
+                Some(text) => builder.push_text(
+                    GenericBlockKind::User,
+                    "codex_item_user_message",
+                    created_at,
+                    text,
+                    CodexTextSource::Event,
+                    id,
+                ),
+                None if image_count > 0 => builder.push_attachment_only_user(
+                    "codex_item_user_message",
+                    created_at,
+                    CodexTextSource::Event,
+                    id,
+                ),
+                None => {}
+            }
+            builder.mark_user_attachments(before, image_count);
+        }
+        "agentmessage" => {
+            if let (Some(text), _) = codex_item_content(item.get("content")) {
+                builder.push_text(
+                    GenericBlockKind::Assistant,
+                    "codex_item_agent_message",
+                    created_at,
+                    text,
+                    CodexTextSource::Event,
+                    id,
+                );
+            }
+        }
+        "reasoning" => {
+            if let Some(text) = codex_string_list(item.get("summary_text").or(item.get("summary")))
+            {
+                builder.push_text(
+                    GenericBlockKind::Thinking,
+                    "codex_item_reasoning",
+                    created_at,
+                    text,
+                    CodexTextSource::Event,
+                    id,
+                );
+            }
+        }
+        "plan" => {
+            if let Some(text) = item.get("text").and_then(Value::as_str)
+                && !text.trim().is_empty()
+            {
+                builder.push_text(
+                    GenericBlockKind::Thinking,
+                    "codex_item_plan",
+                    created_at,
+                    text.to_owned(),
+                    CodexTextSource::Event,
+                    id,
+                );
+            }
+        }
+        "commandexecution" => {
+            let Some(id) = id else {
+                builder.push_unknown(line, frame, "event_msg.item_completed", created_at);
+                return;
+            };
+            let exit_code = item.get("exit_code").and_then(Value::as_i64);
+            // A record without an exit code proves no failure.
+            let failed = status_failed || exit_code.is_some_and(|code| code != 0);
+            let mut lines = Vec::new();
+            if let Some(command) = codex_command_text(item.get("command")) {
+                lines.push(format!("Command: {command}"));
+            }
+            if let Some(output) = item
+                .get("aggregated_output")
+                .and_then(Value::as_str)
+                .filter(|output| !output.is_empty())
+            {
+                lines.push(output.to_owned());
+            }
+            if let Some(code) = exit_code.filter(|code| *code != 0) {
+                lines.push(format!("Exit code: {code}"));
+            }
+            let preview = (!lines.is_empty()).then(|| lines.join("\n"));
+            builder.complete_tool(created_at, id, Some("Command"), preview, failed);
+        }
+        "filechange" => {
+            let Some(id) = id else {
+                builder.push_unknown(line, frame, "event_msg.item_completed", created_at);
+                return;
+            };
+            let changes = codex_file_changes(item.get("changes"));
+            let preview = (!changes.is_empty()).then(|| {
+                changes
+                    .iter()
+                    .map(|(kind, path)| format!("{kind} {path}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+            builder.complete_tool(created_at, id, Some("File change"), preview, status_failed);
+            if let Some(block_id) = builder.tool_block_id(id) {
+                for (kind, path) in &changes {
+                    if kind != "delete" {
+                        builder.note_path(&block_id, path, HistoryChatFileOrigin::Written);
+                    }
+                }
+            }
+        }
+        "imageview" => {
+            let Some(id) = id else {
+                builder.push_unknown(line, frame, "event_msg.item_completed", created_at);
+                return;
+            };
+            let path = item.get("path").and_then(Value::as_str);
+            builder.complete_tool(
+                created_at,
+                id,
+                Some("Image view"),
+                path.map(|path| format!("Path: {path}")),
+                status_failed,
+            );
+            if let (Some(path), Some(block_id)) = (path, builder.tool_block_id(id)) {
+                builder.note_path(&block_id, path, HistoryChatFileOrigin::Read);
+            }
+        }
+        "imagegeneration" => {
+            let Some(id) = id else {
+                builder.push_unknown(line, frame, "event_msg.item_completed", created_at);
+                return;
+            };
+            builder.complete_tool(
+                created_at,
+                id,
+                Some("Image generation"),
+                None,
+                status_failed || item.get("failure").is_some_and(|value| !value.is_null()),
+            );
+            if let Some(block_id) = builder.tool_block_id(id) {
+                let saved = ["saved_path", "savedPath"]
+                    .iter()
+                    .find_map(|key| item.get(*key).and_then(Value::as_str));
+                if let Some(path) = saved {
+                    builder.note_path(&block_id, path, HistoryChatFileOrigin::Generated);
+                } else if let Some(result) = item.get("result").and_then(Value::as_str) {
+                    builder.note_inline_image(&block_id, result, HistoryChatFileOrigin::Generated);
+                }
+            }
+        }
+        "mcptoolcall"
+        | "dynamictoolcall"
+        | "collabagenttoolcall"
+        | "subagentactivity"
+        | "websearch"
+        | "extension" => {
+            let Some(id) = id else {
+                builder.push_unknown(line, frame, "event_msg.item_completed", created_at);
+                return;
+            };
+            let name = match codex_kind(item_type).as_str() {
+                "mcptoolcall" | "dynamictoolcall" => item.get("tool").and_then(Value::as_str),
+                "websearch" => Some("Web search"),
+                "extension" => item
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .or(Some("Extension")),
+                _ => Some("Agent"),
+            };
+            let result_failed = item
+                .get("result")
+                .and_then(Value::as_object)
+                .is_some_and(|result| result.contains_key("error"))
+                || item.get("success").and_then(Value::as_bool) == Some(false);
+            builder.complete_tool(created_at, id, name, None, status_failed || result_failed);
+        }
+        "contextcompaction" => builder.push_compaction(created_at, None, id),
+        // Review-mode markers and sleeps are lifecycle, not conversation.
+        "sleep" | "enteredreviewmode" | "exitedreviewmode" => {}
+        _ => builder.push_unknown(line, frame, "event_msg.item_completed", created_at),
+    }
+}
+
+/// The text and the image or attachment count of a typed item's `content`
+/// (`[{"type":"text","text":..},{"type":"local_image",..}]`).
+fn codex_item_content(content: Option<&Value>) -> (Option<String>, usize) {
     let Some(items) = content.and_then(Value::as_array) else {
-        return (None, false);
+        return (None, 0);
     };
     let mut texts = Vec::new();
-    let mut has_image = false;
+    let mut images = 0_usize;
+    for item in items.iter().filter_map(Value::as_object) {
+        match codex_kind(item.get("type").and_then(Value::as_str).unwrap_or("")).as_str() {
+            "text" | "inputtext" | "outputtext" => {
+                if let Some(text) = item.get("text").and_then(Value::as_str)
+                    && !is_codex_image_wrapper(text)
+                {
+                    texts.push(text);
+                }
+            }
+            "image" | "localimage" | "inputimage" => images += 1,
+            _ => {}
+        }
+    }
+    let text = texts.join("\n");
+    ((!text.trim().is_empty()).then_some(text), images)
+}
+
+/// An `<image ...>` or `</image>` text part Codex puts around an image.
+fn is_codex_image_wrapper(text: &str) -> bool {
+    let text = text.trim();
+    text.len() <= 200
+        && (text == "</image>"
+            || (text.starts_with("<image") && text.ends_with('>') && !text.contains('\n')))
+}
+
+/// A list of strings (or `{text}` objects) joined by newlines.
+fn codex_string_list(value: Option<&Value>) -> Option<String> {
+    let text = value
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|item| {
+            item.as_str()
+                .or_else(|| item.get("text").and_then(Value::as_str))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.trim().is_empty()).then_some(text)
+}
+
+/// The command a command item ran: an argv list or a single string.
+fn codex_command_text(command: Option<&Value>) -> Option<String> {
+    let text = match command? {
+        Value::String(text) => text.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => return None,
+    };
+    (!text.trim().is_empty()).then_some(text)
+}
+
+/// The `(kind, path)` pairs of a file-change item: `changes` is an object
+/// keyed by path (`{path: {"type": "update"|"add"|"delete", ..}}`) in rollouts
+/// and an array of `{path, kind: {"type": ..}}` over the app-server protocol.
+fn codex_file_changes(changes: Option<&Value>) -> Vec<(String, String)> {
+    let kind_of = |value: &Value| {
+        value
+            .get("type")
+            .or_else(|| value.get("kind").and_then(|kind| kind.get("type")))
+            .or_else(|| value.get("kind"))
+            .and_then(Value::as_str)
+            .map_or_else(|| "update".to_owned(), str::to_ascii_lowercase)
+    };
+    let mut result = Vec::new();
+    match changes {
+        Some(Value::Object(map)) => {
+            for (path, change) in map.iter().take(64) {
+                result.push((kind_of(change), path.clone()));
+            }
+        }
+        Some(Value::Array(list)) => {
+            for change in list.iter().take(64) {
+                if let Some(path) = change.get("path").and_then(Value::as_str) {
+                    result.push((kind_of(change), path.to_owned()));
+                }
+            }
+        }
+        _ => {}
+    }
+    result
+}
+
+/// The text of a response message and how many images or audio clips it
+/// carried. The `<image ...>` wrapper parts Codex adds around an image are not
+/// text the person wrote.
+fn codex_message_content(content: Option<&Value>) -> (Option<String>, usize) {
+    let Some(items) = content.and_then(Value::as_array) else {
+        return (None, 0);
+    };
+    let mut texts = Vec::new();
+    let mut images = 0_usize;
     for item in items {
         let Some(item) = item.as_object() else {
             continue;
         };
         match item.get("type").and_then(Value::as_str) {
             Some("input_text" | "output_text") => {
-                if let Some(text) = item.get("text").and_then(Value::as_str) {
+                if let Some(text) = item.get("text").and_then(Value::as_str)
+                    && !is_codex_image_wrapper(text)
+                {
                     texts.push(text);
                 }
             }
-            Some("input_image" | "input_audio") => has_image = true,
+            Some("input_image" | "input_audio") => images += 1,
             _ => {}
         }
     }
     let text = texts.join("\n");
-    ((!text.is_empty()).then_some(text), has_image)
+    ((!text.is_empty()).then_some(text), images)
 }
 
 fn codex_reasoning_summary(summary: Option<&Value>) -> Option<String> {
@@ -2024,6 +2939,783 @@ mod tests {
             Err(WorkspaceHistoryError::File(BoundedScanError::Symlink))
         ));
     }
+
+    // ---- Stable ids, typed Codex items, Claude markers and images, chat files ----
+
+    fn at(record: serde_json::Value, kind: &str) -> serde_json::Value {
+        serde_json::json!({"timestamp": "2026-11-18T10:00:01Z", "type": kind, "payload": record})
+    }
+
+    fn response(payload: serde_json::Value) -> serde_json::Value {
+        at(payload, "response_item")
+    }
+
+    fn event(payload: serde_json::Value) -> serde_json::Value {
+        at(payload, "event_msg")
+    }
+
+    fn item_completed(item: serde_json::Value) -> serde_json::Value {
+        event(serde_json::json!({
+            "type": "item_completed", "thread_id": "t", "turn_id": "x", "item": item
+        }))
+    }
+
+    fn codex_source(
+        directory: &TemporaryDirectory,
+        records: &[serde_json::Value],
+    ) -> HostNativeHistorySource {
+        let header = serde_json::json!({
+            "timestamp": "2026-11-18T10:00:00Z",
+            "type": "session_meta",
+            "payload": {"id": "codex-thread", "cwd": directory.path().to_string_lossy()}
+        });
+        let mut body = format!("{header}\n");
+        for record in records {
+            body.push_str(&format!("{record}\n"));
+        }
+        let path = directory.path().join("rollout.jsonl");
+        fs::write(&path, body).expect("rollout writes");
+        HostNativeHistorySource::new(path, "codex-thread".into(), WorkspaceHistoryFormat::Codex)
+    }
+
+    fn pi_source(
+        directory: &TemporaryDirectory,
+        records: &[serde_json::Value],
+    ) -> HostNativeHistorySource {
+        let header = serde_json::json!({
+            "type": "session", "version": 3, "id": "pi-native",
+            "cwd": directory.path().to_string_lossy(),
+            "createdAt": "2026-11-18T10:00:00Z"
+        });
+        let mut body = format!("{header}\n");
+        for record in records {
+            body.push_str(&format!("{record}\n"));
+        }
+        let path = directory.path().join("pi.jsonl");
+        fs::write(&path, body).expect("pi session writes");
+        HostNativeHistorySource::new(path, "pi-native".into(), WorkspaceHistoryFormat::Pi)
+    }
+
+    /// Writes a Claude Code chain: every entry hangs off the one before it.
+    fn claude_chain(
+        directory: &TemporaryDirectory,
+        entries: &[serde_json::Value],
+    ) -> HostNativeHistorySource {
+        let mut body = String::new();
+        let mut parent: Option<String> = None;
+        for entry in entries {
+            let mut entry = entry.clone();
+            if let Some(object) = entry.as_object_mut() {
+                object.insert("parentUuid".into(), serde_json::json!(parent));
+                parent = object
+                    .get("uuid")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+            }
+            body.push_str(&claude_line(directory, entry));
+            body.push('\n');
+        }
+        let path = directory.path().join(format!("{CLAUDE_SESSION}.jsonl"));
+        fs::write(&path, body).expect("claude transcript writes");
+        claude_source(path, CLAUDE_SESSION)
+    }
+
+    fn claude_user(uuid: &str, content: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "type": "user", "uuid": uuid, "message": {"role": "user", "content": content}
+        })
+    }
+
+    fn claude_assistant(
+        uuid: &str,
+        message_id: Option<&str>,
+        content: serde_json::Value,
+    ) -> serde_json::Value {
+        let mut message = serde_json::json!({"role": "assistant", "content": content});
+        if let Some(id) = message_id {
+            message["id"] = serde_json::json!(id);
+        }
+        serde_json::json!({"type": "assistant", "uuid": uuid, "message": message})
+    }
+
+    fn claude_tool_result(uuid: &str, tool_use_id: &str, failed: bool) -> serde_json::Value {
+        claude_user(
+            uuid,
+            serde_json::json!([
+                {"type": "tool_result", "tool_use_id": tool_use_id, "content": "ok", "is_error": failed}
+            ]),
+        )
+    }
+
+    fn ids(projection: &WorkspaceHistoryProjection) -> Vec<&str> {
+        projection
+            .timeline_blocks()
+            .iter()
+            .map(|block| block.id.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn modern_codex_items_fold_into_one_turn_and_accounting_is_dropped() {
+        let directory = TemporaryDirectory::new();
+        let source = codex_source(
+            &directory,
+            &[
+                // Codex's own context is not what the person typed.
+                response(
+                    serde_json::json!({"type":"message","role":"user","content":[
+                    {"type":"input_text","text":"# AGENTS.md instructions for /project\n\nbody"}]}),
+                ),
+                response(
+                    serde_json::json!({"type":"message","role":"user","content":[
+                    {"type":"input_text","text":"<environment_context>\n<cwd>/project</cwd>\n</environment_context>"}]}),
+                ),
+                response(
+                    serde_json::json!({"type":"message","role":"user","content":[
+                    {"type":"input_text","text":"Add the feature"}]}),
+                ),
+                item_completed(
+                    serde_json::json!({"type":"UserMessage","id":"user-item-1","content":[
+                    {"type":"text","text":"Add the feature"}]}),
+                ),
+                response(serde_json::json!({"type":"reasoning","id":"rs_1","summary":[]})),
+                item_completed(serde_json::json!({"type":"Reasoning","id":"rs_1",
+                    "summary_text":["Plan the change"],"raw_content":[]})),
+                serde_json::json!({"timestamp":"2026-11-18T10:00:02Z","type":"token_usage_record",
+                    "payload":{"thread_id":"t","usage":{"input_tokens":1,"total_tokens":2}}}),
+                response(
+                    serde_json::json!({"type":"function_call","id":"fc_1","name":"js",
+                    "call_id":"call_mcp","arguments":"{}"}),
+                ),
+                item_completed(serde_json::json!({"type":"McpToolCall","id":"call_mcp",
+                    "server":"s","tool":"search","status":"failed"})),
+                response(
+                    serde_json::json!({"type":"function_call_output","call_id":"call_mcp",
+                    "output":"nothing found"}),
+                ),
+                item_completed(
+                    serde_json::json!({"type":"CommandExecution","id":"call-run-1",
+                    "command":["cargo test"],"cwd":"/project","status":"completed",
+                    "aggregated_output":"1 failed","exit_code":101}),
+                ),
+                item_completed(
+                    serde_json::json!({"type":"CommandExecution","id":"call-run-2",
+                    "command":["cargo fmt"],"status":"completed","aggregated_output":"ok","exit_code":0}),
+                ),
+                item_completed(
+                    serde_json::json!({"type":"CommandExecution","id":"call-run-3",
+                    "command":["rm -rf x"],"status":"failed"}),
+                ),
+                item_completed(
+                    serde_json::json!({"type":"AgentMessage","id":"msg_1","phase":"final_answer",
+                    "content":[{"type":"Text","text":"All done."}]}),
+                ),
+                response(
+                    serde_json::json!({"type":"message","role":"assistant","id":"msg_1",
+                    "content":[{"type":"output_text","text":"All done."}]}),
+                ),
+                response(
+                    serde_json::json!({"type":"agent_message","id":"am_1","author":"/root",
+                    "recipient":"/root/w","content":[]}),
+                ),
+                response(
+                    serde_json::json!({"type":"configuration_update","reasoning":{"effort":"high"}}),
+                ),
+                event(serde_json::json!({"type":"thread_goal_updated","threadId":"t"})),
+                event(
+                    serde_json::json!({"type":"turn_aborted","turn_id":"x","reason":"interrupted"}),
+                ),
+            ],
+        );
+        let projection = project_native_workspace_history(&source, &project(&directory))
+            .expect("modern Codex history projects");
+        let blocks = projection.timeline_blocks();
+
+        use GenericBlockKind as K;
+        use GenericBlockStatus as S;
+        assert_eq!(
+            blocks
+                .iter()
+                .map(|block| (block.id.as_str(), block.kind, block.status))
+                .collect::<Vec<_>>(),
+            [
+                ("user-item-1", K::User, S::Complete),
+                ("rs_1", K::Thinking, S::Complete),
+                // The failure the typed item recorded survives the later output.
+                ("call_mcp", K::Tool, S::Failed),
+                ("call-run-1", K::Tool, S::Failed),
+                ("call-run-2", K::Tool, S::Complete),
+                ("call-run-3", K::Tool, S::Failed),
+                ("msg_1", K::Assistant, S::Complete),
+            ]
+        );
+        assert_eq!(blocks[0].preview.as_deref(), Some("Add the feature"));
+        assert_eq!(blocks[2].preview.as_deref(), Some("nothing found"));
+        let failed = blocks[3].preview.as_deref().expect("command preview");
+        assert!(failed.contains("cargo test") && failed.contains("1 failed"));
+        assert!(failed.contains("Exit code: 101"));
+        assert_eq!(projection.report.parse_state, ParseState::Healthy);
+        assert!(projection.report.unknown_entries.is_empty());
+        assert!(blocks.iter().all(|block| !block.fallback));
+        let visible = format!("{blocks:?}");
+        assert!(!visible.contains("AGENTS.md") && !visible.contains("environment_context"));
+        assert!(!visible.contains("input_tokens"));
+
+        // The answer resolves by its native id and by the id it had before.
+        assert_eq!(
+            projection.final_assistant_text(Some("msg_1"), None),
+            Some("All done.")
+        );
+        assert_eq!(
+            projection.final_assistant_text(Some("timeline-6"), None),
+            Some("All done.")
+        );
+        assert_eq!(
+            projection.final_assistant_text(Some("timeline-0"), None),
+            None
+        );
+    }
+
+    #[test]
+    fn a_codex_record_without_a_native_id_keeps_its_position_id() {
+        let directory = TemporaryDirectory::new();
+        let source = codex_source(
+            &directory,
+            &[
+                event(
+                    serde_json::json!({"type":"user_message","message":"Hello","images":[],"local_images":[]}),
+                ),
+                event(serde_json::json!({"type":"agent_message","message":"Hi there"})),
+                // A repeated native id never makes two blocks share an id.
+                item_completed(
+                    serde_json::json!({"type":"CommandExecution","id":"dup","status":"completed"}),
+                ),
+                item_completed(
+                    serde_json::json!({"type":"CommandExecution","id":"dup","status":"completed"}),
+                ),
+            ],
+        );
+        let projection = project_native_workspace_history(&source, &project(&directory))
+            .expect("history projects");
+        assert_eq!(ids(&projection), ["timeline-0", "timeline-1", "dup"]);
+    }
+
+    #[test]
+    fn a_codex_prompt_of_only_images_still_opens_its_turn() {
+        let directory = TemporaryDirectory::new();
+        let source = codex_source(
+            &directory,
+            &[
+                response(
+                    serde_json::json!({"type":"message","role":"user","content":[
+                    {"type":"input_text","text":"<image name=[Image #1]>"},
+                    {"type":"input_image","image_url":"data:image/png;base64,AAAA"},
+                    {"type":"input_text","text":"</image>"}]}),
+                ),
+                item_completed(
+                    serde_json::json!({"type":"UserMessage","id":"u-img","content":[
+                    {"type":"local_image","path":"/tmp/x.png"}]}),
+                ),
+                item_completed(serde_json::json!({"type":"AgentMessage","id":"msg_a",
+                    "content":[{"type":"Text","text":"I see it."}]})),
+            ],
+        );
+        let projection = project_native_workspace_history(&source, &project(&directory))
+            .expect("history projects");
+        let blocks = projection.timeline_blocks();
+        assert_eq!(ids(&projection), ["u-img", "msg_a"]);
+        assert_eq!(blocks[0].kind, GenericBlockKind::User);
+        assert_eq!(blocks[0].preview, None);
+        assert!(blocks[0].has_image);
+        assert_eq!(blocks[0].attachment_count, 1);
+        assert_eq!(projection.report.image_entry_count, 1);
+    }
+
+    #[test]
+    fn codex_history_lists_the_files_its_agent_wrote_viewed_and_generated() {
+        let directory = TemporaryDirectory::new();
+        let dir = directory.path().to_string_lossy().into_owned();
+        let source = codex_source(
+            &directory,
+            &[
+                item_completed(
+                    serde_json::json!({"type":"FileChange","id":"call-fc-1","status":"completed",
+                    "changes":{
+                        format!("{dir}/src/new.rs"): {"type":"add","content":"x"},
+                        format!("{dir}/src/old.rs"): {"type":"update","unified_diff":"@@","move_path":null},
+                        format!("{dir}/gone.rs"): {"type":"delete","content":"y"}}}),
+                ),
+                item_completed(
+                    serde_json::json!({"type":"FileChange","id":"call-fc-2","status":"failed",
+                    "changes":{format!("{dir}/bad.rs"): {"type":"add","content":""}}}),
+                ),
+                item_completed(serde_json::json!({"type":"ImageView","id":"call-iv-1",
+                    "path": format!("{dir}/shot.png")})),
+                response(
+                    serde_json::json!({"type":"image_generation_call","id":"ig_1",
+                    "status":"completed","revised_prompt":"a cat","result":"iVBORw0KGgoAAAANSUhEUg=="}),
+                ),
+                response(
+                    serde_json::json!({"type":"custom_tool_call","id":"ctc_1","status":"completed",
+                    "call_id":"call_patch","name":"apply_patch",
+                    "input":"*** Begin Patch\n*** Add File: docs/added.md\n+x\n*** Update File: src/main.rs\n@@\n-a\n+b\n*** Delete File: old.txt\n*** End Patch"}),
+                ),
+                response(
+                    serde_json::json!({"type":"custom_tool_call_output","call_id":"call_patch","output":"Done"}),
+                ),
+            ],
+        );
+        let projection = project_native_workspace_history(&source, &project(&directory))
+            .expect("history projects");
+        let root = directory.path();
+        let listed = projection
+            .chat_files()
+            .iter()
+            .map(|file| {
+                (
+                    file.block_id.clone(),
+                    file.path.clone(),
+                    file.inline
+                        .as_ref()
+                        .map(|(media, bytes)| (media.clone(), bytes.len())),
+                    file.origin,
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected = vec![
+            (
+                "call-fc-1".to_owned(),
+                Some(root.join("src/new.rs")),
+                None,
+                HistoryChatFileOrigin::Written,
+            ),
+            (
+                "call-fc-1".to_owned(),
+                Some(root.join("src/old.rs")),
+                None,
+                HistoryChatFileOrigin::Written,
+            ),
+            (
+                "call-iv-1".to_owned(),
+                Some(root.join("shot.png")),
+                None,
+                HistoryChatFileOrigin::Read,
+            ),
+            (
+                "ig_1".to_owned(),
+                None,
+                Some(("image/png".to_owned(), 16)),
+                HistoryChatFileOrigin::Generated,
+            ),
+            (
+                "call_patch".to_owned(),
+                Some(root.join("docs/added.md")),
+                None,
+                HistoryChatFileOrigin::Written,
+            ),
+            (
+                "call_patch".to_owned(),
+                Some(root.join("src/main.rs")),
+                None,
+                HistoryChatFileOrigin::Written,
+            ),
+        ];
+        // A deleted file, a failed change and the patch's own delete are not listed.
+        assert_eq!(listed.len(), expected.len());
+        for item in &expected {
+            assert!(listed.contains(item), "{item:?} is listed");
+        }
+        // Every file names a block of the projected timeline.
+        let block_ids = ids(&projection);
+        assert!(
+            projection
+                .chat_files()
+                .iter()
+                .all(|file| block_ids.contains(&file.block_id.as_str()))
+        );
+        // The debug form never shows a path or bytes.
+        let debug = format!("{:?}", projection.chat_files());
+        assert!(!debug.contains("new.rs") && !debug.contains(&dir));
+        // The convenience function agrees.
+        assert_eq!(
+            history_chat_files(&source, &project(&directory))
+                .expect("files list")
+                .len(),
+            6
+        );
+    }
+
+    #[test]
+    fn chat_files_are_capped_to_the_newest_and_inline_images_are_bounded() {
+        let directory = TemporaryDirectory::new();
+        let dir = directory.path().to_string_lossy().into_owned();
+        let records = (0..250)
+            .map(|index| {
+                item_completed(
+                    serde_json::json!({"type":"FileChange","id":format!("fc-{index}"),
+                    "status":"completed",
+                    "changes":{format!("{dir}/f{index}.txt"): {"type":"add","content":""}}}),
+                )
+            })
+            .collect::<Vec<_>>();
+        let source = codex_source(&directory, &records);
+        let projection = project_native_workspace_history(&source, &project(&directory))
+            .expect("history projects");
+        let files = projection.chat_files();
+        assert_eq!(files.len(), HISTORY_CHAT_FILE_LIMIT);
+        assert_eq!(
+            files.first().map(|file| file.block_id.as_str()),
+            Some("fc-50")
+        );
+        assert_eq!(
+            files.last().map(|file| file.block_id.as_str()),
+            Some("fc-249")
+        );
+
+        // Decoding refuses what is over the bound, and what is not an image.
+        assert_eq!(decode_base64("AAAA", 2), None);
+        assert_eq!(decode_base64("AAAA", 3), Some(vec![0, 0, 0]));
+        assert_eq!(decode_base64("QUJD\nREVG", 10), Some(b"ABCDEF".to_vec()));
+        assert_eq!(decode_base64("not base64!", 10), None);
+        assert!(decode_inline_image("QUJD").is_none());
+        let data_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+        assert_eq!(
+            decode_inline_image(data_url).map(|(media, bytes)| (media, bytes.len())),
+            Some(("image/png".to_owned(), 16))
+        );
+    }
+
+    #[test]
+    fn claude_internal_text_is_only_the_native_markers() {
+        for marker in CLAUDE_INTERNAL_TAGS {
+            assert!(
+                is_internal_claude_text(&format!("<{marker}>x</{marker}>")),
+                "{marker}"
+            );
+            assert!(
+                is_internal_claude_text(&format!("  <{marker} a=\"b\">x")),
+                "{marker}"
+            );
+        }
+        assert!(is_internal_claude_text("[Request interrupted by user]"));
+        assert!(is_internal_claude_text(
+            "[Request interrupted by user for tool use]"
+        ));
+        for prompt in [
+            "<task>Fix the parser</task>",
+            "<pasted_content>text</pasted_content>",
+            "<div>html</div>",
+            "<command-name-extra>x</command-name-extra>",
+            "<system-reminders>x",
+            "<task-notification",
+            "<Task-Notification>x",
+            "<",
+            "<command-name",
+            "[Request interrupted",
+            "plain",
+        ] {
+            assert!(!is_internal_claude_text(prompt), "{prompt}");
+        }
+    }
+
+    #[test]
+    fn a_claude_prompt_that_starts_with_a_tag_stays_in_the_history() {
+        let directory = TemporaryDirectory::new();
+        let source = claude_chain(
+            &directory,
+            &[
+                claude_user("u1", serde_json::json!("<task>Fix the parser</task>")),
+                claude_assistant(
+                    "a1",
+                    Some("msg_1"),
+                    serde_json::json!([{"type":"text","text":"On it."}]),
+                ),
+                claude_user(
+                    "u2",
+                    serde_json::json!("<command-name>/model</command-name>"),
+                ),
+                claude_user(
+                    "u3",
+                    serde_json::json!("<pasted_content>blob</pasted_content>"),
+                ),
+                claude_user(
+                    "u4",
+                    serde_json::json!("<system-reminder>hidden</system-reminder>"),
+                ),
+                claude_user(
+                    "u5",
+                    serde_json::json!("<task-notification>done</task-notification>"),
+                ),
+                claude_user(
+                    "u6",
+                    serde_json::json!("<local-command-stdout>out</local-command-stdout>"),
+                ),
+                claude_assistant(
+                    "a2",
+                    Some("msg_2"),
+                    serde_json::json!([{"type":"text","text":"Fixed."}]),
+                ),
+            ],
+        );
+        let projection = project_native_workspace_history(&source, &project(&directory))
+            .expect("history projects");
+        let users = projection
+            .timeline_blocks()
+            .iter()
+            .filter(|block| block.kind == GenericBlockKind::User)
+            .map(|block| block.preview.as_deref().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            users,
+            [
+                "<task>Fix the parser</task>",
+                "<pasted_content>blob</pasted_content>"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_claude_prompt_of_only_images_keeps_its_turn_and_its_attachment_count() {
+        let directory = TemporaryDirectory::new();
+        let image = serde_json::json!({"type":"image","source":{"type":"base64","media_type":"image/png","data":"SECRET"}});
+        let source = claude_chain(
+            &directory,
+            &[
+                claude_user("u1", serde_json::json!("First")),
+                claude_assistant(
+                    "a1",
+                    Some("msg_1"),
+                    serde_json::json!([{"type":"text","text":"One."}]),
+                ),
+                claude_user("u2", serde_json::json!([image.clone(), image])),
+                claude_assistant(
+                    "a2",
+                    Some("msg_2"),
+                    serde_json::json!([{"type":"text","text":"Two."}]),
+                ),
+            ],
+        );
+        let projection = project_native_workspace_history(&source, &project(&directory))
+            .expect("history projects");
+        let blocks = projection.timeline_blocks();
+        assert_eq!(
+            blocks.iter().map(|block| block.kind).collect::<Vec<_>>(),
+            [
+                GenericBlockKind::User,
+                GenericBlockKind::Assistant,
+                GenericBlockKind::User,
+                GenericBlockKind::Assistant
+            ]
+        );
+        assert_eq!(blocks[2].preview, None);
+        assert!(blocks[2].has_image);
+        assert_eq!(blocks[2].attachment_count, 2);
+        assert_eq!(blocks[0].attachment_count, 0);
+        assert_eq!(projection.report.image_entry_count, 1);
+        assert!(!format!("{blocks:?}").contains("SECRET"));
+    }
+
+    #[test]
+    fn claude_blocks_take_the_ids_the_bridge_gives_them_live() {
+        let directory = TemporaryDirectory::new();
+        let dir = directory.path().to_string_lossy().into_owned();
+        let source = claude_chain(
+            &directory,
+            &[
+                claude_user("u1", serde_json::json!("Write it")),
+                claude_assistant(
+                    "a1",
+                    Some("msg_1"),
+                    serde_json::json!([{"type":"thinking","thinking":"Plan"}]),
+                ),
+                // An empty part still takes a rank: "Hello" is the second text.
+                claude_assistant(
+                    "a2",
+                    Some("msg_1"),
+                    serde_json::json!([{"type":"text","text":""}]),
+                ),
+                claude_assistant(
+                    "a3",
+                    Some("msg_1"),
+                    serde_json::json!([{"type":"text","text":"Hello"}]),
+                ),
+                claude_assistant(
+                    "a9",
+                    None,
+                    serde_json::json!([{"type":"text","text":"No message id"}]),
+                ),
+                claude_assistant(
+                    "a5",
+                    Some("msg_2"),
+                    serde_json::json!([
+                    {"type":"tool_use","id":"toolu_w","name":"Write",
+                     "input":{"file_path": format!("{dir}/out.txt"),"content":"x"}}]),
+                ),
+                claude_tool_result("u2", "toolu_w", false),
+            ],
+        );
+        let projection = project_native_workspace_history(&source, &project(&directory))
+            .expect("history projects");
+        // The same hashes the bridge computes: sha256 of the value, 24 hex digits.
+        assert_eq!(
+            ids(&projection),
+            [
+                "claude-user-bb82030dbc2bcaba32a90bf2",
+                "claude-thinking-a9a52fa53ccdbfbbe333256a",
+                "claude-assistant-9a7a144d95ec96c2b2c5d36f",
+                "claude-history-784e53d01c52f893ab51a670",
+                "claude-tool-b416c98bf3202c91074a9773",
+            ]
+        );
+        assert_eq!(
+            projection.timeline_blocks()[4].status,
+            GenericBlockStatus::Complete
+        );
+        // The listed file names the tool's block.
+        let files = projection.chat_files();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].block_id, "claude-tool-b416c98bf3202c91074a9773");
+        assert_eq!(files[0].path, Some(PathBuf::from(format!("{dir}/out.txt"))));
+        assert_eq!(files[0].origin, HistoryChatFileOrigin::Written);
+        // A reference stored under the earlier position id still resolves.
+        assert_eq!(
+            projection.final_assistant_text(Some("timeline-2"), None),
+            Some("Hello")
+        );
+        assert_eq!(
+            projection
+                .final_assistant_text(Some("claude-assistant-9a7a144d95ec96c2b2c5d36f"), None),
+            Some("Hello")
+        );
+    }
+
+    #[test]
+    fn claude_chat_files_are_written_files_and_viewed_images_of_finished_calls() {
+        let directory = TemporaryDirectory::new();
+        let dir = directory.path().to_string_lossy().into_owned();
+        let call = |uuid: &str, id: &str, name: &str, input: serde_json::Value| {
+            claude_assistant(
+                uuid,
+                Some("msg_files"),
+                serde_json::json!([{"type":"tool_use","id":id,"name":name,"input":input}]),
+            )
+        };
+        let source = claude_chain(
+            &directory,
+            &[
+                claude_user("u1", serde_json::json!("Do the work")),
+                call(
+                    "a1",
+                    "toolu_e",
+                    "Edit",
+                    serde_json::json!({"file_path": format!("{dir}/bad.rs")}),
+                ),
+                claude_tool_result("r1", "toolu_e", true),
+                call(
+                    "a2",
+                    "toolu_r",
+                    "Read",
+                    serde_json::json!({"file_path": "shot.png"}),
+                ),
+                claude_tool_result("r2", "toolu_r", false),
+                call(
+                    "a3",
+                    "toolu_t",
+                    "Read",
+                    serde_json::json!({"file_path": format!("{dir}/notes.txt")}),
+                ),
+                claude_tool_result("r3", "toolu_t", false),
+                call(
+                    "a4",
+                    "toolu_n",
+                    "NotebookEdit",
+                    serde_json::json!({"notebook_path": format!("{dir}/nb.ipynb")}),
+                ),
+                claude_tool_result("r4", "toolu_n", false),
+                call(
+                    "a5",
+                    "toolu_m",
+                    "MultiEdit",
+                    serde_json::json!({"file_path": format!("{dir}/multi.rs")}),
+                ),
+                // No result: the call never finished.
+                call(
+                    "a6",
+                    "toolu_x",
+                    "Write",
+                    serde_json::json!({"file_path": format!("{dir}/lost.rs")}),
+                ),
+            ],
+        );
+        let projection = project_native_workspace_history(&source, &project(&directory))
+            .expect("history projects");
+        let root = directory.path();
+        let listed = projection
+            .chat_files()
+            .iter()
+            .map(|file| (file.path.clone().expect("path"), file.origin))
+            .collect::<Vec<_>>();
+        // Only a call with a recorded, successful result counts: the failed
+        // Edit and the MultiEdit and Write without any result are left out.
+        assert_eq!(
+            listed,
+            [
+                (root.join("shot.png"), HistoryChatFileOrigin::Read),
+                (root.join("nb.ipynb"), HistoryChatFileOrigin::Written),
+            ]
+        );
+    }
+
+    #[test]
+    fn pi_blocks_take_the_ids_the_bridge_gives_them_live() {
+        let directory = TemporaryDirectory::new();
+        let source = pi_source(
+            &directory,
+            &[
+                serde_json::json!({"type":"message","id":"e1","timestamp":"2026-11-18T10:00:01Z",
+                    "message":{"role":"user","content":"Write the file"}}),
+                serde_json::json!({"type":"message","id":"e2","timestamp":"2026-11-18T10:00:02Z",
+                    "message":{"role":"assistant","timestamp":1700000000000_i64,"content":[
+                        {"type":"thinking","thinking":"Plan"},
+                        {"type":"text","text":"Writing."},
+                        {"type":"toolCall","id":"call_1","name":"write",
+                         "arguments":{"path":"out.txt","content":"x"}}]}}),
+                serde_json::json!({"type":"message","id":"e3","timestamp":"2026-11-18T10:00:03Z",
+                    "message":{"role":"toolResult","toolCallId":"call_1","toolName":"write",
+                               "content":[{"type":"text","text":"done"}]}}),
+                // The same timestamp again: the entry id names this answer.
+                serde_json::json!({"type":"message","id":"e4","timestamp":"2026-11-18T10:00:04Z",
+                    "message":{"role":"assistant","timestamp":1700000000000_i64,
+                               "content":[{"type":"text","text":"Again."}]}}),
+            ],
+        );
+        let projection = project_native_workspace_history(&source, &project(&directory))
+            .expect("history projects");
+        assert_eq!(
+            ids(&projection),
+            [
+                "pi-entry-8b5cc4df7eec7d32a7814eca",
+                "pi-thinking-e644171f4b2c7abae83604c0",
+                "pi-assistant-e644171f4b2c7abae83604c0",
+                "pi-tool-74196fe72e4cdc135c1033e0",
+                "pi-entry-449777124b1466a8ed667d0d",
+            ]
+        );
+        // Answers resolve by their new id, and by the position id of before.
+        assert_eq!(
+            projection.final_assistant_text(Some("pi-assistant-e644171f4b2c7abae83604c0"), None),
+            Some("Writing.")
+        );
+        assert_eq!(
+            projection.final_assistant_text(Some("timeline-4"), None),
+            Some("Again.")
+        );
+        let files = projection.chat_files();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].block_id, "pi-tool-74196fe72e4cdc135c1033e0");
+        assert_eq!(files[0].path, Some(directory.path().join("out.txt")));
+        assert_eq!(files[0].origin, HistoryChatFileOrigin::Written);
+    }
 }
 
 /// Native Hermes SQLite projection. Never rewrites or converts its history.
@@ -2096,10 +3788,11 @@ fn project_hermes_history(
                 None,
                 text,
                 CodexTextSource::Response,
+                None,
             ),
             "tool" => {
                 let id = format!("hermes-tool-{}", builder.blocks.len());
-                builder.push_tool(None, tool.as_deref(), Some(&id));
+                builder.push_tool(None, tool.as_deref(), Some(&id), None);
                 builder.finish_tool(Some(&id), Some(text), false);
             }
             "system" => {}
@@ -2117,6 +3810,7 @@ fn project_hermes_history(
     Ok(WorkspaceHistoryProjection {
         report,
         assistant_texts: builder.assistants,
+        files: Vec::new(),
     })
 }
 
@@ -2238,9 +3932,15 @@ enum ClaudeEntryContent {
     User {
         text: Option<String>,
         results: Vec<ClaudeToolResult>,
-        has_image: bool,
+        /// Images the prompt carried (their bytes are never read).
+        images: usize,
     },
-    Assistant(Vec<ClaudeAssistantPart>),
+    Assistant {
+        /// The API message id: Claude Code splits one message into one
+        /// transcript entry per content block and repeats it on each.
+        message_id: Option<String>,
+        parts: Vec<ClaudeAssistantPart>,
+    },
     ApiError,
     Compaction,
     /// Meta, sidechain, compact-summary, attachment and other system entries.
@@ -2253,10 +3953,27 @@ enum ClaudeEntryContent {
 }
 
 enum ClaudeAssistantPart {
-    Text(String),
-    Thinking(String),
-    ToolUse { id: String, name: Option<String> },
+    /// An empty `text` is a part with nothing to show; it still takes a rank.
+    Text {
+        text: String,
+        index: usize,
+    },
+    Thinking {
+        text: String,
+        index: usize,
+    },
+    ToolUse {
+        id: String,
+        name: Option<String>,
+        files: Vec<ClaudeFileRef>,
+    },
     Unsupported(String),
+}
+
+/// A file a tool call names (the path as written in the tool input).
+struct ClaudeFileRef {
+    path: String,
+    origin: HistoryChatFileOrigin,
 }
 
 struct ClaudeToolResult {
@@ -2285,25 +4002,42 @@ fn is_claude_session_id(value: &str) -> bool {
         })
 }
 
-/// Claude Code's own rule for internal user entries: command wrappers,
-/// reminders and notifications start with a lowercase tag, and interrupt
-/// markers are bracketed. Neither is a user prompt.
+/// The tags Claude Code itself wraps around text it puts in a user message:
+/// slash-command echoes, command output, reminders, shell-mode input and
+/// output, hook output and task notifications. Only these exact names mark an
+/// internal entry; a prompt that merely starts with some other tag (`<task>`,
+/// `<pasted_content>`, HTML) is what the person wrote.
+const CLAUDE_INTERNAL_TAGS: [&str; 12] = [
+    "command-name",
+    "command-message",
+    "command-args",
+    "local-command-stdout",
+    "local-command-stderr",
+    "local-command-caveat",
+    "system-reminder",
+    "bash-input",
+    "bash-stdout",
+    "bash-stderr",
+    "user-prompt-submit-hook",
+    "task-notification",
+];
+
+/// Whether a user text is one of Claude Code's own native markers: a whole
+/// `CLAUDE_INTERNAL_TAGS` tag at the start, or a bracketed interrupt notice.
 fn is_internal_claude_text(text: &str) -> bool {
-    if let Some(rest) = text.trim_start().strip_prefix('<') {
-        let mut characters = rest.chars();
-        if !characters
-            .next()
-            .is_some_and(|character| character.is_ascii_lowercase())
-        {
-            return false;
-        }
-        for character in characters {
-            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
-                continue;
-            }
-            return character.is_whitespace() || character == '>';
-        }
-        return false;
+    let text = text.trim_start();
+    if let Some(rest) = text.strip_prefix('<') {
+        let end = rest
+            .find(|character: char| {
+                !(character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+            })
+            .unwrap_or(rest.len());
+        let (name, after) = rest.split_at(end);
+        return CLAUDE_INTERNAL_TAGS.contains(&name)
+            && after
+                .chars()
+                .next()
+                .is_some_and(|character| character == '>' || character.is_whitespace());
     }
     text.strip_prefix("[Request interrupted by user")
         .is_some_and(|rest| rest.contains(']'))
@@ -2357,7 +4091,7 @@ fn claude_tool_result_text(content: Option<&Value>) -> Option<String> {
 fn claude_user_content(message: &Map<String, Value>) -> ClaudeEntryContent {
     let mut texts = Vec::new();
     let mut results = Vec::new();
-    let mut has_image = false;
+    let mut images = 0_usize;
     match message.get("content") {
         Some(Value::String(text)) => texts.push(text.as_str()),
         Some(Value::Array(parts)) => {
@@ -2377,7 +4111,7 @@ fn claude_user_content(message: &Map<String, Value>) -> ClaudeEntryContent {
                             });
                         }
                     }
-                    Some("image") => has_image = true,
+                    Some("image") => images += 1,
                     _ => {}
                 }
             }
@@ -2392,35 +4126,94 @@ fn claude_user_content(message: &Map<String, Value>) -> ClaudeEntryContent {
     ClaudeEntryContent::User {
         text: (!text.trim().is_empty()).then_some(text),
         results,
-        has_image,
+        images,
     }
 }
 
+/// Whether a path names an image the host can preview.
+fn is_image_path(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg"
+            )
+        })
+}
+
+/// The files a Claude tool call names: what Write, Edit, MultiEdit and
+/// NotebookEdit write, and the images Read looks at.
+fn claude_tool_files(name: Option<&str>, input: Option<&Value>) -> Vec<ClaudeFileRef> {
+    let Some(input) = input.and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let field = |key: &str| {
+        input
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty() && value.len() <= 4096)
+            .map(str::to_owned)
+    };
+    let (path, origin) = match name {
+        Some("Write" | "Edit" | "MultiEdit") => {
+            (field("file_path"), HistoryChatFileOrigin::Written)
+        }
+        Some("NotebookEdit") => (field("notebook_path"), HistoryChatFileOrigin::Written),
+        Some("Read") => (
+            field("file_path").filter(|path| is_image_path(path)),
+            HistoryChatFileOrigin::Read,
+        ),
+        _ => (None, HistoryChatFileOrigin::Read),
+    };
+    path.map(|path| ClaudeFileRef { path, origin })
+        .into_iter()
+        .collect()
+}
+
 fn claude_assistant_content(message: &Map<String, Value>) -> ClaudeEntryContent {
+    let message_id = message
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned);
     let mut parts = Vec::new();
-    for part in message
+    for (index, part) in message
         .get("content")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(Value::as_object)
+        .enumerate()
     {
+        let Some(part) = part.as_object() else {
+            continue;
+        };
+        // A part that carries nothing to show keeps an empty text: it still
+        // takes a rank, exactly as the live stream's content blocks do.
         let text_of = |key: &str| {
             part.get(key)
                 .and_then(Value::as_str)
                 .filter(|text| !text.trim().is_empty())
                 .map(str::to_owned)
+                .unwrap_or_default()
         };
         match part.get("type").and_then(Value::as_str) {
-            Some("text") => parts.extend(text_of("text").map(ClaudeAssistantPart::Text)),
-            Some("thinking") => {
-                parts.extend(text_of("thinking").map(ClaudeAssistantPart::Thinking));
-            }
+            Some("text") => parts.push(ClaudeAssistantPart::Text {
+                text: text_of("text"),
+                index,
+            }),
+            Some("thinking") => parts.push(ClaudeAssistantPart::Thinking {
+                text: text_of("thinking"),
+                index,
+            }),
             Some("tool_use") => {
                 if let Some(id) = part.get("id").and_then(Value::as_str) {
+                    let name = part.get("name").and_then(Value::as_str);
                     parts.push(ClaudeAssistantPart::ToolUse {
                         id: id.to_owned(),
-                        name: part.get("name").and_then(Value::as_str).map(str::to_owned),
+                        name: name.map(str::to_owned),
+                        files: claude_tool_files(name, part.get("input")),
                     });
                 }
             }
@@ -2432,7 +4225,7 @@ fn claude_assistant_content(message: &Map<String, Value>) -> ClaudeEntryContent 
             ))),
         }
     }
-    ClaudeEntryContent::Assistant(parts)
+    ClaudeEntryContent::Assistant { message_id, parts }
 }
 
 fn read_claude_line(
@@ -2517,6 +4310,12 @@ fn read_claude_line(
 }
 
 impl CodexProjectionBuilder<'_> {
+    /// The id for a block the Claude bridge names `native` live, when that id
+    /// is still free.
+    fn free_native(&self, native: String) -> Option<String> {
+        (!self.index_by_id.contains_key(&native)).then_some(native)
+    }
+
     /// A generic fallback that is shown once per unknown entry kind; every
     /// occurrence is still recorded in the report's unknown-entry summary.
     fn push_claude_unknown(
@@ -2527,7 +4326,7 @@ impl CodexProjectionBuilder<'_> {
     ) {
         let first = shown.insert(summary.entry_type.clone());
         if first {
-            let id = format!("timeline-{}", self.blocks.len());
+            let id = self.next_id(None);
             self.blocks.push(GenericTimelineBlock {
                 id,
                 parent_id: None,
@@ -2536,6 +4335,7 @@ impl CodexProjectionBuilder<'_> {
                 created_at,
                 preview: None,
                 has_image: false,
+                attachment_count: 0,
                 title: Some("Unrecognized session entry".into()),
                 tool_name: None,
                 collapsible: true,
@@ -2548,8 +4348,8 @@ impl CodexProjectionBuilder<'_> {
         self.unknown_entries.push(summary);
     }
 
-    fn push_claude_notice(&mut self, created_at: Option<String>) {
-        let id = format!("timeline-{}", self.blocks.len());
+    fn push_claude_notice(&mut self, created_at: Option<String>, native: Option<&str>) {
+        let id = self.next_id(native);
         self.blocks.push(GenericTimelineBlock {
             id,
             parent_id: None,
@@ -2558,6 +4358,7 @@ impl CodexProjectionBuilder<'_> {
             created_at,
             preview: Some(CLAUDE_API_ERROR_NOTICE.into()),
             has_image: false,
+            attachment_count: 0,
             title: Some("Error".into()),
             tool_name: None,
             collapsible: false,
@@ -2570,8 +4371,8 @@ impl CodexProjectionBuilder<'_> {
 
     /// Marks the top of a chain whose older part is not projected. It reuses
     /// the generic custom block, so it needs no new block kind.
-    fn push_claude_history_notice(&mut self) {
-        let id = format!("timeline-{}", self.blocks.len());
+    fn push_claude_history_notice(&mut self, native: Option<&str>) {
+        let id = self.next_id(native);
         self.blocks.push(GenericTimelineBlock {
             id,
             parent_id: None,
@@ -2580,6 +4381,7 @@ impl CodexProjectionBuilder<'_> {
             created_at: None,
             preview: Some(CLAUDE_HISTORY_TRIMMED_NOTICE.into()),
             has_image: false,
+            attachment_count: 0,
             title: Some("Earlier history not shown".into()),
             tool_name: None,
             collapsible: false,
@@ -2589,6 +4391,39 @@ impl CodexProjectionBuilder<'_> {
         });
         self.last_visible = None;
     }
+}
+
+/// Ranks of text and thinking parts per API message, counted over the whole
+/// chain: the second text part of a message is rank 1, shown or not. The live
+/// bridge names an answer by its message id and this rank.
+#[derive(Default)]
+struct ClaudeRanks(HashMap<(String, &'static str), usize>);
+
+impl ClaudeRanks {
+    fn take_rank(&mut self, message_id: Option<&str>, kind: &'static str) -> Option<usize> {
+        let slot = self.0.entry((message_id?.to_owned(), kind)).or_default();
+        let rank = *slot;
+        *slot += 1;
+        Some(rank)
+    }
+}
+
+/// The id the Claude bridge gives an answer or thinking part: from its message
+/// id and rank when it has them, else from the entry uuid and content index.
+fn claude_part_id(
+    kind: &str,
+    message_id: Option<&str>,
+    rank: Option<usize>,
+    uuid: &str,
+    index: usize,
+) -> (Option<String>, String) {
+    let stable = message_id.zip(rank).map(|(message_id, rank)| {
+        opaque_id(&format!("claude-{kind}"), &format!("{message_id}:{rank}"))
+    });
+    (
+        stable,
+        opaque_id("claude-history", &format!("{uuid}:{index}")),
+    )
 }
 
 fn unknown_summary(line: u64, entry_type: &str, frame: &[u8]) -> UnknownEntrySummary {
@@ -2820,10 +4655,11 @@ fn claude_entry_text_bytes(entry: &ClaudeChainEntry) -> usize {
                     .map(String::len)
                     .sum::<usize>()
         }
-        ClaudeEntryContent::Assistant(parts) => parts
+        ClaudeEntryContent::Assistant { parts, .. } => parts
             .iter()
             .map(|part| match part {
-                ClaudeAssistantPart::Text(text) | ClaudeAssistantPart::Thinking(text) => text.len(),
+                ClaudeAssistantPart::Text { text, .. }
+                | ClaudeAssistantPart::Thinking { text, .. } => text.len(),
                 ClaudeAssistantPart::ToolUse { .. } | ClaudeAssistantPart::Unsupported(_) => 0,
             })
             .sum(),
@@ -2852,7 +4688,7 @@ fn claude_chain_start(entries: &[ClaudeChainEntry], chain: &[usize], budget: usi
         && let Some(offset) = chain[start..].iter().position(|&index| {
             matches!(
                 &entries[index].content,
-                ClaudeEntryContent::User { text: Some(_), .. }
+                ClaudeEntryContent::User { text, images, .. } if text.is_some() || *images > 0
             )
         })
     {
@@ -2965,6 +4801,7 @@ fn project_claude_code_history_with_limits(
     let project_root = PathBuf::from(&cwd);
     let mut builder = CodexProjectionBuilder::new(&project_root);
     let mut shown_unknown = std::collections::HashSet::new();
+    let mut ranks = ClaudeRanks::default();
     let mut unreadable = unreadable.into_iter().peekable();
     // Times describe the whole conversation, whatever part is projected.
     let created_at = chain
@@ -2981,15 +4818,33 @@ fn project_claude_code_history_with_limits(
     let notice_blocks = usize::from(first_kept > 0);
     let mut first_user_preview = None;
     if first_kept > 0 {
-        builder.push_claude_history_notice();
+        let omitted = opaque_id(
+            "claude-history",
+            &format!("{}:omitted", source.path.to_string_lossy()),
+        );
+        builder.push_claude_history_notice(Some(&omitted));
         for &index in &chain[..first_kept] {
             match &entries[index].content {
-                ClaudeEntryContent::User {
-                    text, has_image, ..
-                } => {
+                // The dropped part still takes its ranks: they count over the
+                // whole chain.
+                ClaudeEntryContent::Assistant { message_id, parts } => {
+                    for part in parts {
+                        match part {
+                            ClaudeAssistantPart::Text { .. } => {
+                                ranks.take_rank(message_id.as_deref(), "assistant");
+                            }
+                            ClaudeAssistantPart::Thinking { .. } => {
+                                ranks.take_rank(message_id.as_deref(), "thinking");
+                            }
+                            ClaudeAssistantPart::ToolUse { .. }
+                            | ClaudeAssistantPart::Unsupported(_) => {}
+                        }
+                    }
+                }
+                ClaudeEntryContent::User { text, images, .. } => {
                     builder.image_entry_count = builder
                         .image_entry_count
-                        .saturating_add(usize::from(*has_image));
+                        .saturating_add(usize::from(*images > 0));
                     if first_user_preview.is_none()
                         && let Some(text) = text
                     {
@@ -3020,7 +4875,7 @@ fn project_claude_code_history_with_limits(
             ClaudeEntryContent::User {
                 text,
                 results,
-                has_image,
+                images,
             } => {
                 for result in results {
                     // Results of calls outside the active branch are ignored.
@@ -3032,42 +4887,75 @@ fn project_claude_code_history_with_limits(
                         );
                     }
                 }
-                builder.image_entry_count = builder
-                    .image_entry_count
-                    .saturating_add(usize::from(*has_image));
-                if let Some(text) = text {
-                    let before = builder.blocks.len();
-                    builder.push_text(
+                let before = builder.blocks.len();
+                let native = builder.free_native(opaque_id("claude-user", &entry.uuid));
+                match text {
+                    Some(text) => builder.push_text(
                         GenericBlockKind::User,
                         "claude_user",
                         at,
                         text.clone(),
                         CodexTextSource::Response,
-                    );
-                    if *has_image {
-                        builder.mark_user_image(before);
-                    }
+                        native.as_deref(),
+                    ),
+                    // A prompt of only images still opens its turn.
+                    None if *images > 0 => builder.push_attachment_only_user(
+                        "claude_user",
+                        at,
+                        CodexTextSource::Response,
+                        native.as_deref(),
+                    ),
+                    None => {}
                 }
+                builder.mark_user_attachments(before, *images);
             }
-            ClaudeEntryContent::Assistant(parts) => {
+            ClaudeEntryContent::Assistant { message_id, parts } => {
                 for part in parts {
                     match part {
-                        ClaudeAssistantPart::Text(text) => builder.push_text(
-                            GenericBlockKind::Assistant,
-                            "claude_assistant",
-                            at.clone(),
-                            text.clone(),
-                            CodexTextSource::Response,
-                        ),
-                        ClaudeAssistantPart::Thinking(text) => builder.push_text(
-                            GenericBlockKind::Thinking,
-                            "claude_thinking",
-                            at.clone(),
-                            text.clone(),
-                            CodexTextSource::Response,
-                        ),
-                        ClaudeAssistantPart::ToolUse { id, name } => {
-                            builder.push_tool(at.clone(), name.as_deref(), Some(id));
+                        ClaudeAssistantPart::Text { text, index }
+                        | ClaudeAssistantPart::Thinking { text, index } => {
+                            let (kind, block_kind, source_type) =
+                                if matches!(part, ClaudeAssistantPart::Text { .. }) {
+                                    ("assistant", GenericBlockKind::Assistant, "claude_assistant")
+                                } else {
+                                    ("thinking", GenericBlockKind::Thinking, "claude_thinking")
+                                };
+                            let rank = ranks.take_rank(message_id.as_deref(), kind);
+                            if text.is_empty() {
+                                continue;
+                            }
+                            let (stable, fallback) = claude_part_id(
+                                kind,
+                                message_id.as_deref(),
+                                rank,
+                                &entry.uuid,
+                                *index,
+                            );
+                            let native = stable
+                                .and_then(|id| builder.free_native(id))
+                                .or_else(|| builder.free_native(fallback));
+                            builder.push_text(
+                                block_kind,
+                                source_type,
+                                at.clone(),
+                                text.clone(),
+                                CodexTextSource::Response,
+                                native.as_deref(),
+                            );
+                        }
+                        ClaudeAssistantPart::ToolUse { id, name, files } => {
+                            let native = builder.free_native(opaque_id("claude-tool", id));
+                            builder.push_tool(
+                                at.clone(),
+                                name.as_deref(),
+                                Some(id),
+                                native.as_deref(),
+                            );
+                            if let Some(block_id) = builder.tool_block_id(id) {
+                                for file in files {
+                                    builder.note_path(&block_id, &file.path, file.origin);
+                                }
+                            }
                         }
                         ClaudeAssistantPart::Unsupported(kind) => builder.push_claude_unknown(
                             &mut shown_unknown,
@@ -3077,8 +4965,20 @@ fn project_claude_code_history_with_limits(
                     }
                 }
             }
-            ClaudeEntryContent::ApiError => builder.push_claude_notice(at),
-            ClaudeEntryContent::Compaction => builder.push_compaction(at, None),
+            ClaudeEntryContent::ApiError => {
+                let native = builder.free_native(opaque_id(
+                    "claude-history",
+                    &format!("{}:error", entry.uuid),
+                ));
+                builder.push_claude_notice(at, native.as_deref());
+            }
+            ClaudeEntryContent::Compaction => {
+                let native = builder.free_native(opaque_id(
+                    "claude-history",
+                    &format!("{}:compaction", entry.uuid),
+                ));
+                builder.push_compaction(at, None, native.as_deref());
+            }
             ClaudeEntryContent::Internal => {}
             ClaudeEntryContent::Unknown {
                 entry_type,
@@ -3161,9 +5061,11 @@ fn project_claude_code_history_with_limits(
         ParseState::Unsupported
     };
     report.unknown_entries = builder.unknown_entries;
+    let files = finalize_chat_files(builder.files, &builder.blocks);
     report.timeline_blocks = builder.blocks;
     Ok(WorkspaceHistoryProjection {
         report,
         assistant_texts: builder.assistants,
+        files,
     })
 }

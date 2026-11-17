@@ -44,6 +44,10 @@ pub(crate) type HostFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>
 pub(crate) enum HostFailure {
     Unavailable,
     SignInRequired,
+    /// A prompt was written but the harness never confirmed it (a timeout
+    /// or a lost acknowledgement): it may be running (ADR-076). Only `send`
+    /// reports it; nothing that may run is ever counted as refused.
+    AcceptanceUnknown,
 }
 
 /// One sidekick session start; the policy (instructions, no board, no
@@ -108,6 +112,16 @@ pub(crate) trait FusionHost: Send + Sync + 'static {
         })
     }
     fn activity(&self, session_id: String) -> HostFuture<SessionActivity>;
+    /// Whether any block of the session's native history contains `needle`
+    /// (the lead's history, to check whether a report reached it). A host
+    /// that cannot read the history says so; it never answers `false`.
+    fn history_contains(
+        &self,
+        _session_id: String,
+        _needle: String,
+    ) -> HostFuture<Result<bool, HostFailure>> {
+        Box::pin(async { Err(HostFailure::Unavailable) })
+    }
     /// Working-tree changes of the chat's folder (`None`: not a repository).
     fn changes(&self, lead_session_id: String) -> HostFuture<Option<(Vec<ReviewFileV1>, bool)>>;
     /// The shell commands the sidekick ran in a round, from its own
@@ -178,6 +192,15 @@ struct LeadSlot {
     /// (taken under the document lock; `admit_round` refuses new rounds
     /// meanwhile).
     reserved: AtomicBool,
+    /// A follow-up holds it from its pause check to the end of its send, and
+    /// a pair stop takes it after setting the pause: a delivery either went
+    /// out before the stop (whose interrupt then reaches it) or sees the
+    /// pause and never sends (ADR-076).
+    delivery_gate: tokio::sync::Mutex<()>,
+    /// The lead's turn generation from which a lead tool call belongs to a
+    /// turn the person started after a pair stop (`None`: any; after a
+    /// restart no earlier turn survives). Memory only.
+    resume_from: Mutex<Option<u64>>,
 }
 
 /// Admission held by one reset, abandon or reconcile; released on drop
@@ -251,6 +274,8 @@ enum TurnStart {
     Refused(HostFailure),
     /// A stop reached the round before its prompt was sent.
     Cancelled,
+    /// The prompt was written but its acceptance is unknown.
+    Unknown,
 }
 
 fn set_delivery(document: &mut FusionDocument, round_id: &str, delivery: Option<FusionDelivery>) {
@@ -361,6 +386,19 @@ async fn turn_ended(host: &dyn FusionHost, session_id: &str, limit: Duration) ->
             () = tokio::time::sleep_until(deadline) => return false,
         }
     }
+}
+
+/// The stable id of a report in the lead's history: the head of its
+/// envelope. A report body cannot forge it ([`super::logic::escape_body`]).
+fn report_marker(brief_id: &str, round_id: &str) -> String {
+    format!("[PiUI sidekick report {brief_id} · {round_id} ·")
+}
+
+fn paused_error() -> ToolError {
+    error(
+        SidekickErrorCode::PairStopping,
+        "The person stopped this pair; nothing new starts until they resume it.",
+    )
 }
 
 fn stopped_error() -> ToolError {
@@ -694,6 +732,8 @@ impl FusionBroker {
             send_gate: tokio::sync::Mutex::new(()),
             forgotten: AtomicBool::new(false),
             reserved: AtomicBool::new(false),
+            delivery_gate: tokio::sync::Mutex::new(()),
+            resume_from: Mutex::new(None),
         });
         if let Ok(mut leads) = self.inner.leads.lock() {
             leads.insert(lead, Arc::clone(&slot));
@@ -710,19 +750,27 @@ impl FusionBroker {
             .map(|leads| leads.values().cloned().collect())
             .unwrap_or_default();
         for slot in slots {
-            let queued: Vec<String> = slot
-                .document
-                .lock()
-                .await
+            self.resume_slot_deliveries(&slot).await;
+        }
+    }
+
+    /// Starts the queued follow-ups of one pair unless the person stopped it.
+    async fn resume_slot_deliveries(&self, slot: &Arc<LeadSlot>) {
+        let queued: Vec<String> = {
+            let document = slot.document.lock().await;
+            if document.paused {
+                return;
+            }
+            document
                 .briefs
                 .iter()
                 .flat_map(|brief| &brief.rounds)
                 .filter(|round| delivery_is(round, DeliveryVia::FollowUp, DeliveryState::Queued))
                 .map(|round| round.round_id.clone())
-                .collect();
-            for round_id in queued {
-                self.spawn_delivery(&slot, round_id);
-            }
+                .collect()
+        };
+        for round_id in queued {
+            self.spawn_delivery(slot, round_id);
         }
     }
 
@@ -854,6 +902,7 @@ impl FusionBroker {
             folded_briefs: 0,
             call_tombstones: Vec::new(),
             round_hosts: Vec::new(),
+            paused: false,
         };
         self.inner.store.save(&document).map_err(|_| ())?;
         self.install(document);
@@ -911,6 +960,7 @@ impl FusionBroker {
             briefs: document.briefs.clone(),
             stats: document.stats,
             revision: document.revision,
+            paused: document.paused,
         })
     }
 
@@ -952,6 +1002,7 @@ impl FusionBroker {
         {
             return replayed;
         }
+        self.resume_if_person_spoke(&slot).await;
         let parsed: Result<SidekickOperation, _> = serde_json::from_value(Value::Object(operation));
         let (answer, claimed) = match parsed {
             Err(_) => (
@@ -1102,6 +1153,49 @@ impl FusionBroker {
         Some(round_id.to_owned())
     }
 
+    /// After a pair stop the broker sends the lead nothing, so a lead turn
+    /// newer than the stopped one was started by the person: their next
+    /// message resumes the pair (ADR-076).
+    async fn resume_if_person_spoke(&self, slot: &Arc<LeadSlot>) {
+        if !slot.document.lock().await.paused {
+            return;
+        }
+        let threshold = slot.resume_from.lock().ok().and_then(|from| *from);
+        let generation = self
+            .inner
+            .host
+            .turns(&slot.lead_session_id)
+            .map(|receiver| receiver.borrow().generation)
+            .ok();
+        let newer = match (threshold, generation) {
+            (None, _) => true,
+            (Some(threshold), Some(generation)) => generation >= threshold,
+            (Some(_), None) => false,
+        };
+        if newer {
+            self.set_paused(slot, false).await;
+        }
+    }
+
+    async fn set_paused(&self, slot: &Arc<LeadSlot>, paused: bool) {
+        {
+            let mut document = slot.document.lock().await;
+            if document.paused == paused {
+                return;
+            }
+            document.paused = paused;
+            // A failed write still pauses this process; after a restart the
+            // journal decides.
+            self.persist(slot, &mut document).await;
+        }
+        if !paused {
+            if let Ok(mut from) = slot.resume_from.lock() {
+                *from = None;
+            }
+            self.resume_slot_deliveries(slot).await;
+        }
+    }
+
     async fn dispatch(
         &self,
         slot: &Arc<LeadSlot>,
@@ -1210,8 +1304,9 @@ impl FusionBroker {
                 brief_id,
                 outcome,
                 note,
+                reason,
             } => self
-                .close_brief(slot, &brief_id, outcome, note)
+                .close_brief(slot, &brief_id, outcome, note.or(reason))
                 .await
                 .map(|value| (value, None)),
             SidekickOperation::Reset { reason } => self
@@ -1335,6 +1430,7 @@ impl FusionBroker {
             preview: preview(input),
             delivery: None,
             take_over: false,
+            person_steers: 0,
             baseline_block_id: None,
             baseline_known: false,
             baseline_hash: None,
@@ -1354,6 +1450,9 @@ impl FusionBroker {
                 "The sidekick is being reset or reconciled; wait for it to finish.",
             ));
         }
+        if document.paused {
+            return Err(paused_error());
+        }
         if let Some((brief, round)) = open_round(document) {
             return Err(if round.state == RoundState::Stopping {
                 error(
@@ -1362,7 +1461,7 @@ impl FusionBroker {
                 )
             } else {
                 let advice = if document.pair.options.auto_deliver {
-                    "Call wait once, steer or stop it, or end your turn: its report is delivered to you when it is ready."
+                    "Steer or stop it, or end your turn now: its report is delivered to you automatically when it is ready. Do not call wait in a loop."
                 } else {
                     "Call wait to collect it, or steer or stop it."
                 };
@@ -1533,6 +1632,18 @@ impl FusionBroker {
                     "The round was stopped before the sidekick started it.",
                 ))
             }
+            Err(TurnStart::Unknown) => {
+                // The prompt was written but never confirmed: the sidekick
+                // may be running it. One writer: the round blocks new work
+                // until the person reconciles it (its baseline is journaled)
+                // or its turn is proven over. Nothing is sent again.
+                brief.rounds[index].state = RoundState::Uncertain;
+                self.persist(slot, &mut document).await;
+                Err(error(
+                    SidekickErrorCode::Uncertain,
+                    "The sidekick may have received this round but did not confirm it; nothing else starts until the person reconciles it.",
+                ))
+            }
             Err(TurnStart::Refused(failure)) => {
                 let round = &mut brief.rounds[index];
                 round.state = RoundState::Finished;
@@ -1560,7 +1671,7 @@ impl FusionBroker {
                         SidekickErrorCode::SidekickSignInRequired,
                         "The sidekick's harness needs the person to sign in.",
                     ),
-                    HostFailure::Unavailable => error(
+                    HostFailure::Unavailable | HostFailure::AcceptanceUnknown => error(
                         SidekickErrorCode::SidekickUnavailable,
                         "The sidekick could not start or receive the brief.",
                     ),
@@ -1653,7 +1764,10 @@ impl FusionBroker {
         }
         host.send(session_id.to_owned(), prompt, PromptMode::Prompt)
             .await
-            .map_err(TurnStart::Refused)?;
+            .map_err(|failure| match failure {
+                HostFailure::AcceptanceUnknown => TurnStart::Unknown,
+                refused => TurnStart::Refused(refused),
+            })?;
         Ok((receiver, generation))
     }
 
@@ -1770,8 +1884,10 @@ impl FusionBroker {
         recovered: bool,
     ) {
         let answer = self.inner.host.last_answer(session_id.to_owned()).await;
+        // The working tree of the folder the sidekick works in: the brief's
+        // canonical work folder (ADR-076).
         let (changes, commands) = tokio::join!(
-            self.inner.host.changes(slot.lead_session_id.clone()),
+            self.inner.host.changes(session_id.to_owned()),
             self.round_command_facts(slot, round_id, session_id),
         );
         let mut document = slot.document.lock().await;
@@ -1933,6 +2049,7 @@ impl FusionBroker {
                     // After a restart: read the report back first.
                     restore = true;
                 } else if round.state == RoundState::Finished {
+                    let previous = round.delivery.clone();
                     let claimed = Self::claim(round);
                     let value = Self::report_result("wait", round, !claimed);
                     let rejected = brief
@@ -1952,7 +2069,15 @@ impl FusionBroker {
                         // The hint above points the other way: it wins.
                         append_idle_nudge(&mut value);
                     }
-                    self.persist(slot, &mut document).await;
+                    if !self.persist(slot, &mut document).await && claimed {
+                        // Not durably `tool/sending`: a restart would hand it
+                        // over again, so this call does not take it.
+                        set_delivery(&mut document, round_id, previous);
+                        return Err(error(
+                            SidekickErrorCode::SidekickUnavailable,
+                            "Nano Desktop could not record the report handoff; call wait for it again.",
+                        ));
+                    }
                     return Ok((value, claimed.then(|| round_id.to_owned())));
                 }
             }
@@ -2079,6 +2204,13 @@ impl FusionBroker {
     }
 
     fn report_result(op: &str, round: &FusionRound, already_delivered: bool) -> Value {
+        // A handoff that may or may not have reached the lead is said so,
+        // never called delivered.
+        let unknown = already_delivered
+            && round
+                .delivery
+                .as_ref()
+                .is_some_and(|delivery| delivery.state == DeliveryState::Uncertain);
         match &round.report {
             Some(report) => json!({
                 "ok": true,
@@ -2086,8 +2218,17 @@ impl FusionBroker {
                 "briefId": report.brief_id,
                 "roundId": report.round_id,
                 "report": report,
-                "alreadyDelivered": already_delivered,
-                "text": report_envelope(report, already_delivered),
+                "alreadyDelivered": already_delivered && !unknown,
+                "deliveryUnknown": unknown,
+                "text": if unknown {
+                    report_envelope(report, true).replacen(
+                        "(already delivered earlier)",
+                        "(delivery unknown: this report may have reached you before)",
+                        1,
+                    )
+                } else {
+                    report_envelope(report, already_delivered)
+                },
             }),
             None => json!({
                 "ok": true,
@@ -2222,6 +2363,21 @@ impl FusionBroker {
                     .unwrap_or_default()
             ));
         }
+        if document.paused {
+            text.push_str("\npair: stopped by the person; nothing new starts until they resume it");
+        }
+        for (brief, round) in document.briefs.iter().flat_map(|brief| {
+            brief
+                .rounds
+                .iter()
+                .filter(|round| delivery_needs_check(round))
+                .map(move |round| (brief, round))
+        }) {
+            text.push_str(&format!(
+                "\nreport {} of brief {}: delivery unknown (the person checks it; wait {} shows it)",
+                round.round_id, brief.brief_id, round.round_id
+            ));
+        }
         text.push_str(&format!(
             "\nbriefing policy: {}",
             policy_text(document.pair.options.brief_policy)
@@ -2346,11 +2502,15 @@ impl FusionBroker {
             .host
             .send(session_id, text, PromptMode::Steer)
             .await
-            .map_err(|_| {
-                error(
+            .map_err(|failure| match failure {
+                HostFailure::AcceptanceUnknown => error(
+                    SidekickErrorCode::Uncertain,
+                    "The sidekick did not confirm the steer; it may have arrived. Do not send it again; read the next report.",
+                ),
+                _ => error(
                     SidekickErrorCode::SteerUnsupported,
                     "The sidekick did not accept the steer.",
-                )
+                ),
             })?;
         Ok(
             json!({ "ok": true, "op": "steer", "roundId": round_id, "text": format!("Steer sent into round {round_id}.") }),
@@ -2437,13 +2597,20 @@ impl FusionBroker {
             self.persist(slot, &mut document).await;
             return Err(stopped_error());
         }
+        let previous = round.delivery.clone();
         let claimed = !withdraw_delivery && Self::claim(round);
         let mut value = Self::report_result("stop", round, !claimed);
         if claimed && !take_over {
             // After a take-over the lead does the work itself.
             append_idle_nudge(&mut value);
         }
-        self.persist(slot, &mut document).await;
+        if !self.persist(slot, &mut document).await && claimed {
+            set_delivery(&mut document, round_id, previous);
+            return Err(error(
+                SidekickErrorCode::SidekickUnavailable,
+                "The round stopped, but Nano Desktop could not record the report handoff; call wait for it.",
+            ));
+        }
         Ok((value, claimed.then(|| round_id.to_owned())))
     }
 
@@ -2824,8 +2991,15 @@ impl FusionBroker {
                 if broker.restore_report(&slot, &round_id).await.is_err() {
                     return;
                 }
+                // Held to the end of the send: a pair stop waits for it.
+                let gate = slot.delivery_gate.lock().await;
                 let text = {
                     let mut document = slot.document.lock().await;
+                    // A pair stop since the idle check: nothing is sent; the
+                    // report stays queued for the resume.
+                    if document.paused {
+                        return;
+                    }
                     let Some((brief, index)) = find_round(&mut document, &round_id) else {
                         return;
                     };
@@ -2847,6 +3021,7 @@ impl FusionBroker {
                     if !broker.persist(&slot, &mut document).await {
                         set_delivery(&mut document, &round_id, previous);
                         drop(document);
+                        drop(gate);
                         store_failures += 1;
                         if store_failures >= DELIVERY_ATTEMPTS {
                             // It stays queued: a tool call can take it, and
@@ -2863,6 +3038,7 @@ impl FusionBroker {
                     .host
                     .send(lead.clone(), text, PromptMode::Prompt)
                     .await;
+                drop(gate);
                 attempts += 1;
                 let mut document = slot.document.lock().await;
                 let Some((brief, index)) = find_round(&mut document, &round_id) else {
@@ -2874,6 +3050,9 @@ impl FusionBroker {
                 }
                 let state = match sent {
                     Ok(()) => DeliveryState::Sent,
+                    // Written but unconfirmed: it may have reached the lead,
+                    // so it is never sent blindly again (the person checks).
+                    Err(HostFailure::AcceptanceUnknown) => DeliveryState::Uncertain,
                     Err(_) if attempts >= DELIVERY_ATTEMPTS => DeliveryState::Uncertain,
                     Err(_) => DeliveryState::Queued,
                 };
@@ -2895,12 +3074,15 @@ impl FusionBroker {
             return false;
         }
         let document = slot.document.lock().await;
-        document
-            .briefs
-            .iter()
-            .flat_map(|brief| &brief.rounds)
-            .find(|round| round.round_id == round_id)
-            .is_some_and(|round| delivery_is(round, DeliveryVia::FollowUp, DeliveryState::Queued))
+        !document.paused
+            && document
+                .briefs
+                .iter()
+                .flat_map(|brief| &brief.rounds)
+                .find(|round| round.round_id == round_id)
+                .is_some_and(|round| {
+                    delivery_is(round, DeliveryVia::FollowUp, DeliveryState::Queued)
+                })
     }
 
     // -----------------------------------------------------------------------
@@ -2958,6 +3140,190 @@ impl FusionBroker {
         } else {
             Err(SidekickErrorCode::Uncertain)
         }
+    }
+
+    /// The first step of Stop pair: pause the pair before anything is
+    /// interrupted. No round is admitted and no follow-up is sent until the
+    /// person resumes it (or speaks in the lead chat); a follow-up already
+    /// past its pause check finishes its send before this returns, so the
+    /// lead interrupt that follows reaches it.
+    pub(crate) async fn pause_pair(&self, lead: &str) -> Result<(), SidekickErrorCode> {
+        let slot = self
+            .slot(lead)
+            .ok_or(SidekickErrorCode::SidekickUnavailable)?;
+        // Tool calls of the turn being stopped keep its generation; a turn
+        // the person starts afterwards has a newer one.
+        let threshold = self.inner.host.turns(lead).ok().map(|receiver| {
+            let state = *receiver.borrow();
+            let running = matches!(
+                state.status,
+                SessionStatus::Starting | SessionStatus::Running | SessionStatus::Stopping
+            );
+            state.generation + u64::from(running)
+        });
+        if let Ok(mut from) = slot.resume_from.lock() {
+            *from = Some(threshold.unwrap_or(0));
+        }
+        {
+            let mut document = slot.document.lock().await;
+            document.paused = true;
+            self.persist(&slot, &mut document).await;
+        }
+        drop(slot.delivery_gate.lock().await);
+        Ok(())
+    }
+
+    /// The person resumes a stopped pair: queued reports are delivered again
+    /// and briefs are admitted.
+    pub(crate) async fn resume_pair(&self, lead: &str) -> Result<(), SidekickErrorCode> {
+        let slot = self
+            .slot(lead)
+            .ok_or(SidekickErrorCode::SidekickUnavailable)?;
+        self.set_paused(&slot, false).await;
+        Ok(())
+    }
+
+    /// Checks a report whose handoff is unknown against the lead's native
+    /// history by its stable id: found, it is `sent`; not found, it stays
+    /// unknown and the person may deliver it again or dismiss it.
+    pub(crate) async fn check_delivery(
+        &self,
+        lead: &str,
+        round_id: &str,
+    ) -> Result<bool, SidekickErrorCode> {
+        let slot = self
+            .slot(lead)
+            .ok_or(SidekickErrorCode::SidekickUnavailable)?;
+        let (marker, via) = {
+            let mut document = slot.document.lock().await;
+            let (brief, index) =
+                find_round(&mut document, round_id).ok_or(SidekickErrorCode::UnknownRound)?;
+            let round = &brief.rounds[index];
+            if !delivery_needs_check(round) {
+                return Err(SidekickErrorCode::RoundFinished);
+            }
+            let via = round
+                .delivery
+                .as_ref()
+                .map_or(DeliveryVia::FollowUp, |delivery| delivery.via);
+            (report_marker(&brief.brief_id, round_id), via)
+        };
+        let found = self
+            .inner
+            .host
+            .history_contains(lead.to_owned(), marker)
+            .await
+            .map_err(|_| SidekickErrorCode::SidekickUnavailable)?;
+        if found {
+            let mut document = slot.document.lock().await;
+            if let Some((brief, index)) = find_round(&mut document, round_id)
+                && delivery_needs_check(&brief.rounds[index])
+            {
+                put_delivery(&mut brief.rounds[index], delivery(via, DeliveryState::Sent));
+                self.persist(&slot, &mut document).await;
+            }
+        }
+        Ok(found)
+    }
+
+    /// The person decides to deliver a report whose handoff is unknown once
+    /// more, as a follow-up.
+    pub(crate) async fn deliver_again(
+        &self,
+        lead: &str,
+        round_id: &str,
+    ) -> Result<(), SidekickErrorCode> {
+        let slot = self
+            .slot(lead)
+            .ok_or(SidekickErrorCode::SidekickUnavailable)?;
+        {
+            let mut document = slot.document.lock().await;
+            let (brief, index) =
+                find_round(&mut document, round_id).ok_or(SidekickErrorCode::UnknownRound)?;
+            let round = &mut brief.rounds[index];
+            if !delivery_needs_check(round) {
+                return Err(SidekickErrorCode::RoundFinished);
+            }
+            put_delivery(
+                round,
+                delivery(DeliveryVia::FollowUp, DeliveryState::Queued),
+            );
+            if !self.persist(&slot, &mut document).await {
+                set_delivery(
+                    &mut document,
+                    round_id,
+                    delivery(DeliveryVia::FollowUp, DeliveryState::Uncertain),
+                );
+                return Err(SidekickErrorCode::SidekickUnavailable);
+            }
+        }
+        self.spawn_delivery(&slot, round_id.to_owned());
+        Ok(())
+    }
+
+    /// The person dismisses a report whose handoff is unknown: it is never
+    /// handed over again.
+    pub(crate) async fn dismiss_report(
+        &self,
+        lead: &str,
+        round_id: &str,
+    ) -> Result<(), SidekickErrorCode> {
+        let slot = self
+            .slot(lead)
+            .ok_or(SidekickErrorCode::SidekickUnavailable)?;
+        let mut document = slot.document.lock().await;
+        let (brief, index) =
+            find_round(&mut document, round_id).ok_or(SidekickErrorCode::UnknownRound)?;
+        let round = &mut brief.rounds[index];
+        if !delivery_needs_check(round) {
+            return Err(SidekickErrorCode::RoundFinished);
+        }
+        put_delivery(
+            round,
+            delivery(DeliveryVia::FollowUp, DeliveryState::Withdrawn),
+        );
+        self.persist(&slot, &mut document).await;
+        Ok(())
+    }
+
+    /// The person's correction of the running round, sent into it as a
+    /// steer marked as theirs. It changes no authority: the sidekick's frozen
+    /// policy and its own approvals stay as they are (ADR-076).
+    pub(crate) async fn person_steer(
+        &self,
+        lead: &str,
+        text: &str,
+    ) -> Result<(), SidekickErrorCode> {
+        let slot = self
+            .slot(lead)
+            .ok_or(SidekickErrorCode::SidekickUnavailable)?;
+        let text = text.trim();
+        if text.is_empty() || text.len() > 8 * 1024 {
+            return Err(SidekickErrorCode::InvalidBrief);
+        }
+        let round_id = {
+            let document = slot.document.lock().await;
+            open_round(&document)
+                .filter(|(_, round)| {
+                    matches!(
+                        round.state,
+                        RoundState::Running | RoundState::WaitingApproval
+                    )
+                })
+                .map(|(_, round)| round.round_id.clone())
+                .ok_or(SidekickErrorCode::RoundFinished)?
+        };
+        let steer = format!("[PiUI: the person adds to round {round_id}]\n{text}");
+        self.steer(&slot, &round_id, steer)
+            .await
+            .map(|_| ())
+            .map_err(|(code, _)| code)?;
+        let mut document = slot.document.lock().await;
+        if let Some((brief, index)) = find_round(&mut document, &round_id) {
+            brief.rounds[index].person_steers += 1;
+            self.persist(&slot, &mut document).await;
+        }
+        Ok(())
     }
 
     pub(crate) async fn reset_sidekick(&self, lead: &str) -> Result<(), SidekickErrorCode> {
@@ -3131,6 +3497,15 @@ fn brief_used_session(briefs: &[FusionBrief], session_id: &str, except: &str) ->
             && brief.sidekick_session_id == session_id
             && brief.rounds.iter().any(|round| round.outcome.is_some())
     })
+}
+
+/// A finished report whose handoff may or may not have reached the lead.
+fn delivery_needs_check(round: &FusionRound) -> bool {
+    round.state == RoundState::Finished
+        && round
+            .delivery
+            .as_ref()
+            .is_some_and(|delivery| delivery.state == DeliveryState::Uncertain)
 }
 
 fn uncertain_round(document: &FusionDocument) -> Option<(&FusionBrief, &FusionRound)> {

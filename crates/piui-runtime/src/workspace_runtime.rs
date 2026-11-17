@@ -1191,6 +1191,13 @@ pub enum NativeEvent {
     ExtensionUi {
         request: Map<String, Value>,
     },
+    /// A file a tool block wrote, read, generated or returned (additive bridge
+    /// event, `bridge/CONTRACT.md` "File events"). The host turns it into a
+    /// typed [`crate::chat_file::ChatFileEvent`] with
+    /// [`NativeChatFile::into_event`](crate::chat_file::NativeChatFile::into_event)
+    /// for the session it is delivered for. The payload parses leniently: a bad
+    /// frame is dropped there and never ends the runtime.
+    File(crate::chat_file::NativeChatFile),
     Error {
         message: String,
     },
@@ -1256,6 +1263,12 @@ pub struct NativeRuntimeConfig {
     pub allowed_tools: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_subagents: Option<bool>,
+    /// `Some(false)`: the harness must not run work past the end of a turn
+    /// (Claude Code background Bash and agents, Codex background terminals).
+    /// A Fusion sidekick's round ends with its turn (ADR-076); a bridge that
+    /// cannot prove the switch refuses the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_tasks: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daemon_socket: Option<String>,
     /// Verified native package root. Required for the Prime SDK adapter.
@@ -1306,6 +1319,7 @@ impl fmt::Debug for NativeRuntimeConfig {
             .field("network_access", &self.network_access)
             .field("has_tool_policy", &self.allowed_tools.is_some())
             .field("native_subagents", &self.native_subagents)
+            .field("background_tasks", &self.background_tasks)
             .field("has_daemon_socket", &self.daemon_socket.is_some())
             .field("has_package_root", &self.package_root.is_some())
             .field("has_agent_dir", &self.agent_dir.is_some())
@@ -4660,6 +4674,7 @@ mod tests {
             network_access: false,
             allowed_tools: None,
             native_subagents: None,
+            background_tasks: None,
             daemon_socket: None,
             package_root: None,
             agent_dir: None,

@@ -119,7 +119,7 @@ const SIDEKICK_USAGE = Object.freeze({
   stop: "stop takes an optional roundId or briefId (not both), else the open round, and takeOver.",
   diff: "diff takes optional paths, page and fingerprint.",
   report: "report takes an optional roundId or briefId (not both), else the newest report, and page.",
-  close: "close needs briefId and outcome (accepted, rejected or superseded); optional: note.",
+  close: "close needs briefId and outcome (accepted, rejected or superseded); optional: note (reason is taken as the note).",
   reset: "reset takes an optional reason.",
 });
 
@@ -157,7 +157,8 @@ export function sidekickOperationProblem(operation) {
       },
     },
     report: { optional: { roundId: id, briefId: id, page } },
-    close: { required: { briefId: id, outcome: (value) => BRIEF_OUTCOMES.has(value) }, optional: { note: (value) => typeof value === "string" && bytes(value) <= SIDEKICK_LIMITS.noteBytes } },
+    // The shared tool schema advertises `reason` (for reset); close takes it as its note.
+    close: { required: { briefId: id, outcome: (value) => BRIEF_OUTCOMES.has(value) }, optional: { note: (value) => typeof value === "string" && bytes(value) <= SIDEKICK_LIMITS.noteBytes, reason: (value) => typeof value === "string" && bytes(value) <= SIDEKICK_LIMITS.noteBytes } },
     reset: { optional: { reason: (value) => typeof value === "string" && value.length <= SIDEKICK_LIMITS.reason } },
   };
   const usage = SIDEKICK_USAGE[operation.op];

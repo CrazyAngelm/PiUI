@@ -4,10 +4,12 @@ import { attentionRu } from './attention';
 import { boardRu } from './board';
 import { branchRu } from './branch';
 import { chatRu } from './chat';
+import { chatFilesRu } from './chatFiles';
 import { chatPipelinesRu } from './chatPipelines';
 import { classicRu } from './classic';
 import { dictationRu } from './dictation';
 import { executorsRu } from './executors';
+import { feedRu } from './feed';
 import { fusionRu } from './fusion';
 import { harnessesRu } from './harnesses';
 import { interactiveRu } from './interactive';
@@ -33,10 +35,12 @@ export const featureRu: Readonly<Record<string, string>> = {
   ...boardRu,
   ...branchRu,
   ...chatRu,
+  ...chatFilesRu,
   ...chatPipelinesRu,
   ...classicRu,
   ...dictationRu,
   ...executorsRu,
+  ...feedRu,
   ...fusionRu,
   ...harnessesRu,
   ...interactiveRu,

@@ -2,6 +2,7 @@ import { hostInvoke, hostListen, type HostInvoke, type HostListen } from './tran
 import {
   FUSION_CHANGED_EVENT_V1,
   FUSION_PROTOCOL,
+  type FusionCapabilitiesV1,
   type FusionChangedEventV1,
   type FusionCommandV1,
   type FusionResultV1,
@@ -80,6 +81,26 @@ export function isFusionState(value: unknown): value is FusionStateV1 {
     && count(value.revision);
 }
 
+const PERMISSION_MODES = ['native', 'read-only', 'workspace-write', 'full-access'] as const;
+const CAPABILITY_VALUES: readonly (readonly [keyof FusionCapabilitiesV1, readonly string[]])[] = [
+  ['writes', ['none', 'workspace', 'approved', 'anywhere']],
+  ['reads', ['workspace', 'anywhere']],
+  ['shell', ['none', 'read-only-sandbox', 'workspace-sandbox', 'approved', 'unrestricted']],
+  ['network', ['none', 'approved', 'full']],
+  ['mcp', ['none', 'configured']],
+];
+
+/** A sidekick allowance only when every dimension is a known value (ADR-076). */
+function decodeCapabilities(value: unknown): FusionCapabilitiesV1 | undefined {
+  if (!isRecord(value)) return undefined;
+  for (const [key, allowed] of CAPABILITY_VALUES) {
+    const field = value[key];
+    if (typeof field !== 'string' || !allowed.includes(field)) return undefined;
+  }
+  const { writes, reads, shell, network, mcp } = value as unknown as FusionCapabilitiesV1;
+  return { writes, reads, shell, network, mcp };
+}
+
 export function decodeFusionResult(value: unknown): FusionResultV1 | undefined {
   if (!isRecord(value)) return undefined;
   switch (value.type) {
@@ -87,11 +108,22 @@ export function decodeFusionResult(value: unknown): FusionResultV1 | undefined {
       return text(value.leadSessionId) && isFusionState(value.state) ? (value as unknown as FusionResultV1) : undefined;
     case 'state':
       return isFusionState(value.state) ? (value as unknown as FusionResultV1) : undefined;
-    case 'pairCheck':
-      if (value.ok === true) return { type: 'pairCheck', ok: true };
-      return value.ok === false && text(value.refusal) && (value.role === 'lead' || value.role === 'sidekick')
+    case 'pairCheck': {
+      if (value.ok === true) {
+        const sidekickMode = PERMISSION_MODES.find((mode) => mode === value.sidekickMode);
+        const capabilities = decodeCapabilities(value.capabilities);
+        return {
+          type: 'pairCheck',
+          ok: true,
+          ...(sidekickMode === undefined ? {} : { sidekickMode }),
+          ...(capabilities === undefined ? {} : { capabilities }),
+        };
+      }
+      const dimensionValid = value.dimension === undefined || CAPABILITY_VALUES.some(([key]) => key !== 'reads' && key === value.dimension);
+      return value.ok === false && text(value.refusal) && (value.role === 'lead' || value.role === 'sidekick') && dimensionValid
         ? (value as unknown as FusionResultV1)
         : undefined;
+    }
     case 'membership':
       return value.role === null || value.role === undefined
         ? { type: 'membership', role: null }

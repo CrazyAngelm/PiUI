@@ -99,6 +99,20 @@ describe('attention rules', () => {
     expect(verdict.raised).toEqual([{ sessionId: 'lead', kind: 'finished' }]);
   });
 
+  it('raises a Fusion sidekick approval request and failure, never its normal finish', () => {
+    const isSidekick = (id: string) => id === 'side';
+    const asked = run(
+      { sessions: [chat('side', 'running')], approvals: [] },
+      { sessions: [chat('side', 'running')], approvals: [ask('p1', 'side')] },
+      { isSidekick },
+    );
+    expect(asked.raised).toEqual([{ sessionId: 'side', kind: 'decision' }]);
+    const failed = run({ sessions: [chat('side', 'running')] }, { sessions: [chat('side', 'failed')] }, { isSidekick });
+    expect(failed.raised).toEqual([{ sessionId: 'side', kind: 'failed' }]);
+    const finished = run({ sessions: [chat('side', 'running')] }, { sessions: [chat('side', 'idle')] }, { isSidekick });
+    expect(finished.raised).toEqual([]);
+  });
+
   it('never raises "finished" for a chat an agent started, but still raises "failed" and "decision"', () => {
     const agentChild = { isAgentChild: (id: string) => id === 'kid' };
     const done = run({ sessions: [chat('kid', 'running'), chat('main', 'running')] }, { sessions: [chat('kid', 'idle'), chat('main', 'idle')] }, agentChild);

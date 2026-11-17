@@ -106,7 +106,7 @@ describe('createTimelineGrouper', () => {
     const group = createTimelineGrouper();
     const user = block('user', 'user');
     const tool = block('tool', 'tool');
-    const thinking = block('thinking', 'thinking');
+    const thinking = withText(block('thinking', 'thinking'), 'Checking the call');
     const streaming = withText(block('answer', 'assistant', 'streaming'), 'more');
     const grown = { ...streaming, text: 'more and more' };
 
@@ -280,20 +280,42 @@ describe('groupTranscriptBlocks', () => {
       expect(shape(items)).toEqual(['block:user', 'process[(a) narration (c+next)]']);
     });
 
-    it('keeps a group made only of silent reasoning', () => {
+    it('leaves out a completed reasoning block with nothing to show', () => {
       const silent = block('silent', 'thinking');
       const items = groupTranscriptBlocks([user, silent, reply('answer')]);
 
-      expect(shape(items)).toEqual(['block:user', 'process[(silent)]', 'block:answer']);
+      expect(shape(items)).toEqual(['block:user', 'block:answer']);
+      expect(processes(items)).toEqual([]);
     });
 
-    it('lets silent reasoning join the run around it', () => {
+    it('does not let silent reasoning split, join or count in the run around it', () => {
       const toolA = block('a', 'tool');
       const silent = block('silent', 'thinking');
       const toolB = block('b', 'tool');
 
-      expect(shape(groupTranscriptBlocks([toolA, silent, toolB]))).toEqual(['process[(a+silent+b)]']);
-      expect(shape(groupTranscriptBlocks([silent, toolA]))).toEqual(['process[(silent+a)]']);
+      const items = groupTranscriptBlocks([toolA, silent, toolB]);
+
+      expect(shape(items)).toEqual(['process[(a+b)]']);
+      expect(processes(items)[0]?.blocks.map((entry) => entry.id)).toEqual(['a', 'b']);
+      expect(shape(groupTranscriptBlocks([silent, toolA]))).toEqual(['process[(a)]']);
+      expect(shape(groupTranscriptBlocks([silent]))).toEqual([]);
+    });
+
+    it('keeps reasoning that has text, is still streaming or ended badly, even with nothing to say', () => {
+      const streaming = block('live', 'thinking', 'streaming');
+      const stopped = block('stopped', 'thinking', 'interrupted');
+      const failed = block('failed', 'thinking', 'failed');
+      const spoken = withText(block('spoken', 'thinking'), 'Weighing the options');
+
+      expect(shape(groupTranscriptBlocks([block('a', 'tool'), streaming, stopped, failed, spoken], true))).toEqual(['process[(a+live+stopped+failed+spoken)]']);
+    });
+
+    it('still counts the time the silent reasoning took', () => {
+      const started = { ...block('user', 'user'), createdAt: '2026-11-18T10:00:00Z' };
+      const silent = { ...block('silent', 'thinking'), createdAt: '2026-11-18T10:03:00Z' };
+      const tool = { ...block('a', 'tool'), createdAt: '2026-11-18T10:01:00Z' };
+
+      expect(processes(groupTranscriptBlocks([started, tool, silent]))[0]).toMatchObject({ startedAt: '2026-11-18T10:00:00Z', endedAt: '2026-11-18T10:03:00Z' });
     });
 
     it('groups streaming reasoning with the tool calls next to it', () => {
@@ -412,7 +434,7 @@ describe('groupTranscriptBlocks', () => {
       const process = processes(groupTranscriptBlocks(input))[0];
 
       expect(process).toMatchObject({ id: 'turn:thought', groups: 2 });
-      expect(process?.blocks.map((entry) => entry.id)).toEqual(['thought', 'a', 'silent', 'b']);
+      expect(process?.blocks.map((entry) => entry.id)).toEqual(['thought', 'a', 'b']);
     });
 
     it('keeps a finished turn\'s last reply in the chat even when a call was logged after it', () => {
@@ -554,7 +576,7 @@ describe('groupTranscriptBlocks', () => {
     });
   });
 
-  it('drops and reorders nothing', () => {
+  it('reorders nothing and drops only silent reasoning', () => {
     const input = [
       block('user', 'user'),
       block('quiet-1', 'thinking'),
@@ -573,7 +595,7 @@ describe('groupTranscriptBlocks', () => {
     ];
 
     // Only a reply placeholder moves: it follows the group it waited behind.
-    const expected = ['user', 'quiet-1', 'plan', 'a', 'b', 'quiet-2', 'c', 'blank', 'answer', 'next', 'd', 'again', 'e', 'last'];
+    const expected = ['user', 'plan', 'a', 'b', 'c', 'blank', 'answer', 'next', 'd', 'again', 'e', 'last'];
     for (const running of [false, true]) expect(flatten(groupTranscriptBlocks(input, running))).toEqual(expected);
   });
 
@@ -602,5 +624,56 @@ describe('groupTranscriptBlocks', () => {
 
     expect(() => groupTranscriptBlocks(input)).not.toThrow();
     expect(input.map((entry) => entry.id)).toEqual(['user', 'a', 'silent', 'note', 'plan', 'b', 'answer']);
+  });
+});
+
+describe('a steer the runtime has not reported yet', () => {
+  const user = block('user', 'user');
+  const echo = block('piui-steer-echo:r1', 'user', 'streaming');
+  const note = withText(block('note', 'assistant'), 'Checking the build');
+  const running = block('tool', 'tool', 'streaming');
+
+  it('does not end the turn that is working: the note stays folded and the process stays live', () => {
+    const items = groupTranscriptBlocks([user, note, running, echo], true);
+
+    expect(shape(items)).toEqual(['block:user', 'process[note (tool)]', 'block:piui-steer-echo:r1']);
+    expect(processes(items)[0]).toMatchObject({ live: true });
+  });
+
+  it('is what the old split got wrong: a separate turn would show the note as the answer', () => {
+    // A reported steer (complete) still starts a turn of its own.
+    const reported = block('steer', 'user');
+    const items = groupTranscriptBlocks([user, note, running, reported], true);
+
+    expect(shape(items)).toEqual(['block:user', 'block:note', 'process[(tool)]', 'block:steer']);
+  });
+
+  it('joins the turn of an unknown owner as well, and several steers keep their order', () => {
+    const second = block('piui-steer-echo:r2', 'user', 'streaming');
+    const items = groupTranscriptBlocks([user, note, running, echo, second], 'unknown');
+
+    expect(shape(items)).toEqual(['block:user', 'process[note (tool)]', 'block:piui-steer-echo:r1', 'block:piui-steer-echo:r2']);
+    expect(processes(items)[0]).toMatchObject({ live: true });
+  });
+
+  it('keeps its own turn when the agent is known to be idle', () => {
+    const items = groupTranscriptBlocks([user, note, block('tool', 'tool'), block('queued', 'user', 'streaming')], false);
+
+    expect(shape(items)).toEqual(['block:user', 'block:note', 'process[(tool)]', 'block:queued']);
+  });
+
+  it('shows the steer after a turn that has not produced anything yet', () => {
+    expect(shape(groupTranscriptBlocks([user, echo], true))).toEqual(['block:user', 'block:piui-steer-echo:r1']);
+    expect(shape(groupTranscriptBlocks([echo], true))).toEqual(['block:piui-steer-echo:r1']);
+  });
+
+  it('keeps the grouper stable while the echo comes and goes', () => {
+    const group = createTimelineGrouper();
+    const before = group([user, note, running], true);
+    const during = group([user, note, running, echo], true);
+
+    expect(during[0]).toBe(before[0]);
+    expect(during[1]).toBe(before[1]);
+    expect(shape(during)).toEqual(['block:user', 'process[note (tool)]', 'block:piui-steer-echo:r1']);
   });
 });

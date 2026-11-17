@@ -37,9 +37,17 @@
   let { model, safeMode, onOpenSession, onConfirm }: Props = $props();
 
   const INITIAL_BRIEFS = 8;
-  let showAll = $state(false);
-
   const journal = $derived(model.state);
+  let showAll = $state(false);
+  let steerText = $state('');
+  const steerable = $derived(journal ? journal.sidekick === 'working' || journal.sidekick === 'waitingApproval' : false);
+  const sendSteer = async (): Promise<void> => {
+    const text = steerText.trim();
+    if (!text || locked) return;
+    await model.act('steerSidekick', { type: 'steerSidekick', leadSessionId: model.leadSessionId, text });
+    if (!model.error) steerText = '';
+  };
+
   const briefs = $derived(journal ? briefsNewestFirst(journal) : []);
   const shownBriefs = $derived(showAll ? briefs : briefs.slice(0, INITIAL_BRIEFS));
   const working = $derived(journal ? ['working', 'waitingApproval', 'stopping'].includes(journal.sidekick) : false);
@@ -97,6 +105,37 @@
       <div><dt>{$t('Rounds')}</dt><dd>{journal.stats.rounds}</dd></div>
     </dl>
 
+    {#if journal.sidekick === 'waitingApproval'}
+      {@const waiting = [...journal.sessions].reverse().find((session) => !session.retired)}
+      <div class="uncertain" role="alert">
+        <p>{$t('The sidekick is waiting for your approval in its conversation.')}</p>
+        {#if waiting}
+          <div class="actions">
+            <Button size="sm" onclick={() => onOpenSession(waiting.sessionId)}>{$t('Open the sidekick conversation')}</Button>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    {#if journal.paused}
+      <div class="uncertain" role="status">
+        <p>{$t('The pair is stopped: no brief starts and no report reaches the lead until you resume it or write in the lead chat.')}</p>
+        <div class="actions">
+          <Button size="sm" disabled={locked} loading={model.busy === 'resumePair'} onclick={() => void model.act('resumePair', { type: 'resumePair', leadSessionId: model.leadSessionId })}>
+            {$t('Resume pair')}
+          </Button>
+        </div>
+      </div>
+    {/if}
+
+    {#if steerable}
+      <form class="steer" onsubmit={(event) => { event.preventDefault(); void sendSteer(); }}>
+        <label class="steer__label" for="fusion-steer">{$t('Correct the running round')}</label>
+        <textarea id="fusion-steer" class="steer__input" rows="2" maxlength="8000" bind:value={steerText} disabled={locked}></textarea>
+        <Button size="sm" type="submit" disabled={locked || !steerText.trim()} loading={model.busy === 'steerSidekick'}>{$t('Send to sidekick')}</Button>
+      </form>
+    {/if}
+
     <div class="actions" role="group" aria-label={$t('Pair actions')}>
       <Button size="sm" disabled={locked || !working} loading={model.busy === 'stopSidekick'} onclick={() => void model.act('stopSidekick', { type: 'stopSidekick', leadSessionId: model.leadSessionId })}>
         {#snippet leading()}<Square />{/snippet}
@@ -152,6 +191,38 @@
                     </div>
                     {#if round.delivery}<p class="round__delivery">{$t(deliveryLabel(round.delivery.state))}</p>{/if}
                     {#if round.preview}<p class="round__preview" title={round.preview}>{round.preview}</p>{/if}
+                    {#if round.state === 'finished' && round.delivery?.state === 'uncertain'}
+                      <div class="uncertain">
+                        <p>{$t('The report may or may not have reached the lead. Check the lead chat for it, deliver it again, or dismiss it.')}</p>
+                        <div class="actions">
+                          <Button
+                            size="sm"
+                            disabled={locked}
+                            loading={model.busy === `check:${round.roundId}`}
+                            onclick={() => void model.act(`check:${round.roundId}`, { type: 'checkDelivery', leadSessionId: model.leadSessionId, roundId: round.roundId })}
+                          >
+                            {$t('Check lead chat')}
+                          </Button>
+                          <Button
+                            size="sm"
+                            disabled={locked}
+                            loading={model.busy === `deliver:${round.roundId}`}
+                            onclick={() => void model.act(`deliver:${round.roundId}`, { type: 'deliverAgain', leadSessionId: model.leadSessionId, roundId: round.roundId })}
+                          >
+                            {$t('Deliver again')}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={locked}
+                            loading={model.busy === `dismiss:${round.roundId}`}
+                            onclick={() => void model.act(`dismiss:${round.roundId}`, { type: 'dismissReport', leadSessionId: model.leadSessionId, roundId: round.roundId })}
+                          >
+                            {$t('Dismiss')}
+                          </Button>
+                        </div>
+                      </div>
+                    {/if}
                     {#if round.state === 'uncertain'}
                       <div class="uncertain">
                         <p>{$t('Nano Desktop could not tell how this round ended. Check the sidekick conversation, then reconcile it or abandon it.')}</p>
@@ -209,6 +280,24 @@
 </div>
 
 <style>
+  .steer {
+    display: grid;
+    gap: var(--piui-space-2);
+  }
+  .steer__label {
+    font-size: var(--piui-text-sm);
+    color: var(--piui-text-muted);
+  }
+  .steer__input {
+    resize: vertical;
+    font: inherit;
+    padding: var(--piui-space-2);
+    border: 1px solid var(--piui-border-subtle);
+    border-radius: var(--piui-radius-sm);
+    background: var(--piui-surface);
+    color: inherit;
+  }
+
   .panel {
     position: relative;
     display: grid;

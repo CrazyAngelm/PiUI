@@ -1,3 +1,13 @@
+import { Lexer, Marked, type Token, type TokenizerExtension } from 'marked';
+import { decodeEntities } from './markdownEntities';
+
+/*
+ * Chat Markdown (ADR-075). `marked`'s Lexer does the CommonMark + GFM work and
+ * only its TOKENS are used: they are copied into the small node types below,
+ * which the Svelte renderer walks. marked's HTML output is never used and no
+ * node can carry markup: raw HTML (block or inline) becomes plain text.
+ */
+
 export type InlineNode =
   | { kind: 'text'; text: string }
   | { kind: 'strong'; children: InlineNode[] }
@@ -6,310 +16,172 @@ export type InlineNode =
   | { kind: 'code'; text: string }
   | { kind: 'math'; text: string; display: boolean }
   | { kind: 'image'; alt: string; href: string }
-  | { kind: 'link'; label: InlineNode[]; href: string };
+  | { kind: 'link'; label: InlineNode[]; href: string; title?: string };
+
+export interface ListItemNode {
+  /** GFM task item: present only for `- [ ]` and `- [x]`. */
+  checked?: boolean;
+  children: MarkdownBlock[];
+}
 
 export type MarkdownBlock =
-  | { kind: 'paragraph'; inline: InlineNode[] }
-  | { kind: 'heading'; depth: 1 | 2 | 3 | 4; inline: InlineNode[] }
+  /** `tight`: the text of a tight list item, shown without paragraph spacing. */
+  | { kind: 'paragraph'; inline: InlineNode[]; tight?: boolean }
+  | { kind: 'heading'; depth: 1 | 2 | 3 | 4 | 5 | 6; inline: InlineNode[] }
   | { kind: 'code'; language?: string; text: string }
-  | { kind: 'quote'; inline: InlineNode[] }
-  | { kind: 'list'; ordered: boolean; start?: number; items: InlineNode[][] }
+  | { kind: 'quote'; children: MarkdownBlock[] }
+  | { kind: 'list'; ordered: boolean; start?: number; items: ListItemNode[] }
   | { kind: 'table'; align: TableAlign[]; head: InlineNode[][]; rows: InlineNode[][][] }
   | { kind: 'rule' };
 
 export type TableAlign = 'left' | 'center' | 'right' | undefined;
 
-const BLOCK_START = /^(?:```|#{1,4}\s|>\s?|[-+*]\s+|\d+[.)]\s+|(?:-{3,}|\*{3,}|_{3,})\s*$)/u;
-const LIST_ITEM = /^([-+*]|\d+[.)])\s+(.*)$/u;
-const TABLE_DELIMITER = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/u;
+/** A top-level block with its render key. A completed block keeps its entry object while the message streams. */
+export interface MarkdownEntry {
+  key: string;
+  block: MarkdownBlock;
+}
+
+export interface MarkdownParser {
+  /**
+   * The entries for `source`. A parser instance remembers the completed blocks
+   * of the text it saw last: when a later call extends that text, only the
+   * unfinished end is parsed again and the earlier entries are returned as the
+   * same objects. `streaming` renders the end of the text as unfinished.
+   */
+  parse(source: string, streaming?: boolean): readonly MarkdownEntry[];
+}
+
 /** Tables wider than this are shown as prose rather than a huge grid. */
 const MAX_TABLE_COLUMNS = 24;
-const BACKSLASH = String.fromCharCode(92);
-// Matches the existing web owner's HermesIntelligentUiBlocks grammar.
-const WIDGET_FENCE = /^[ \t]{0,3}```hermes-ui[^\n]*$/iu;
-const WIDGET_CLOSE = /^[ \t]{0,3}`{3,}[ \t]*$/u;
-
-/** A deliberately small, non-HTML Markdown projection for chat prose. */
-export function parseMarkdown(source: string, rich = false, widgets = rich): MarkdownBlock[] {
-  const lines = source.replace(/\r\n?/gu, '\n').split('\n');
-  const blocks: MarkdownBlock[] = [];
-  let index = 0;
-
-  while (index < lines.length) {
-    const line = lines[index] ?? '';
-    if (line.trim().length === 0) {
-      index += 1;
-      continue;
-    }
-
-    const widget = widgets && WIDGET_FENCE.test(line);
-    const fence = widget ? ['', 'hermes-ui'] : line.match(/^```\s*([^`]*)$/u);
-    if (fence) {
-      const content: string[] = [];
-      index += 1;
-      while (index < lines.length && !(widget ? WIDGET_CLOSE : /^```\s*$/u).test(lines[index] ?? '')) {
-        content.push(lines[index] ?? '');
-        index += 1;
-      }
-      if (index < lines.length) index += 1;
-      const language = fence[1]?.trim().split(/\s+/u)[0] || undefined;
-      const text = content.join('\n');
-      // The owner's exact-source guard also trims trailing LF. Merely receiving
-      // a closing fence must not change an already complete widget's identity.
-      blocks.push({ kind: 'code', language, text: widget ? text.replace(/\n+$/u, '') : text });
-      continue;
-    }
-
-    const heading = line.match(/^(#{1,4})\s+(.+)$/u);
-    if (heading) {
-      blocks.push({ kind: 'heading', depth: heading[1]!.length as 1 | 2 | 3 | 4, inline: parseInline(heading[2] ?? '', rich) });
-      index += 1;
-      continue;
-    }
-
-    if (/^(?:-{3,}|\*{3,}|_{3,})\s*$/u.test(line)) {
-      blocks.push({ kind: 'rule' });
-      index += 1;
-      continue;
-    }
-
-    if (/^>\s?/u.test(line)) {
-      const quoted: string[] = [];
-      while (index < lines.length && /^>\s?/u.test(lines[index] ?? '')) {
-        quoted.push((lines[index] ?? '').replace(/^>\s?/u, ''));
-        index += 1;
-      }
-      blocks.push({ kind: 'quote', inline: parseInline(quoted.join('\n'), rich) });
-      continue;
-    }
-
-    const table = tableAt(lines, index, rich);
-    if (table) {
-      blocks.push(table.block);
-      index = table.end;
-      continue;
-    }
-
-    const firstListItem = line.match(LIST_ITEM);
-    if (firstListItem) {
-      const ordered = /^\d/u.test(firstListItem[1] ?? '');
-      const start = ordered ? Number.parseInt(firstListItem[1] ?? '1', 10) : undefined;
-      const items: InlineNode[][] = [];
-      while (index < lines.length) {
-        const item = (lines[index] ?? '').match(LIST_ITEM);
-        if (!item || /^\d/u.test(item[1] ?? '') !== ordered) break;
-        items.push(parseInline(item[2] ?? '', rich));
-        index += 1;
-      }
-      blocks.push({ kind: 'list', ordered, start, items });
-      continue;
-    }
-
-    const paragraph = [line];
-    index += 1;
-    while (index < lines.length) {
-      const next = lines[index] ?? '';
-      if (next.trim().length === 0 || BLOCK_START.test(next) || (widgets && WIDGET_FENCE.test(next)) || isTableStart(lines, index)) break;
-      paragraph.push(next);
-      index += 1;
-    }
-    blocks.push({ kind: 'paragraph', inline: parseInline(paragraph.join('\n'), rich) });
-  }
-
-  return blocks;
+/**
+ * marked's inline lexer rescans the rest of a paragraph for ambiguous delimiters, so a long run of
+ * `_a_a_a...` is quadratic (about 1 s at 32 KB). Only text that is both long and mostly delimiters is
+ * shown as plain text; prose, code-heavy answers and snake_case text stay far below these limits.
+ */
+const COMPLETE_COST_LIMIT = 100_000_000;
+const STREAMING_COST_LIMIT = 20_000_000;
+const CHEAP_INLINE_LENGTH = 2_048;
+const MATH_WINDOW = 4_096;
+/** An unfinished `**bold*` must not flash italics: a delimiter run at the very end of streaming text waits for its next character. */
+function trailingDelimiters(text: string): string {
+  let start = text.length;
+  while (start > 0 && '*_~'.includes(text[start - 1]!)) start -= 1;
+  return text.slice(start);
 }
 
-function isTableStart(lines: string[], index: number): boolean {
-  const header = lines[index] ?? '';
-  const delimiter = lines[index + 1] ?? '';
-  if (!header.includes('|')) return false;
-  if (!TABLE_DELIMITER.test(delimiter)) return false;
-  const columns = splitRow(header).length;
-  return columns > 0 && columns <= MAX_TABLE_COLUMNS && splitRow(delimiter).length === columns;
+/** `text` without the spaces and tabs at its end (a loop: a regex over a long blank run is quadratic). */
+function withoutTrailingBlanks(text: string): string {
+  let end = text.length;
+  while (end > 0 && (text[end - 1] === ' ' || text[end - 1] === '\t')) end -= 1;
+  return text.slice(0, end);
+}
+const WIDGET_LANGUAGE = 'hermes-ui';
+
+/** The parts of a marked token the converter reads. */
+interface RawToken {
+  type: string;
+  raw: string;
+  text?: string;
+  tokens?: RawToken[];
+  lang?: string;
+  depth?: number;
+  ordered?: boolean;
+  start?: number | '';
+  task?: boolean;
+  checked?: boolean;
+  items?: RawToken[];
+  href?: string;
+  title?: string | null;
+  align?: (string | null)[];
+  header?: RawCell[];
+  rows?: RawCell[][];
+  codeBlockStyle?: string;
+  display?: boolean;
 }
 
-/** GitHub-style pipe table: header, delimiter row, then rows until a blank line. */
-function tableAt(lines: string[], index: number, rich: boolean): { block: MarkdownBlock; end: number } | undefined {
-  if (!isTableStart(lines, index)) return undefined;
-  const head = splitRow(lines[index] ?? '');
-  const align = splitRow(lines[index + 1] ?? '').map((cell): TableAlign => {
-    const left = cell.startsWith(':');
-    const right = cell.endsWith(':');
-    if (left && right) return 'center';
-    if (right) return 'right';
-    if (left) return 'left';
-    return undefined;
-  });
-  const rows: InlineNode[][][] = [];
-  let cursor = index + 2;
-  while (cursor < lines.length) {
-    const line = lines[cursor] ?? '';
-    if (line.trim().length === 0 || !line.includes('|')) break;
-    const cells = splitRow(line);
-    rows.push(head.map((_, column) => parseInline(cells[column] ?? '', rich)));
-    cursor += 1;
-  }
-  return {
-    block: { kind: 'table', align, head: head.map((cell) => parseInline(cell, rich)), rows },
-    end: cursor,
-  };
+interface RawCell {
+  text: string;
+  tokens?: RawToken[];
 }
 
-function splitRow(line: string): string[] {
-  let row = line.trim();
-  if (row.startsWith('|')) row = row.slice(1);
-  if (row.endsWith('|') && !row.endsWith(`${BACKSLASH}|`)) row = row.slice(0, -1);
-  const cells: string[] = [];
-  let cell = '';
-  let code = false;
-  for (let index = 0; index < row.length; index += 1) {
-    const char = row[index];
-    if (char === BACKSLASH && row[index + 1] === '|') {
-      cell += '|';
-      index += 1;
-    } else if (char === '`') {
-      code = !code;
-      cell += char;
-    } else if (char === '|' && !code) {
-      cells.push(cell.trim());
-      cell = '';
-    } else {
-      cell += char;
+interface Context {
+  rich: boolean;
+  widgets: boolean;
+}
+
+/**
+ * Math is opaque text: `$..$`, `$$..$$`, `\(..\)` and `\[..\]` are cut out before
+ * emphasis and links see them, so `$a*b*c$` keeps its asterisks. A single `$`
+ * follows the pandoc rules (no space inside the edges, no digit right after the
+ * closing mark) so prices and shell variables stay prose.
+ */
+const mathExtension: TokenizerExtension = {
+  name: 'math',
+  level: 'inline',
+  start(src) {
+    return src.search(/\$|\\[(\[]/u);
+  },
+  tokenizer(src, tokens) {
+    let open: string;
+    let close: string;
+    let display = false;
+    if (src.startsWith('\\(')) { open = '\\('; close = '\\)'; }
+    else if (src.startsWith('\\[')) { open = '\\['; close = '\\]'; display = true; }
+    else if (src.startsWith('$$')) { open = close = '$$'; display = true; }
+    else if (src.startsWith('$')) {
+      open = close = '$';
+      const previous = tokens[tokens.length - 1]?.raw.slice(-1) ?? '';
+      if (/\d/u.test(previous) || /\s/u.test(src[1] ?? ' ')) return undefined;
+    } else return undefined;
+    const span = src.slice(open.length, MATH_WINDOW);
+    let end = span.indexOf(close);
+    while (end > 0 && span[end - 1] === '\\') end = span.indexOf(close, end + close.length);
+    if (end <= 0) return undefined;
+    const body = span.slice(0, end);
+    if (open === '$' && (/\s$/u.test(body) || body.includes('\n') || /\d/u.test(span[end + 1] ?? ''))) return undefined;
+    return { type: 'math', raw: src.slice(0, open.length + end + close.length), text: body, display };
+  },
+};
+
+const markedOptions = new Marked({ gfm: true, breaks: false, extensions: [mathExtension] }).defaults;
+
+function delimiterCount(source: string): number {
+  let count = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    switch (source.charCodeAt(index)) {
+      case 33: case 36: case 42: case 60: case 91: case 92: case 95: case 96: case 126: count += 1;
     }
   }
-  cells.push(cell.trim());
-  return cells;
+  return count;
 }
 
-export function parseInline(source: string, rich = false, autoLinks = true): InlineNode[] {
-  const nodes: InlineNode[] = [];
-  // Repeated unfinished math openers must not rescan the entire remaining stream.
-  const mathEnds = rich ? new Map(['\\)', '\\]', '$$', '$'].map(close => [close, source.lastIndexOf(close)])) : undefined;
-  let plain = '';
-  let cursor = 0;
-  while (cursor < source.length) {
-    const match = inlineTokenAt(source, cursor, rich, mathEnds, autoLinks);
-    if (match === undefined) {
-      plain += source[cursor] ?? '';
-      cursor += 1;
-      continue;
+function inlineIsCostly(source: string, limit: number): boolean {
+  const delimiters = delimiterCount(source);
+  return delimiters * 5 > source.length && source.length * delimiters > limit;
+}
+
+/** A paragraph this size with this many delimiters would stall the lexer: it is shown as plain text instead. */
+class BoundedLexer extends Lexer {
+  limit = COMPLETE_COST_LIMIT;
+
+  override inlineTokens(src: string, tokens: Token[] = []): Token[] {
+    if (src.length > CHEAP_INLINE_LENGTH && inlineIsCostly(src, this.limit)) {
+      tokens.push({ type: 'text', raw: src, text: src });
+      return tokens;
     }
-    pushText(nodes, plain);
-    plain = '';
-    nodes.push(match.node);
-    cursor = match.end;
+    return super.inlineTokens(src, tokens);
   }
-  pushText(nodes, plain);
-  return nodes;
 }
 
-interface InlineMatch {
-  end: number;
-  node: InlineNode;
+function lexer(limit: number): BoundedLexer {
+  const instance = new BoundedLexer(markedOptions);
+  instance.limit = limit;
+  return instance;
 }
 
-function inlineTokenAt(source: string, start: number, rich: boolean, mathEnds: ReadonlyMap<string, number> | undefined, autoLinks: boolean): InlineMatch | undefined {
-  const math = mathEnds ? mathAt(source, start, mathEnds) : undefined;
-  if (math) return math;
-  if (rich && source.startsWith('![', start) && source[start - 1] !== BACKSLASH) return linkAt(source, start + 1, rich, true);
-  if (source[start] === '[') return linkAt(source, start, rich);
-  if (source[start] === '`') return delimitedAt(source, start, '`', (text) => ({ kind: 'code', text }));
-  if (source.startsWith('**', start)) return delimitedAt(source, start, '**', (text) => ({ kind: 'strong', children: parseInline(text, rich, autoLinks) }));
-  if (source.startsWith('__', start)) return delimitedAt(source, start, '__', (text) => ({ kind: 'strong', children: parseInline(text, rich, autoLinks) }));
-  if (source.startsWith('~~', start)) return delimitedAt(source, start, '~~', (text) => ({ kind: 'delete', children: parseInline(text, rich, autoLinks) }));
-  if (source[start] === '*') return delimitedAt(source, start, '*', (text) => ({ kind: 'emphasis', children: parseInline(text, rich, autoLinks) }));
-  if (rich && autoLinks) return autoLinkAt(source, start);
-  return undefined;
-}
-
-/** Text-only tokens: the trusted owner still decides whether a URL can be used. */
-function autoLinkAt(source: string, start: number): InlineMatch | undefined {
-  const angle = source[start] === '<';
-  const begin = start + (angle ? 1 : 0);
-  if (!source.startsWith('https://', begin) && !source.startsWith('http://', begin)) return undefined;
-  if (!angle && /[\w]/u.test(source[start - 1] ?? '')) return undefined;
-  const match = /^https?:\/\/[^\s<>]+/u.exec(source.slice(begin));
-  if (!match) return undefined;
-  let href = match[0];
-  if (angle) {
-    if (source[begin + href.length] !== '>') return undefined;
-  } else {
-    href = href.replace(/[.,;:!?]+$/u, '');
-    for (const [open, close] of [['(', ')'], ['[', ']']]) {
-      let balance = 0;
-      for (const char of href) { if (char === open) balance += 1; else if (char === close) balance -= 1; }
-      while (balance < 0 && href.endsWith(close!)) { href = href.slice(0, -1); balance += 1; }
-    }
-  }
-  return { end: begin + href.length + (angle ? 1 : 0), node: { kind: 'link', href, label: [{ kind: 'text', text: href }] } };
-}
-
-/** Rich owner formulas are opaque TeX before Markdown emphasis/link parsing. */
-function mathAt(source: string, start: number, ends: ReadonlyMap<string, number>): InlineMatch | undefined {
-  if (source[start - 1] === BACKSLASH) return undefined;
-  let open: string;
-  let close: string;
-  let display: boolean;
-  if (source.startsWith('\\(', start)) { open = '\\('; close = '\\)'; display = false; }
-  else if (source.startsWith('\\[', start)) { open = '\\['; close = '\\]'; display = true; }
-  else if (source.startsWith('$$', start)) { open = close = '$$'; display = true; }
-  else if (source[start] === '$' && !/\d/u.test(source[start - 1] ?? '')) { open = close = '$'; display = false; }
-  else return undefined;
-  const begin = start + open.length;
-  if ((ends.get(close) ?? -1) <= begin) return undefined;
-  let end = source.indexOf(close, begin);
-  while (end >= 0 && source[end - 1] === BACKSLASH) end = source.indexOf(close, end + close.length);
-  if (end <= begin) return undefined;
-  if (open === '$' && (/\d/u.test(source[end + 1] ?? '') || source.slice(begin, end).includes('\n'))) return undefined;
-  const text = source.slice(begin, end);
-  return { end: end + close.length, node: { kind: 'math', text: display ? `\\[${text}\\]` : `\\(${text}\\)`, display } };
-}
-
-function delimitedAt(source: string, start: number, delimiter: string, node: (text: string) => InlineNode): InlineMatch | undefined {
-  const contentStart = start + delimiter.length;
-  const lineEnd = source.indexOf('\n', contentStart);
-  const close = source.indexOf(delimiter, contentStart);
-  if (close <= contentStart || (lineEnd >= 0 && close > lineEnd)) return undefined;
-  return { end: close + delimiter.length, node: node(source.slice(contentStart, close)) };
-}
-
-function linkAt(source: string, start: number, rich: boolean, image = false): InlineMatch | undefined {
-  if (source[start + 1] === '[') return undefined;
-  // Bound malformed-link probing. Streaming output can contain thousands of
-  // unmatched `[` characters; each one must remain constant-work rather than
-  // rescanning the rest of the growing message.
-  const lineEnd = source.indexOf('\n', start + 1);
-  const labelWindowEnd = Math.min(lineEnd < 0 ? source.length : lineEnd, start + 257);
-  const labelOffset = source.slice(start + 1, labelWindowEnd).indexOf('](');
-  if (labelOffset < 0) return undefined;
-  const labelEnd = start + 1 + labelOffset;
-  const hrefWindowEnd = Math.min(lineEnd < 0 ? source.length : lineEnd, labelEnd + 2_050);
-  let depth = 0;
-  let hrefEnd = labelEnd + 2;
-  for (; hrefEnd < hrefWindowEnd; hrefEnd += 1) {
-    const char = source[hrefEnd];
-    if (char === BACKSLASH) { hrefEnd += 1; continue; }
-    if (char === '(') depth += 1;
-    if (char === ')') {
-      if (depth === 0) break;
-      depth -= 1;
-    }
-  }
-  if (hrefEnd >= hrefWindowEnd) return undefined;
-  const label = source.slice(start + 1, labelEnd);
-  let href = source.slice(labelEnd + 2, hrefEnd).trim().replace(/\\([\\()])/gu, '$1');
-  if ((!image && label.length === 0) || href.length === 0) return undefined;
-  if (image) {
-    const destination = /^(?:<([^<>]+)>|(\S+?))(?:\s+(?:"[^"]*"|'[^']*'))?$/u.exec(href);
-    if (destination) href = destination[1] ?? destination[2]!;
-    return { end: hrefEnd + 1, node: { kind: 'image', alt: inlineText(parseInline(label, false, false)), href } };
-  }
-  return { end: hrefEnd + 1, node: { kind: 'link', label: parseInline(label, rich, false), href } };
-}
-
-function inlineText(nodes: InlineNode[]): string {
-  return nodes.map(node => node.kind === 'image' ? node.alt : node.kind === 'link' ? inlineText(node.label)
-    : 'children' in node ? inlineText(node.children) : node.text).join('');
+function lex(source: string, limit: number): RawToken[] {
+  return lexer(limit).lex(source) as unknown as RawToken[];
 }
 
 function pushText(nodes: InlineNode[], text: string): void {
@@ -317,4 +189,345 @@ function pushText(nodes: InlineNode[], text: string): void {
   const previous = nodes[nodes.length - 1];
   if (previous?.kind === 'text') previous.text += text;
   else nodes.push({ kind: 'text', text });
+}
+
+function inlineText(nodes: readonly InlineNode[]): string {
+  return nodes.map((node) => {
+    switch (node.kind) {
+      case 'text': case 'code': case 'math': return node.text;
+      case 'image': return node.alt;
+      case 'link': return inlineText(node.label);
+      case 'strong': case 'emphasis': case 'delete': return inlineText(node.children);
+    }
+  }).join('');
+}
+
+function appendInline(nodes: InlineNode[], token: RawToken, context: Context): void {
+  switch (token.type) {
+    case 'text':
+      if (token.tokens !== undefined) for (const child of token.tokens) appendInline(nodes, child, context);
+      else pushText(nodes, decodeEntities(token.text ?? token.raw));
+      return;
+    case 'escape':
+      pushText(nodes, token.text ?? token.raw);
+      return;
+    case 'strong':
+      nodes.push({ kind: 'strong', children: convertInline(token.tokens, context) });
+      return;
+    case 'em':
+      nodes.push({ kind: 'emphasis', children: convertInline(token.tokens, context) });
+      return;
+    case 'del':
+      nodes.push({ kind: 'delete', children: convertInline(token.tokens, context) });
+      return;
+    case 'codespan':
+      nodes.push({ kind: 'code', text: token.text ?? '' });
+      return;
+    case 'br':
+      pushText(nodes, '\n');
+      return;
+    case 'link': {
+      const href = decodeEntities(token.href ?? '');
+      const label = convertInline(token.tokens, context);
+      if (href === '') {
+        for (const node of label) nodes.push(node);
+      } else {
+        const title = token.title ? decodeEntities(token.title) : undefined;
+        nodes.push({ kind: 'link', label: label.length > 0 ? label : [{ kind: 'text', text: href }], href, ...(title ? { title } : {}) });
+      }
+      return;
+    }
+    case 'image': {
+      const href = decodeEntities(token.href ?? '');
+      const alt = inlineText(convertInline(token.tokens, context));
+      // Only a trusted rich owner may fill an image slot; everyone else gets the description as a link.
+      if (context.rich) nodes.push({ kind: 'image', alt, href });
+      else if (href !== '') nodes.push({ kind: 'link', label: [{ kind: 'text', text: alt || href }], href });
+      else pushText(nodes, alt);
+      return;
+    }
+    case 'math': {
+      const body = token.text ?? '';
+      if (context.rich) nodes.push({ kind: 'math', text: token.display === true ? `\\[${body}\\]` : `\\(${body}\\)`, display: token.display === true });
+      else pushText(nodes, token.raw);
+      return;
+    }
+    case 'checkbox':
+      return;
+    // Inline HTML and anything unknown is shown as the text that was written; only a line break tag becomes a line break.
+    default: {
+      const written = token.type === 'html' ? (token.text ?? token.raw) : token.raw;
+      pushText(nodes, token.type === 'html' && /^<br\s*\/?>$/iu.test(written) ? '\n' : written);
+    }
+  }
+}
+
+function convertInline(tokens: readonly RawToken[] | undefined, context: Context): InlineNode[] {
+  const nodes: InlineNode[] = [];
+  for (const token of tokens ?? []) appendInline(nodes, token, context);
+  return nodes;
+}
+
+function literalParagraph(raw: string): MarkdownBlock {
+  return { kind: 'paragraph', inline: [{ kind: 'text', text: raw.replace(/\n+$/u, '') }] };
+}
+
+function alignOf(value: string | null | undefined): TableAlign {
+  return value === 'left' || value === 'center' || value === 'right' ? value : undefined;
+}
+
+function convertBlock(token: RawToken, context: Context): MarkdownBlock | undefined {
+  switch (token.type) {
+    case 'space': case 'def': case 'checkbox':
+      return undefined;
+    case 'paragraph': {
+      const inline = convertInline(token.tokens, context);
+      return inline.length > 0 ? { kind: 'paragraph', inline } : undefined;
+    }
+    case 'text': {
+      const inline = token.tokens !== undefined ? convertInline(token.tokens, context) : [{ kind: 'text', text: decodeEntities(token.text ?? token.raw) } satisfies InlineNode];
+      return inline.length > 0 ? { kind: 'paragraph', inline, tight: true } : undefined;
+    }
+    case 'heading':
+      return { kind: 'heading', depth: Math.min(6, Math.max(1, token.depth ?? 1)) as 1 | 2 | 3 | 4 | 5 | 6, inline: convertInline(token.tokens, context) };
+    case 'code': {
+      const info = token.codeBlockStyle === 'indented' ? undefined : /^\S+/u.exec(token.lang ?? '')?.[0];
+      const widget = context.widgets && info?.toLowerCase() === WIDGET_LANGUAGE;
+      // A widget's identity must not change when its closing fence arrives: trailing line feeds are not part of it.
+      const text = widget ? (token.text ?? '').replace(/\n+$/u, '') : (token.text ?? '');
+      const language = widget ? WIDGET_LANGUAGE : info;
+      return { kind: 'code', ...(language ? { language } : {}), text };
+    }
+    case 'blockquote':
+      return { kind: 'quote', children: convertBlocks(token.tokens ?? [], context) };
+    case 'list': {
+      const ordered = token.ordered === true;
+      const items = (token.items ?? []).map((item): ListItemNode => ({
+        ...(item.task === true ? { checked: item.checked === true } : {}),
+        children: convertBlocks(item.tokens ?? [], context),
+      }));
+      return { kind: 'list', ordered, ...(ordered && typeof token.start === 'number' ? { start: token.start } : {}), items };
+    }
+    case 'hr':
+      return { kind: 'rule' };
+    case 'table': {
+      const header = token.header ?? [];
+      if (header.length === 0 || header.length > MAX_TABLE_COLUMNS) return literalParagraph(token.raw);
+      const cell = (value: RawCell | undefined): InlineNode[] => (value === undefined ? [] : convertInline(value.tokens, context));
+      return {
+        kind: 'table',
+        align: header.map((_, column) => alignOf(token.align?.[column])),
+        head: header.map(cell),
+        rows: (token.rows ?? []).map((row) => header.map((_, column) => cell(row[column]))),
+      };
+    }
+    // Raw HTML blocks are text: nothing the model writes can become markup.
+    default:
+      return token.raw.trim() === '' ? undefined : literalParagraph(token.raw);
+  }
+}
+
+function convertBlocks(tokens: readonly RawToken[], context: Context): MarkdownBlock[] {
+  const blocks: MarkdownBlock[] = [];
+  for (const token of tokens) {
+    const block = convertBlock(token, context);
+    if (block !== undefined) blocks.push(block);
+  }
+  return blocks;
+}
+
+function lastContentIndex(tokens: readonly RawToken[]): number {
+  for (let index = tokens.length - 1; index >= 0; index -= 1) if (tokens[index]!.type !== 'space') return index;
+  return -1;
+}
+
+/** A fenced block is closed when its last line is a fence at least as long as the opener. */
+function fenceClosed(raw: string): boolean {
+  const opener = /^ {0,3}(`{3,}|~{3,})/u.exec(raw);
+  if (!opener) return true;
+  const marker = opener[1]!;
+  const lines = raw.replace(/\n+$/u, '').split('\n');
+  if (lines.length < 2) return false;
+  const last = lines[lines.length - 1]!.replace(/^ {0,3}/u, '').trimEnd();
+  return last.length >= marker.length && [...last].every((char) => char === marker[0]);
+}
+
+/** Code that continues to the end of the text: its last characters belong to it. */
+function openCode(token: RawToken | undefined): boolean {
+  return token?.type === 'code' && (token.codeBlockStyle === 'indented' || !fenceClosed(token.raw));
+}
+
+/** The closing fence being typed (`` `` `` under a three-backtick opener) is not code yet. */
+function withoutPartialFence(block: MarkdownBlock, raw: string): MarkdownBlock {
+  if (block.kind !== 'code') return block;
+  const marker = /^ {0,3}(`{3,}|~{3,})/u.exec(raw)?.[1];
+  if (marker === undefined) return block;
+  const newline = block.text.lastIndexOf('\n');
+  const last = block.text.slice(newline + 1).trimEnd();
+  if (last.length === 0 || last.length >= marker.length || ![...last.replace(/^ {0,3}/u, '')].every((char) => char === marker[0])) return block;
+  return { ...block, text: newline < 0 ? '' : block.text.slice(0, newline) };
+}
+
+/** Puts text after the last inline content of a block (the held delimiters of a streaming tail). */
+function appendLiteral(block: MarkdownBlock, text: string): boolean {
+  switch (block.kind) {
+    case 'paragraph': case 'heading':
+      pushText(block.inline, text);
+      return true;
+    case 'quote': {
+      const last = block.children[block.children.length - 1];
+      return last !== undefined && appendLiteral(last, text);
+    }
+    case 'list': {
+      const children = block.items[block.items.length - 1]?.children;
+      const last = children?.[children.length - 1];
+      return last !== undefined && appendLiteral(last, text);
+    }
+    case 'table': {
+      const row = block.rows[block.rows.length - 1] ?? block.head;
+      const cell = row[row.length - 1];
+      if (cell === undefined) return false;
+      pushText(cell, text);
+      return true;
+    }
+    case 'code': case 'rule':
+      return false;
+  }
+}
+
+class IncrementalParser implements MarkdownParser {
+  private readonly context: Context;
+  /** The source text covered by `stable`. */
+  private prefix = '';
+  private stable: MarkdownEntry[] = [];
+  private widgetCount = 0;
+  /** Link reference definitions can change earlier blocks: the whole text is then parsed every time. */
+  private definitions = false;
+
+  constructor(context: Context) {
+    this.context = context;
+  }
+
+  parse(source: string, streaming: boolean = false): readonly MarkdownEntry[] {
+    const text = source.includes('\r') ? source.replace(/\r\n?/gu, '\n') : source;
+    if (!text.startsWith(this.prefix)) this.reset();
+    try {
+      return this.build(text, text.slice(this.prefix.length), streaming);
+    } catch {
+      // A lexer failure must never blank the message: show the text as written.
+      this.reset();
+      return [{ key: 'block:0', block: literalParagraph(text) }];
+    }
+  }
+
+  private reset(): void {
+    this.prefix = '';
+    this.stable = [];
+    this.widgetCount = 0;
+    this.definitions = false;
+  }
+
+  private build(text: string, tail: string, streaming: boolean): readonly MarkdownEntry[] {
+    const limit = streaming ? STREAMING_COST_LIMIT : COMPLETE_COST_LIMIT;
+    let lexed = tail;
+    let held = '';
+    let tokens: RawToken[] | undefined;
+    if (streaming) {
+      const run = trailingDelimiters(tail);
+      if (run !== '') {
+        const before = tail.slice(0, tail.length - run.length);
+        const body = withoutTrailingBlanks(before);
+        // A run that starts a line may be a list marker, a rule or a new paragraph: only one that follows text on its own line waits.
+        if (!body.endsWith('\n')) {
+          const candidate = lex(body, limit);
+          const last = candidate[lastContentIndex(candidate)];
+          // Inside code or HTML the run is content, not a half-typed delimiter.
+          if (last?.type !== 'html' && !openCode(last)) {
+            tokens = candidate;
+            lexed = body;
+            held = (body === '' ? '' : before.slice(body.length)) + run;
+          }
+        }
+      }
+    }
+    tokens ??= lex(tail, limit);
+
+    if (!this.definitions && tokens.some((token) => token.type === 'def')) {
+      this.reset();
+      this.definitions = true;
+      return this.build(text, text, streaming);
+    }
+
+    // Every block except the last may be remembered. A list or quote can still take in a later indented line,
+    // so the run of them before the last block stays unfinished too.
+    let commit = lastContentIndex(tokens);
+    while (commit > 0) {
+      let previous = commit - 1;
+      while (previous >= 0 && tokens[previous]!.type === 'space') previous -= 1;
+      const type = previous >= 0 ? tokens[previous]!.type : '';
+      if (type !== 'list' && type !== 'blockquote') break;
+      commit = previous;
+    }
+    if (commit > 0 && !this.definitions) {
+      let offset = 0;
+      for (let index = 0; index < commit && offset >= 0; index += 1) {
+        const raw = tokens[index]!.raw;
+        offset = lexed.startsWith(raw, offset) ? offset + raw.length : -1;
+      }
+      if (offset > 0) {
+        const done = this.entriesFor(tokens.slice(0, commit), this.stable.length, this.widgetCount);
+        for (const entry of done.entries) this.stable.push(entry);
+        this.widgetCount = done.widgets;
+        this.prefix += lexed.slice(0, offset);
+        tokens = tokens.slice(commit);
+      }
+    }
+
+    const rest = this.entriesFor(tokens, this.stable.length, this.widgetCount);
+    const lastToken = tokens[lastContentIndex(tokens)];
+    const lastEntry = rest.entries[rest.entries.length - 1];
+    if (streaming && lastEntry !== undefined && lastToken?.type === 'code' && lastToken.codeBlockStyle !== 'indented' && !fenceClosed(lastToken.raw)) {
+      lastEntry.block = withoutPartialFence(lastEntry.block, lastToken.raw);
+    }
+    if (held !== '') {
+      if (lastEntry === undefined || !appendLiteral(lastEntry.block, held)) {
+        rest.entries.push({ key: `block:${this.stable.length + rest.entries.length}`, block: { kind: 'paragraph', inline: [{ kind: 'text', text: held }] } });
+      }
+    }
+    return rest.entries.length === 0 ? this.stable.slice() : this.stable.concat(rest.entries);
+  }
+
+  private entriesFor(tokens: readonly RawToken[], start: number, widgetStart: number): { entries: MarkdownEntry[]; widgets: number } {
+    const entries: MarkdownEntry[] = [];
+    let widgets = widgetStart;
+    for (const token of tokens) {
+      const block = convertBlock(token, this.context);
+      if (block === undefined) continue;
+      // Final owner cleanup can remove prose before an unchanged widget. Its DOM
+      // (and focused controls) belongs to its widget ordinal, not that prose.
+      const key = this.context.widgets && block.kind === 'code' && block.language === WIDGET_LANGUAGE ? `widget:${widgets++}` : `block:${start + entries.length}`;
+      entries.push({ key, block });
+    }
+    return { entries, widgets };
+  }
+}
+
+/** A parser for one message. `rich`: formulas, images and links are shown for a trusted owner. `widgets`: `hermes-ui` fences are interface widgets. */
+export function createMarkdownParser(options: { rich?: boolean; widgets?: boolean } = {}): MarkdownParser {
+  const rich = options.rich ?? false;
+  return new IncrementalParser({ rich, widgets: options.widgets ?? rich });
+}
+
+/** A one-shot projection of `source`; use `createMarkdownParser` for text that grows. */
+export function parseMarkdown(source: string, rich = false, widgets = rich, streaming = false): MarkdownBlock[] {
+  return createMarkdownParser({ rich, widgets }).parse(source, streaming).map((entry) => entry.block);
+}
+
+/** Inline Markdown only (a label, a table cell). */
+export function parseInline(source: string, rich = false): InlineNode[] {
+  try {
+    return convertInline(lexer(COMPLETE_COST_LIMIT).inlineTokens(source) as unknown as RawToken[], { rich, widgets: false });
+  } catch {
+    return [{ kind: 'text', text: source }];
+  }
 }

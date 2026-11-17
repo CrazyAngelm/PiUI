@@ -8,6 +8,8 @@
 import { createInterface } from 'node:readline';
 import { writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const flag = name => process.argv.includes(name);
 if (flag('--version')) { process.stdout.write('fixture-agent 1.2.3\n'); process.exit(0); }
@@ -98,6 +100,40 @@ async function prompt(message) {
     notify(sessionId, { sessionUpdate: 'usage_update', used: 9000, size: 32000 });
     notify(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'image', mimeType: 'image/png', data: 'AAAA' } });
     end('end_turn', { usage: { inputTokens: 10, outputTokens: 4, cachedReadTokens: 2, cachedWriteTokens: 1, thoughtTokens: 3, totalTokens: 14 } });
+  } else if (text === 'interleave') {
+    // Updating a tool that is already shown does not split the answer; a new
+    // tool call does. With a message id the chunks stay in their own block.
+    say('AAA ');
+    notify(sessionId, { sessionUpdate: 'tool_call', toolCallId: 'call-i1', title: 'List files', kind: 'search', status: 'pending' });
+    say('BBB ');
+    notify(sessionId, { sessionUpdate: 'tool_call_update', toolCallId: 'call-i1', status: 'in_progress' });
+    say('CCC');
+    notify(sessionId, { sessionUpdate: 'tool_call_update', toolCallId: 'call-i1', status: 'completed' });
+    say(' DDD');
+    say('one ', 'keyed-1');
+    notify(sessionId, { sessionUpdate: 'tool_call', toolCallId: 'call-i2', title: 'Read notes', kind: 'read', status: 'completed' });
+    say('two', 'keyed-1');
+    end();
+  } else if (text === 'cancelled-stream' || text === 'refused-stream') {
+    say('half an answer');
+    notify(sessionId, { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'half a thought' } });
+    end(text === 'cancelled-stream' ? 'cancelled' : 'refusal');
+  } else if (text === 'files') {
+    const tool = (toolCallId, fields) => notify(sessionId, { sessionUpdate: 'tool_call', toolCallId, title: `Tool ${toolCallId}`, ...fields });
+    const tiny = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAH8wD3AAAAABJRU5ErkJggg==';
+    tool('f-edit', { kind: 'edit', status: 'pending', locations: [{ path: 'src/x.ts' }], content: [{ type: 'diff', path: 'src/x.ts', oldText: 'a', newText: 'b' }] });
+    notify(sessionId, { sessionUpdate: 'tool_call_update', toolCallId: 'f-edit', status: 'completed' });
+    tool('f-read', { kind: 'read', status: 'completed', locations: [{ path: 'pics/A.PNG' }, { path: 'notes.txt' }] });
+    tool('f-delete', { kind: 'delete', status: 'completed', locations: [{ path: 'gone.txt' }] });
+    tool('f-failed', { kind: 'edit', status: 'failed', locations: [{ path: 'never.ts' }] });
+    tool('f-media', { kind: 'other', status: 'completed', content: [
+      { type: 'content', content: { type: 'image', mimeType: 'image/png', data: tiny } },
+      { type: 'content', content: { type: 'audio', mimeType: 'audio/wav', data: 'UklGRg==' } },
+      { type: 'content', content: { type: 'image', mimeType: 'image/svg+xml', data: tiny } },
+      { type: 'content', content: { type: 'resource_link', uri: pathToFileURL(join(process.cwd(), 'out', 'report.pdf')).href, name: 'report' } },
+      { type: 'content', content: { type: 'resource_link', uri: 'https://example.invalid/page', name: 'page' } },
+    ] });
+    end();
   } else if (text === 'approve') {
     promptId = message.id;
     notify(sessionId, { sessionUpdate: 'tool_call', toolCallId: 'call-2', title: 'Delete build output', kind: 'delete', status: 'pending', locations: [{ path: 'dist' }] });

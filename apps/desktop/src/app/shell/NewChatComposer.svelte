@@ -215,7 +215,25 @@
       : $t('No matches'),
   );
 
-  // Follow the sidebar selection until the user picks a project here.
+  // Follow the sidebar selection: "New chat in <project>" selects that project
+  // even while this composer is already open. A pick made here holds until the
+  // sidebar selection changes again.
+  let followedSelection = store.selectedWorkspaceId;
+  let followedRequest = store.newChatRequest?.seq ?? 0;
+  $effect(() => {
+    const selected = store.selectedWorkspaceId;
+    const request = store.newChatRequest;
+    let next: string | undefined;
+    if (request && request.seq !== followedRequest) {
+      followedRequest = request.seq;
+      next = request.workspaceId;
+    }
+    if (selected !== followedSelection) {
+      followedSelection = selected;
+      next ??= selected;
+    }
+    if (next && workspaces.some((item) => item.id === next)) workspaceId = next;
+  });
   $effect(() => {
     if (!workspaceId || !workspaces.some((item) => item.id === workspaceId)) {
       workspaceId = store.selectedWorkspaceId || workspaces[0]?.id || '';

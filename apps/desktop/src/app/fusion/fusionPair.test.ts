@@ -3,11 +3,15 @@ import { translate } from '../../features/locale/language';
 import { DEFAULT_FUSION_OPTIONS, FusionError, type FusionRefusalV1 } from '../../host-api/fusionClient';
 import {
   FUSION_PERMISSION_CHOICES,
+  checkRoleAgainstCatalog,
   defaultPair,
+  defaultPermissionModes,
   fusionErrorText,
   isFusionLead,
   isFusionSidekick,
   pairKey,
+  allowancePhrases,
+  exceedsCopy,
   refusalCopy,
   rememberablePair,
   restorePair,
@@ -41,9 +45,9 @@ const REFUSALS: FusionRefusalV1[] = [
 ];
 
 describe('default Fusion pair', () => {
-  it('prefers a cross-vendor pair with explicit permission modes', () => {
+  it('prefers a cross-vendor pair the host admits: a full-access lead over an edit-only sidekick', () => {
     expect(defaultPair(['claude-code', 'codex', 'pi'])).toEqual({
-      lead: { harness: 'claude-code', permissionMode: 'workspace-write' },
+      lead: { harness: 'claude-code', permissionMode: 'full-access' },
       sidekick: { harness: 'codex', permissionMode: 'workspace-write' },
       options: DEFAULT_FUSION_OPTIONS,
     });
@@ -60,6 +64,17 @@ describe('default Fusion pair', () => {
     const pair = defaultPair(['codex', 'nano']);
     expect(pair).toMatchObject({ lead: { harness: 'codex', permissionMode: 'full-access' }, sidekick: { harness: 'nano', permissionMode: 'full-access' } });
     expect(defaultPair(['nano'])).toBeUndefined();
+  });
+
+  it('never proposes a mode the host refuses (ADR-076)', () => {
+    // A Claude Code sidekick is never "Edit project"; alone it runs natively on both roles.
+    expect(defaultPair(['claude-code'])).toMatchObject({
+      lead: { harness: 'claude-code', permissionMode: 'native' },
+      sidekick: { harness: 'claude-code', permissionMode: 'native' },
+    });
+    expect(defaultPermissionModes('claude-code', 'codex')).toEqual({ lead: 'full-access', sidekick: 'full-access' });
+    expect(defaultPermissionModes('codex', 'codex')).toEqual({ lead: 'workspace-write', sidekick: 'workspace-write' });
+    expect(defaultPermissionModes('nano', 'claude-code')).toEqual({ lead: 'full-access', sidekick: 'full-access' });
   });
 
   it('falls back to the same harness for both roles and to nothing without a lead', () => {
@@ -128,11 +143,24 @@ describe('role edits', () => {
 describe('remembered pair', () => {
   const available = ['claude-code', 'codex', 'pi'] as const;
 
-  it('round-trips roles and options but not models', () => {
+  it('round-trips roles, options, models, reasoning and Fast', () => {
     const pair = defaultPair(available)!;
-    const withModelPair = withRole(withOptions(pair, { pushback: true, briefPolicy: 'outline' }), 'lead', withModel(pair.lead, { id: 'm', name: 'M' }, false));
+    const lead = withServiceTier(withThinkingLevel(withModel(pair.lead, { id: 'm', name: 'M', thinkingLevels: ['high'] }, true), 'high'), true);
+    const withModelPair = withRole(withOptions(pair, { pushback: true, briefPolicy: 'outline' }), 'lead', lead);
     const restored = restorePair(rememberablePair(withModelPair), available);
-    expect(restored).toEqual({ ...withModelPair, lead: { harness: pair.lead.harness, permissionMode: pair.lead.permissionMode } });
+    expect(restored).toEqual(withModelPair);
+  });
+
+  it('checks a remembered model against the fresh catalog and never replaces it silently', () => {
+    const role = { harness: 'codex', permissionMode: 'workspace-write', model: { id: 'm', name: 'M' }, thinkingLevel: 'high' } as const;
+    const gone = checkRoleAgainstCatalog(role, [{ id: 'other', name: 'Other' }]);
+    expect(gone).toEqual({ role, missingModel: true, droppedThinking: false });
+    const fresh = checkRoleAgainstCatalog(role, [{ id: 'm', name: 'M 2', thinkingLevels: ['low'] }]);
+    expect(fresh.missingModel).toBe(false);
+    expect(fresh.droppedThinking).toBe(true);
+    expect(fresh.role).toEqual({ harness: 'codex', permissionMode: 'workspace-write', model: { id: 'm', name: 'M 2', thinkingLevels: ['low'] } });
+    const plain = { harness: 'codex', permissionMode: 'workspace-write' } as const;
+    expect(checkRoleAgainstCatalog(plain, [])).toEqual({ role: plain, missingModel: false, droppedThinking: false });
   });
 
   it('rejects garbage, unavailable harnesses and a Pi lead', () => {
@@ -156,6 +184,33 @@ describe('refusal copy', () => {
       expect(translate(hint, 'ru'), hint).not.toBe(hint);
     }
     expect(new Set(REFUSALS.map((refusal) => refusalCopy(refusal).title)).size).toBe(REFUSALS.length);
+  });
+
+  it('names the exceeded dimension and words the sidekick allowance in both languages', () => {
+    const dimensions = ['writes', 'shell', 'network', 'mcp'] as const;
+    for (const dimension of dimensions) {
+      const { title, hint } = refusalCopy('sidekick-exceeds-lead', dimension);
+      expect(title).toBe(exceedsCopy(dimension));
+      expect(translate(title, 'ru'), title).not.toBe(title);
+      expect(translate(hint, 'ru'), hint).not.toBe(hint);
+    }
+    expect(new Set(dimensions.map(exceedsCopy)).size).toBe(dimensions.length);
+    const samples = [
+      undefined,
+      { writes: 'anywhere', reads: 'anywhere', shell: 'unrestricted', network: 'full', mcp: 'configured' },
+      { writes: 'workspace', reads: 'workspace', shell: 'none', network: 'none', mcp: 'none' },
+      { writes: 'none', reads: 'anywhere', shell: 'read-only-sandbox', network: 'none', mcp: 'configured' },
+      { writes: 'workspace', reads: 'anywhere', shell: 'workspace-sandbox', network: 'none', mcp: 'configured' },
+      { writes: 'approved', reads: 'anywhere', shell: 'approved', network: 'approved', mcp: 'none' },
+    ] as const;
+    expect(allowancePhrases(samples[2])).toEqual(['edits in the project', 'no commands', 'reads the project only']);
+    expect(allowancePhrases(samples[1])).toEqual(['full access to this computer']);
+    expect(allowancePhrases(samples[3])).toEqual(['no edits', 'commands in a read-only sandbox', 'reads outside the project', 'its MCP servers']);
+    for (const sample of samples) {
+      for (const phrase of allowancePhrases(sample)) expect(translate(phrase, 'ru'), phrase).not.toBe(phrase);
+    }
+    expect(translate('Sidekick allowance', 'ru')).not.toBe('Sidekick allowance');
+    expect(translate('lowered to fit the lead', 'ru')).not.toBe('lowered to fit the lead');
   });
 
   it('names the roles', () => {

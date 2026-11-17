@@ -4,6 +4,8 @@ import {
   fusionError,
   type FusionOptionsV1,
   type FusionPairV1,
+  type FusionCapabilitiesV1,
+  type FusionCapabilityDimensionV1,
   type FusionRefusalV1,
   type FusionRoleNameV1,
   type FusionRoleV1,
@@ -43,13 +45,17 @@ export const isFusionSidekick = (harness: HarnessKind | string): harness is (typ
   (FUSION_SIDEKICKS as readonly string[]).includes(harness);
 
 /**
- * Harnesses without a native sandbox (Pi, Nano) can only run with full access, and a
- * sidekick may never exceed its lead, so a Pi or Nano sidekick starts with both roles
- * at full access. Everything else starts with an explicit "Edit project" so a
- * cross-harness pair is accepted without a native-defaults refusal.
+ * The least-authority modes the host admits for a pair, from the same matrix as the
+ * host check (ADR-076): Pi and Nano run only with full access on both roles; a Claude
+ * Code sidekick runs natively (same-harness lead) or with full access, never "Edit
+ * project"; a Codex sidekick edits the project; and across harnesses only a full-access
+ * lead provably covers the sidekick. A Codex sidekick still needs the Codex sandbox on
+ * this computer, which only the host can check.
  */
-export function defaultPermissionModes(sidekick: HarnessKind): { lead: PermissionMode; sidekick: PermissionMode } {
-  return sidekick === 'pi' || sidekick === 'nano' ? { lead: 'full-access', sidekick: 'full-access' } : { lead: 'workspace-write', sidekick: 'workspace-write' };
+export function defaultPermissionModes(sidekick: HarnessKind, lead: HarnessKind = sidekick): { lead: PermissionMode; sidekick: PermissionMode } {
+  if (sidekick === 'pi' || sidekick === 'nano') return { lead: 'full-access', sidekick: 'full-access' };
+  if (lead === sidekick) return sidekick === 'claude-code' ? { lead: 'native', sidekick: 'native' } : { lead: 'workspace-write', sidekick: 'workspace-write' };
+  return { lead: 'full-access', sidekick: sidekick === 'claude-code' ? 'full-access' : 'workspace-write' };
 }
 
 /**
@@ -64,7 +70,7 @@ export function defaultPair(available: readonly HarnessKind[]): FusionPairV1 | u
     FUSION_SIDEKICKS.find((kind) => kind !== lead && available.includes(kind)) ??
     FUSION_SIDEKICKS.find((kind) => available.includes(kind)) ??
     lead;
-  const modes = defaultPermissionModes(sidekick);
+  const modes = defaultPermissionModes(sidekick, lead);
   return {
     lead: { harness: lead, permissionMode: modes.lead },
     sidekick: { harness: sidekick, permissionMode: modes.sidekick },
@@ -137,13 +143,56 @@ export function pairKey(pair: FusionPairV1): string {
   return JSON.stringify([role(pair.lead), role(pair.sidekick), briefPolicy, pushback, autoDeliver, leadNativeSubagents]);
 }
 
-/** The pair a project remembers between starts; models are not kept (catalogs change). */
+/** The pair a project remembers between starts, with each role's model, reasoning and speed. */
 export function rememberablePair(pair: FusionPairV1): string {
-  const role = (value: FusionRoleV1): FusionRoleV1 => ({ harness: value.harness, permissionMode: value.permissionMode });
+  const role = (value: FusionRoleV1): FusionRoleV1 => ({
+    harness: value.harness,
+    permissionMode: value.permissionMode,
+    ...(value.model ? { model: value.model } : {}),
+    ...(value.thinkingLevel ? { thinkingLevel: value.thinkingLevel } : {}),
+    ...(value.serviceTier === 'fast' ? { serviceTier: 'fast' as const } : {}),
+  });
   return JSON.stringify({ lead: role(pair.lead), sidekick: role(pair.sidekick), options: pair.options });
 }
 
+/** A remembered role checked against the harness's fresh model catalog. */
+export interface CatalogCheck {
+  role: FusionRoleV1;
+  /** The remembered model is no longer in the catalog: the role keeps it and the picker flags it. */
+  missingModel: boolean;
+  /** The remembered reasoning level is not offered by the model any more (it is dropped). */
+  droppedThinking: boolean;
+}
+
+/**
+ * Never silently replaces a remembered model: a model the catalog lacks stays selected and is
+ * flagged, so the person decides. Reasoning the model no longer offers is dropped and said so.
+ */
+export function checkRoleAgainstCatalog(role: FusionRoleV1, catalog: readonly WorkspaceModel[]): CatalogCheck {
+  const model = role.model;
+  if (model === undefined) return { role, missingModel: false, droppedThinking: false };
+  const fresh = catalog.find((entry) => entry.id === model.id && (entry.provider ?? null) === (model.provider ?? null));
+  if (fresh === undefined) return { role, missingModel: true, droppedThinking: false };
+  const keepThinking = role.thinkingLevel === undefined || (fresh.thinkingLevels?.includes(role.thinkingLevel) ?? false);
+  const next: FusionRoleV1 = {
+    harness: role.harness,
+    permissionMode: role.permissionMode,
+    model: fresh,
+    ...(keepThinking && role.thinkingLevel !== undefined ? { thinkingLevel: role.thinkingLevel } : {}),
+    ...(role.serviceTier === 'fast' ? { serviceTier: 'fast' as const } : {}),
+  };
+  return { role: next, missingModel: false, droppedThinking: !keepThinking };
+}
+
 const isMode = (value: unknown): value is PermissionMode => (FUSION_PERMISSION_MODES as readonly unknown[]).includes(value);
+
+/** A remembered model reference: an id and a name (the fresh catalog fills the rest). */
+function rememberedModel(value: unknown): WorkspaceModel | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const { id, name } = value as Record<string, unknown>;
+  if (typeof id !== 'string' || !id || typeof name !== 'string') return undefined;
+  return value as WorkspaceModel;
+}
 
 /**
  * The remembered pair if it is still valid and its harnesses are available;
@@ -161,9 +210,16 @@ export function restorePair(raw: string | null, available: readonly HarnessKind[
   const { lead, sidekick, options } = value as Record<string, unknown>;
   const role = (candidate: unknown, allowed: (harness: string) => boolean): FusionRoleV1 | undefined => {
     if (typeof candidate !== 'object' || candidate === null) return undefined;
-    const { harness, permissionMode } = candidate as Record<string, unknown>;
+    const { harness, permissionMode, model, thinkingLevel, serviceTier } = candidate as Record<string, unknown>;
     if (typeof harness !== 'string' || !allowed(harness) || !available.includes(harness as HarnessKind) || !isMode(permissionMode)) return undefined;
-    return { harness: harness as HarnessKind, permissionMode };
+    const remembered = rememberedModel(model);
+    return {
+      harness: harness as HarnessKind,
+      permissionMode,
+      ...(remembered ? { model: remembered } : {}),
+      ...(typeof thinkingLevel === 'string' && thinkingLevel ? { thinkingLevel } : {}),
+      ...(serviceTier === 'fast' ? { serviceTier: 'fast' as const } : {}),
+    };
   };
   const leadRole = role(lead, isFusionLead);
   const sidekickRole = role(sidekick, isFusionSidekick);
@@ -200,8 +256,54 @@ export function roleLabel(role: FusionRoleNameV1): string {
   }
 }
 
+/** Why a sidekick exceeds the lead, per capability dimension (ADR-076). */
+export function exceedsCopy(dimension: FusionCapabilityDimensionV1): string {
+  switch (dimension) {
+    case 'writes':
+      return 'Every mode of this sidekick could change files the lead cannot.';
+    case 'shell':
+      return 'Every mode of this sidekick runs commands the lead cannot.';
+    case 'network':
+      return 'Every mode of this sidekick uses the network, which the lead cannot.';
+    case 'mcp':
+      return 'Every mode of this sidekick keeps MCP servers the lead cannot use.';
+    default:
+      return assertNever(dimension);
+  }
+}
+
+/**
+ * What the sidekick will effectively be allowed, as locale keys to join with
+ * ", " (ADR-076). `undefined` capabilities: a native pair, the person's own
+ * settings for that harness.
+ */
+export function allowancePhrases(capabilities: FusionCapabilitiesV1 | undefined): string[] {
+  if (capabilities === undefined) return ['your own settings for this harness'];
+  const { writes, shell, network, mcp, reads } = capabilities;
+  if (writes === 'anywhere' && shell === 'unrestricted' && network === 'full') return ['full access to this computer'];
+  const phrases: string[] = [];
+  phrases.push(
+    writes === 'none' ? 'no edits' : writes === 'workspace' ? 'edits in the project' : writes === 'approved' ? 'edits you approve' : 'edits anywhere',
+  );
+  phrases.push(
+    shell === 'none'
+      ? 'no commands'
+      : shell === 'read-only-sandbox'
+        ? 'commands in a read-only sandbox'
+        : shell === 'workspace-sandbox'
+          ? 'commands in a project sandbox'
+          : shell === 'approved'
+            ? 'commands you approve'
+            : 'any command',
+  );
+  phrases.push(reads === 'workspace' ? 'reads the project only' : 'reads outside the project');
+  if (network !== 'none') phrases.push(network === 'approved' ? 'network you approve' : 'network');
+  if (mcp === 'configured') phrases.push('its MCP servers');
+  return phrases;
+}
+
 /** Words for each host refusal of a pair. The role says which column to look at. */
-export function refusalCopy(refusal: FusionRefusalV1): RefusalCopy {
+export function refusalCopy(refusal: FusionRefusalV1, dimension: FusionCapabilityDimensionV1 | undefined = undefined): RefusalCopy {
   switch (refusal) {
     case 'lead-harness-unsupported':
       return {
@@ -219,14 +321,13 @@ export function refusalCopy(refusal: FusionRefusalV1): RefusalCopy {
         hint: 'A pair cannot rely on "Harness settings": pick Read only, Edit project or Full access for the lead and the sidekick.',
       };
     case 'sidekick-exceeds-lead':
-      return {
-        title: 'The sidekick would be allowed more than the lead.',
-        hint: 'Lower the sidekick permissions or raise the lead permissions.',
-      };
+      return dimension === undefined
+        ? { title: 'The sidekick would be allowed more than the lead.', hint: 'Lower the sidekick permissions or raise the lead permissions.' }
+        : { title: exceedsCopy(dimension), hint: 'Raise the lead permissions or choose another sidekick.' };
     case 'sidekick-needs-full-access':
       return {
         title: 'This sidekick can only run with full access.',
-        hint: 'Claude Code cannot answer its own command approvals in Edit project mode, and Pi has no edit-only mode. Use Full access (or Native with a Claude Code lead), or choose another sidekick.',
+        hint: 'Pi runs only with full access, and Nano has no edit-only mode. Use Full access or Read only, or choose another sidekick.',
       };
     case 'codex-sandbox-unverified':
       return {

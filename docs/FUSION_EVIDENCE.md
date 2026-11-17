@@ -160,3 +160,45 @@ Codex отдал в одном ходе две накопительные кви
 - Кэш Codex после пауз длиннее 2 минут; TTL Claude ровно 1 час.
 - Повтор MCP-вызова Claude Code с тем же `toolUseId` (по строкам бинарника, не вживую).
 - Поведение под Linux.
+
+## S12. Codex: режим «чтение только проекта» для напарника (ADR-076, 2026-11-18)
+
+Реальный CLI без вызова модели: `codex-cli 0.169.0`, Windows 11, в
+`~/.codex/config.toml` стоит `[windows] sandbox = "unelevated"`. Временный проект
+`scratchpad\sbx\project\inside.txt` и файл вне проекта `scratchpad\sbx\outside\outside.txt`
+(удалены после проверки). Форма профиля взята из `PermissionProfileToml`
+(`description`, `extends`, `workspace_roots`, `filesystem`, `network`) и схемы
+app-server (`FileSystemSpecialPath`: `root`, `minimal`, `project_roots{subpath}`, ...).
+Команды запускались из папки проекта:
+
+```
+codex sandbox -c 'permissions.A.filesystem={":root"="read",":project_roots"={"."="write"}}' -P A -- cmd /c type <файл>
+codex sandbox -c 'permissions.B.filesystem={":minimal"="read",":project_roots"={"."="read"}}' -P B -- cmd /c type <файл>
+codex sandbox -c 'permissions.C.filesystem={":root"="read",":project_roots"={"."="write"},"<абс. путь outside>"="deny"}' -P C -- cmd /c type <файл>
+```
+
+| Профиль | inside.txt | outside.txt |
+|---|---|---|
+| A (чтение всего диска, контроль формы) | exit 0, `inside-ok` | exit 0, `outside-secret` |
+| B (minimal + проект на чтение) | exit 1: `Restricted read-only access requires the elevated Windows sandbox backend` | то же |
+| C (весь диск + `deny` на папку вне проекта) | то же | то же |
+
+Вывод: профиль разбирается и применяется, но на «unelevated»-песочнице Codex
+отказывается запускать любую команду с ограничением чтения (отказ закрытый, а не
+тихое чтение). Ограничение чтения на Windows требует elevated-бэкенда песочницы
+(машинные учётные записи и правила, ставятся с правами администратора). Он не
+включался и не проверялся: это решение владельца. Поэтому режим «чтение только
+проекта» для Codex-напарника не добавлен, а пара «Claude-ведущий read-only /
+workspace-write + Codex-напарник» по-прежнему отказывается с измерением `reads`.
+
+Codex 0.169.0, функции: `multi_agent` теперь `deprecated` (по-прежнему
+отключается), `multi_agent_v2` `stable`; с `--disable multi_agent --disable
+multi_agent_v2` оба читаются `false`. `--disable unified_exec` и
+`-c features.unified_exec=false` оставляют `unified_exec` `true` (модельный каталог
+задаёт `shell_type = "unified_exec"`), поэтому фоновые терминалы на 0.169.0 не
+отключаются доказуемо; мост это допускает, а инструкция напарника требует
+завершить или остановить их до конца хода.
+
+Решение владельца (2026-11-18): «Разрешить чтение вне проекта». Измерение `reads`
+больше не участвует в допуске (ADR-076); Codex-напарник в read-only /
+workspace-write запускается с отключёнными MCP-серверами пользователя.

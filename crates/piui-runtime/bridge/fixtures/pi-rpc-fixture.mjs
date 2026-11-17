@@ -34,7 +34,33 @@ const longOutput = `${"head line\n".repeat(1200)}${"tail line\n".repeat(1200)}`;
 const emojiOutput = `${"a".repeat(8191)}\u{1F600}${"b".repeat(100)}\u{1F600}${"c".repeat(8191)}`;
 const tool = (type, toolCallId, toolName, fields) => ({ type, toolCallId, toolName, ...fields });
 const textResult = (text) => ({ content: [{ type: "text", text }], details: { fullOutputPath: `/private/${secret}.log` } });
-const assistantText = (text) => ({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text } });
+// The timestamp of the rich assistant message: live events and `--history-rich` entries share it.
+const RICH_TIMESTAMP = 1790000000900;
+// Never meant to reach a block: the streamed JSON arguments of a tool call.
+const toolArgsMarker = "TOOLCALL-ARGS-MUST-NOT-BE-PROSE";
+// A 1x1 PNG.
+const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAH8wD3AAAAABJRU5ErkJggg==";
+const update = (assistantMessageEvent) => ({ type: "message_update", message: { role: "assistant", timestamp: RICH_TIMESTAMP }, assistantMessageEvent });
+// Session entries: a user turn, an assistant message (thinking, text, tool
+// call, text), its tool result, a compaction, an abandoned branch and the
+// final answer. `leafId` names the tip the active branch ends at.
+const richHistory = {
+  leafId: "e-answer",
+  entries: [
+    { id: "e-user", parentId: null, type: "message", timestamp: "2026-11-18T10:00:00.000Z", message: { role: "user", content: "do it", timestamp: 1790000000800 } },
+    { id: "e-assistant", parentId: "e-user", type: "message", message: { role: "assistant", timestamp: RICH_TIMESTAMP, stopReason: "toolUse", content: [
+      { type: "thinking", thinking: "plan the change" },
+      { type: "text", text: "First part." },
+      { type: "toolCall", id: "call-write", name: "write", arguments: { path: "notes.md", content: "x" } },
+      { type: "text", text: "Second part." },
+    ] } },
+    { id: "e-result", parentId: "e-assistant", type: "message", message: { role: "toolResult", toolCallId: "call-write", toolName: "write", isError: false, content: [{ type: "text", text: "Wrote notes.md" }], timestamp: 1790000000950 } },
+    { id: "e-compaction", parentId: "e-result", type: "compaction", summary: "SECRET-MUST-NOT-LEAK", firstKeptEntryId: "e-result", tokensBefore: 9 },
+    { id: "e-abandoned", parentId: "e-user", type: "message", message: { role: "assistant", timestamp: 1790000000555, stopReason: "stop", content: [{ type: "text", text: "ABANDONED BRANCH" }] } },
+    { id: "e-answer", parentId: "e-compaction", type: "message", message: { role: "assistant", timestamp: 1790000001000, stopReason: "stop", content: [{ type: "text", text: "Done." }] } },
+  ],
+};
+const assistantText = (text) =>({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text } });
 // error -> agent_end(willRetry) -> retry succeeds -> final agent_end.
 function retryRuns() {
   return [
@@ -74,6 +100,63 @@ const scenarios = {
     { type: "compaction_end", reason: "threshold", result: null, aborted: true, willRetry: false },
     { type: "compaction_end", reason: "overflow", aborted: false, willRetry: false, errorMessage: `Context overflow recovery failed ${secret}` },
     { type: "auto_compaction_start", reason: "threshold" },
+    { type: "agent_settled" },
+  ],
+  // One assistant message with a thinking block, two text blocks around a tool
+  // call whose arguments stream as JSON, then the tool run. Its message
+  // timestamp and call id match the `--history-rich` entries below.
+  richlive: [
+    { type: "agent_start" },
+    { type: "message_start", message: { role: "assistant", timestamp: RICH_TIMESTAMP } },
+    update({ type: "start" }),
+    update({ type: "thinking_start", contentIndex: 0 }),
+    update({ type: "thinking_delta", contentIndex: 0, delta: "plan the change" }),
+    update({ type: "thinking_end", contentIndex: 0, content: "plan the change" }),
+    update({ type: "text_start", contentIndex: 1 }),
+    update({ type: "text_delta", contentIndex: 1, delta: "First part." }),
+    update({ type: "text_end", contentIndex: 1, content: "First part." }),
+    update({ type: "toolcall_start", contentIndex: 2 }),
+    update({ type: "toolcall_delta", contentIndex: 2, delta: `{"path":"notes.md","note":"${toolArgsMarker}"}` }),
+    update({ type: "toolcall_end", contentIndex: 2, toolCall: { type: "toolCall", id: "call-write", name: "write", arguments: { path: "notes.md" } } }),
+    update({ type: "text_start", contentIndex: 3 }),
+    update({ type: "text_delta", contentIndex: 3, delta: "Second part." }),
+    update({ type: "text_end", contentIndex: 3, content: "Second part." }),
+    update({ type: "done", reason: "toolUse" }),
+    { type: "message_end", message: { role: "assistant", timestamp: RICH_TIMESTAMP, stopReason: "toolUse" } },
+    tool("tool_execution_start", "call-write", "write", { args: { path: "notes.md", content: "x" } }),
+    tool("tool_execution_end", "call-write", "write", { result: { content: [{ type: "text", text: "Wrote notes.md" }] }, isError: false }),
+    { type: "agent_settled" },
+  ],
+  // `text_end` content heals a dropped delta; an unknown update type is reported once.
+  updatekinds: [
+    { type: "agent_start" },
+    { type: "message_start", message: { role: "assistant", timestamp: RICH_TIMESTAMP } },
+    update({ type: "text_start", contentIndex: 0 }),
+    update({ type: "text_delta", contentIndex: 0, delta: "Hel" }),
+    update({ type: "text_end", contentIndex: 0, content: "Hello" }),
+    update({ type: "mystery_delta", contentIndex: 1, delta: toolArgsMarker }),
+    update({ type: "mystery_delta", contentIndex: 1, delta: toolArgsMarker }),
+    { type: "message_end", message: { role: "assistant", timestamp: RICH_TIMESTAMP, stopReason: "stop" } },
+    { type: "agent_settled" },
+  ],
+  // Chat files: written paths, an image file read, a returned inline image,
+  // and results that must stay silent (failed write, wrong type, bad base64).
+  files: [
+    { type: "agent_start" },
+    tool("tool_execution_start", "call-w1", "write", { args: { path: "out/a.txt", content: "x" } }),
+    tool("tool_execution_end", "call-w1", "write", { result: { content: [{ type: "text", text: "ok" }] }, isError: false }),
+    tool("tool_execution_start", "call-e1", "edit", { args: { path: "@src/b.ts" } }),
+    tool("tool_execution_end", "call-e1", "edit", { result: { content: [{ type: "text", text: "ok" }] }, isError: false }),
+    tool("tool_execution_start", "call-w2", "write", { args: { path: "failed.txt" } }),
+    tool("tool_execution_end", "call-w2", "write", { result: { content: [{ type: "text", text: "no" }] }, isError: true }),
+    tool("tool_execution_start", "call-r1", "read", { args: { path: "shots/screen.PNG" } }),
+    tool("tool_execution_end", "call-r1", "read", { result: { content: [{ type: "image", data: TINY_PNG, mimeType: "image/png" }] }, isError: false }),
+    tool("tool_execution_start", "call-b1", "bash", { args: { command: "render" } }),
+    tool("tool_execution_end", "call-b1", "bash", { result: { content: [
+      { type: "image", data: TINY_PNG, mimeType: "image/png" },
+      { type: "image", data: TINY_PNG, mimeType: "image/svg+xml" },
+      { type: "image", data: "not base64!", mimeType: "image/png" },
+    ] }, isError: false }),
     { type: "agent_settled" },
   ],
   surfaces: [
@@ -230,6 +313,7 @@ process.stdin.on("data", (chunk) => {
       { name: "settings", source: "builtin" },
     ] } });
     else if (request.type === "get_available_models") write({ id: request.id, type: "response", command: request.type, success: true, data: { models: [{ provider: "fixture", id: "model", name: "Fixture Model" }] } });
+    else if (request.type === "get_entries" && process.argv.includes("--history-rich")) write({ id: request.id, type: "response", command: request.type, success: true, data: richHistory });
     else if (request.type === "get_entries") write({ id: request.id, type: "response", command: request.type, success: true, data: { entries: [
       { id: "entry-private", type: "message", message: { role: "user", content: "hello" } },
       ...(process.argv.includes("--history-answer") ? [{ id: "entry-answer-private", type: "message", message: { role: "assistant", timestamp: ANSWER_TIMESTAMP, stopReason: "stop", content: [{ type: "text", text: "answer" }] } }] : []),

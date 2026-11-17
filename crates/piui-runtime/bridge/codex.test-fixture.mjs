@@ -11,6 +11,7 @@ import { join } from "node:path";
 // the Node wrapper of a native codex: a grandchild stays alive, and `flood`
 // also overflows the output limit). `--pid-file=<path>` receives
 // {"wrapper":pid,"grandchild":pid} before either mode starts to misbehave.
+// `--sticky=<a,b>`: those features stay on despite `--disable`.
 if (process.argv.includes("features") && process.argv.includes("list")) {
   const mode = process.argv.find((argument) => argument.startsWith("--features-list="))?.slice("--features-list=".length) ?? "all";
   const [kind, names = ""] = mode.split(":");
@@ -30,10 +31,14 @@ if (process.argv.includes("features") && process.argv.includes("list")) {
     await new Promise(() => {});
   }
   const named = new Set(names.split(",").filter(Boolean));
+  // Global `--disable <name>` options read `false`, except under
+  // `--sticky=<a,b>` (Codex 0.169.0 keeps `unified_exec` on).
+  const sticky = new Set((process.argv.find((argument) => argument.startsWith("--sticky="))?.slice("--sticky=".length) ?? "").split(",").filter(Boolean));
+  const switchedOff = (name) => !sticky.has(name) && process.argv.some((argument, index) => argument === "--disable" && process.argv[index + 1] === name);
   const registered = [
     ["agent_message_board", "under development", "false"], ["apps", "stable", "true"], ["code_mode", "under development", "false"],
     ["fast_mode", "stable", "true"], ["guardianv2.thread_context", "removed", "false"], ["multi_agent", "stable", "true"],
-    ["multi_agent_v2", "stable", "true"], ["plugins", "stable", "true"], ["recommended_plugins", "stable", "false"],
+    ["multi_agent_v2", "stable", "true"], ["unified_exec", "stable", "true"], ["plugins", "stable", "true"], ["recommended_plugins", "stable", "false"],
     ["remote_plugin", "stable", "true"], ["shell_snapshot", "stable", "true"],
   ];
   let text = "";
@@ -46,7 +51,7 @@ if (process.argv.includes("features") && process.argv.includes("list")) {
   } else if (kind !== "empty") {
     text = registered
       .filter(([name]) => kind !== "without" || !named.has(name))
-      .map(([name, stage, enabled]) => `${name.padEnd(40)} ${(kind === "removed" && named.has(name) ? "removed" : stage).padEnd(18)} ${enabled}\n`)
+      .map(([name, stage, enabled]) => `${name.padEnd(40)} ${(kind === "removed" && named.has(name) ? "removed" : stage).padEnd(18)} ${switchedOff(name) ? "false" : enabled}\n`)
       .join("");
   }
   await new Promise((resolve) => process.stdout.write(text, resolve));
@@ -75,6 +80,18 @@ const expectedSettings = settingsIndex >= 0 ? JSON.parse(process.argv[settingsIn
 const unknownItemsFixture = process.argv.includes("--unknown-items");
 const toolItemsFixture = process.argv.includes("--tool-items");
 const projectedItemsFixture = process.argv.includes("--projected-items");
+// `--paged-history`: a resumed thread whose newest page has a cursor.
+const pagedHistoryFixture = process.argv.includes("--paged-history");
+const pagedTurn = (number) => ({ id: `turn-${number}`, status: "completed", items: [
+  { type: "userMessage", id: `paged-user-${number}`, content: [{ type: "text", text: `Question ${number}`, text_elements: [] }] },
+  { type: "agentMessage", id: `paged-answer-${number}`, text: `Answer ${number}`, phase: null, memoryCitation: null },
+] });
+// `--reasoning-parts`: two reasoning items streamed with the same summary and
+// raw parts; only the second one completes.
+const reasoningPartsFixture = process.argv.includes("--reasoning-parts");
+// `--chat-files`: items that name files (paths and inline images).
+const chatFilesFixture = process.argv.includes("--chat-files");
+const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAH8wD3AAAAABJRU5ErkJggg==";
 const collabItem = {
   type: "collabAgentToolCall", id: "collab-item", tool: "spawnAgent", status: "inProgress",
   senderThreadId: "SECRET-THREAD-ID-sender", receiverThreadIds: ["SECRET-THREAD-ID-receiver"],
@@ -250,6 +267,9 @@ input.on("line", (line) => {
     }
     // Handshake notification has no response.
   } else if (message.method === "thread/start" || message.method === "thread/resume") {
+    if (process.argv.includes("--expect-mcp-off") && message.params.config?.["mcp_servers.docs.enabled"] !== false) {
+      send({ id: message.id, error: { code: -32602, message: "mcp left on" } }); return;
+    }
     if (expectedSettings && (message.params.serviceTier !== expectedSettings.tier || message.params.config?.["mcp_servers.example.enabled"] !== false || message.params.config?.["skills.config"]?.[0]?.enabled !== false)) {
       send({ id: message.id, error: { code: -32602, message: "settings not forwarded" } }); return;
     }
@@ -282,7 +302,10 @@ input.on("line", (line) => {
       ? [{ id: "active-resumed-turn", status: "inProgress", items: [] }]
       : projectedItemsFixture && message.method === "thread/resume"
         ? [{ id: "projected-turn", status: "completed", items: projectedItems }]
-        : [];
+        : pagedHistoryFixture && message.method === "thread/resume"
+          // The newest page of a longer history; its cursor names the older pages.
+          ? [pagedTurn(3)]
+          : [];
     const threadStatus = systemErrorFixture ? { type: "systemError" } : activeResumeFixture && message.method === "thread/resume" ? { type: "active", activeFlags: [] } : { type: "idle" };
     send({ method: "thread/started", params: { thread: { id: threadId, path: rolloutPath, status: threadStatus } } });
     const effectiveSandbox = effectivePermissionMismatch
@@ -296,7 +319,7 @@ input.on("line", (line) => {
             : { type: "readOnly", networkAccess: false };
     send({ id: message.id, result: {
       thread: { id: threadId, path: rolloutPath, status: threadStatus, turns: message.method === "thread/resume" ? [] : turns },
-      initialTurnsPage: message.method === "thread/resume" ? { data: turns, nextCursor: null, backwardsCursor: null } : null,
+      initialTurnsPage: message.method === "thread/resume" ? { data: turns, nextCursor: pagedHistoryFixture ? "page-1" : null, backwardsCursor: null } : null,
       model: "fixture-model",
       modelProvider: process.argv.includes("--nano-named-native-provider") ? "nano-codex-subscription" : "openai",
       cwd: process.argv.includes("--wrong-cwd") ? join(process.cwd(), "another-workspace")
@@ -392,6 +415,42 @@ input.on("line", (line) => {
         results: [{ title: "Fixture result", secret: "SECRET-MUST-NOT-LEAK" }],
         status: "inProgress",
       } } });
+    }
+    if (reasoningPartsFixture && message.method === "thread/start") {
+      const scope = { threadId, turnId: "turn-reasoning" };
+      for (const id of ["reasoning-open", "reasoning-done"]) {
+        send({ method: "item/started", params: { ...scope, item: { type: "reasoning", id, summary: [], content: [] } } });
+        send({ method: "item/reasoning/summaryPartAdded", params: { ...scope, itemId: id, summaryIndex: 0 } });
+        send({ method: "item/reasoning/summaryTextDelta", params: { ...scope, itemId: id, summaryIndex: 0, delta: "First" } });
+        send({ method: "item/reasoning/summaryTextDelta", params: { ...scope, itemId: id, summaryIndex: 0, delta: " part" } });
+        send({ method: "item/reasoning/summaryPartAdded", params: { ...scope, itemId: id, summaryIndex: 1 } });
+        send({ method: "item/reasoning/summaryTextDelta", params: { ...scope, itemId: id, summaryIndex: 1, delta: "Second" } });
+        send({ method: "item/reasoning/textDelta", params: { ...scope, itemId: id, contentIndex: 0, delta: "Raw one" } });
+        send({ method: "item/reasoning/textDelta", params: { ...scope, itemId: id, contentIndex: 1, delta: "Raw two" } });
+      }
+      send({ method: "item/completed", params: { ...scope, item: { type: "reasoning", id: "reasoning-done", summary: ["First part", "Second"], content: ["Raw one", "Raw two"] } } });
+    }
+    if (chatFilesFixture && message.method === "thread/start") {
+      const scope = { threadId, turnId: "turn-files" };
+      const done = (item) => {
+        send({ method: "item/started", params: { ...scope, item: { ...item, status: "inProgress" } } });
+        send({ method: "item/completed", params: { ...scope, item } });
+      };
+      done({ type: "fileChange", id: "change-ok", status: "completed", changes: [
+        { path: join(process.cwd(), "added.txt"), kind: { type: "add" }, diff: "+a" },
+        { path: join(process.cwd(), "edited.ts"), kind: { type: "update", move_path: join(process.cwd(), "moved.ts") }, diff: "+b" },
+        { path: join(process.cwd(), "gone.txt"), kind: { type: "delete" }, diff: "-c" },
+        { path: "relative/dir/d.ts", kind: { type: "update", move_path: null }, diff: "+d" },
+      ] });
+      done({ type: "fileChange", id: "change-failed", status: "failed", changes: [{ path: join(process.cwd(), "never.txt"), kind: { type: "add" }, diff: "+x" }] });
+      send({ method: "item/completed", params: { ...scope, item: { type: "imageView", id: "view-1", path: join(process.cwd(), "shot.PNG") } } });
+      done({ type: "imageGeneration", id: "gen-path", status: "completed", revisedPrompt: "A red fox", savedPath: join(process.cwd(), "fox.png"), failure: null });
+      done({ type: "imageGeneration", id: "gen-inline", status: "completed", revisedPrompt: null, savedPath: null, result: TINY_PNG });
+      done({ type: "imageGeneration", id: "gen-failed", status: "failed", revisedPrompt: null, savedPath: join(process.cwd(), "nope.png"), failure: { type: "usageLimitExceeded", limitId: "x", resetsAt: null } });
+      done({ type: "imageGeneration", id: "gen-file-id", status: "completed", revisedPrompt: null, savedPath: null, fileId: "SECRET-MUST-NOT-LEAK" });
+      done({ type: "mcpToolCall", id: "mcp-image", server: "docs", tool: "render", arguments: {}, status: "completed", result: { content: [
+        { type: "text", text: "rendered" }, { type: "image", data: TINY_PNG, mimeType: "image/png" }, { type: "image", data: "not base64!", mimeType: "image/png" },
+      ] }, error: null });
     }
     if (projectedItemsFixture && message.method === "thread/start") {
       for (const item of projectedItems) {
@@ -538,6 +597,7 @@ input.on("line", (line) => {
     ] : [];
     send({ id: message.id, result: { data: [{ skills: [{ name: "Review", path: "/skills/review/SKILL.md", enabled: false }, ...extra] }] } });
   } else if (message.method === "config/read") {
+    if (process.argv.includes("--config-read-fails")) { send({ id: message.id, error: { code: -32603, message: "unreadable" } }); return; }
     const provider = process.argv.includes("--nano-named-native-provider") ? { model_provider: "nano-codex-subscription" }
       : process.argv.includes("--custom-model-provider") ? { model_provider: "fixture-gateway" } : {};
     const model = process.argv.includes("--configured-hidden-model") ? { model: "fixture-model" } : {};

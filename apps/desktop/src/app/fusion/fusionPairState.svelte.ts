@@ -4,7 +4,19 @@ import { fusionErrorText } from './fusionPair';
 /** The commands the person can give to an existing pair. */
 export type FusionAction = Extract<
   FusionCommandV1,
-  { type: 'stopPair' | 'stopSidekick' | 'resetSidekick' | 'reconcileRound' | 'abandonRound' }
+  {
+    type:
+      | 'stopPair'
+      | 'stopSidekick'
+      | 'resetSidekick'
+      | 'reconcileRound'
+      | 'abandonRound'
+      | 'resumePair'
+      | 'checkDelivery'
+      | 'deliverAgain'
+      | 'dismissReport'
+      | 'steerSidekick';
+  }
 >;
 
 /**

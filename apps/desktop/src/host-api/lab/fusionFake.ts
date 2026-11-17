@@ -4,6 +4,8 @@ import {
   type FusionBriefV1,
   type FusionChangedEventV1,
   type FusionCommandV1,
+  type FusionCapabilitiesV1,
+  type FusionCapabilityDimensionV1,
   type FusionPairV1,
   type FusionRefusalV1,
   type FusionResultV1,
@@ -47,68 +49,124 @@ export const LAB_FUSION_ROUND_MS = 20 * SECOND;
 export interface FusionRefusalAnswer {
   refusal: FusionRefusalV1;
   role: FusionRoleNameV1;
+  dimension?: FusionCapabilityDimensionV1;
 }
 
-/** Native modes of different harnesses are incomparable (`undefined`). */
-function rank(mode: PermissionMode): number | undefined {
-  switch (mode) {
-    case 'native':
-      return undefined;
-    case 'read-only':
-      return 0;
-    case 'workspace-write':
-      return 1;
-    case 'full-access':
-      return 2;
-    default: {
-      const exhaustive: never = mode;
-      return exhaustive;
-    }
-  }
+export interface FusionAdmission {
+  sidekickMode: PermissionMode;
+  capabilities?: FusionCapabilitiesV1;
 }
 
-const SIDEKICK_HARNESSES: readonly string[] = ['claude-code', 'codex', 'pi', 'nano'];
-const LEAD_HARNESSES: readonly string[] = ['claude-code', 'codex'];
+type Caps = FusionCapabilitiesV1;
+const FULL: Caps = { writes: 'anywhere', reads: 'anywhere', shell: 'unrestricted', network: 'full', mcp: 'configured' };
+const NONE_BUT: (writes: Caps['writes'], reads: Caps['reads'], shell: Caps['shell'], mcp: Caps['mcp']) => Caps = (writes, reads, shell, mcp) => ({
+  writes,
+  reads,
+  shell,
+  network: 'none',
+  mcp,
+});
 
-function sidekickRoleSupported(pair: FusionPairV1, codexSandbox: boolean): FusionRefusalAnswer | undefined {
-  const { lead, sidekick } = pair;
-  const refuse = (refusal: FusionRefusalV1): FusionRefusalAnswer => ({ refusal, role: 'sidekick' });
-  switch (sidekick.harness) {
-    // A workspace-write Claude Code sidekick cannot answer shell approvals (spike S5).
-    case 'claude-code':
-      return sidekick.permissionMode === 'full-access' || sidekick.permissionMode === 'native' ? undefined : refuse('sidekick-needs-full-access');
-    case 'codex':
-      return sidekick.permissionMode === 'workspace-write' && !codexSandbox ? refuse('codex-sandbox-unverified') : undefined;
-    // Pi and Nano have no workspace-write mode; both roles must allow full access.
-    case 'pi':
-    case 'nano':
-      return sidekick.permissionMode !== 'full-access' || lead.permissionMode !== 'full-access' ? refuse('sidekick-needs-full-access') : undefined;
+/** Mirror of Rust `capability::capabilities`. */
+function capabilitiesOf(harness: string, mode: PermissionMode): Caps | undefined {
+  if (mode === 'full-access') return FULL;
+  const key = `${harness}:${mode}`;
+  switch (key) {
+    case 'claude-code:read-only':
+      return NONE_BUT('none', 'workspace', 'none', 'none');
+    case 'claude-code:workspace-write':
+      return NONE_BUT('workspace', 'workspace', 'none', 'none');
+    case 'codex:read-only':
+      return NONE_BUT('none', 'anywhere', 'read-only-sandbox', 'none');
+    case 'codex:workspace-write':
+      return NONE_BUT('workspace', 'anywhere', 'workspace-sandbox', 'none');
+    case 'nano:read-only':
+      return NONE_BUT('none', 'anywhere', 'none', 'none');
+    case 'nano:native':
+      return { writes: 'approved', reads: 'anywhere', shell: 'approved', network: 'approved', mcp: 'none' };
     default:
       return undefined;
   }
 }
 
+function writesLe(a: Caps['writes'], b: Caps['writes']): boolean {
+  return a === 'none' || b === 'anywhere' || a === b;
+}
+/** A sandboxed command is covered by a lead that may make the sandbox's writes (reads are exempt). */
+function shellLe(a: Caps['shell'], b: Caps['shell'], leadWrites: Caps['writes']): boolean {
+  if (a === 'none' || b === 'unrestricted' || a === b) return true;
+  if (a === 'read-only-sandbox') return true;
+  if (a === 'workspace-sandbox') return writesLe('workspace', leadWrites);
+  return false;
+}
+const NETWORK_ORDER: readonly Caps['network'][] = ['none', 'approved', 'full'];
+
+/** Mirror of Rust `capability::exceeds`. */
+export function exceedsLead(sidekick: Caps, sidekickHarness: string, lead: Caps, leadHarness: string): FusionCapabilityDimensionV1 | undefined {
+  if (!writesLe(sidekick.writes, lead.writes)) return 'writes';
+  // Reads are shown, not compared (ADR-076, the person's decision).
+  if (!shellLe(sidekick.shell, lead.shell, lead.writes)) return 'shell';
+  if (NETWORK_ORDER.indexOf(sidekick.network) > NETWORK_ORDER.indexOf(lead.network)) return 'network';
+  if (sidekick.mcp === 'configured') {
+    const covered = lead.mcp === 'configured' && (sidekickHarness === leadHarness || lead.shell === 'unrestricted');
+    if (!covered) return 'mcp';
+  }
+  return undefined;
+}
+
+const LEAD_HARNESSES: readonly string[] = ['claude-code', 'codex'];
+
+function sidekickPresets(harness: string): readonly PermissionMode[] {
+  switch (harness) {
+    case 'claude-code':
+    case 'codex':
+      return ['full-access', 'workspace-write', 'read-only'];
+    case 'pi':
+      return ['full-access'];
+    case 'nano':
+      return ['full-access', 'native', 'read-only'];
+    default:
+      return [];
+  }
+}
+
 /**
- * Whether the pair may start. `undefined` means admitted. `codexSandbox` says
- * Codex's Windows sandbox is configured (the lab toggles it to simulate
- * `codex-sandbox-unverified`).
+ * Mirror of Rust `capability::admit`: the launched sidekick preset, narrowed
+ * to fit the lead, or the refusal (with the dimension no preset can narrow).
+ * `codexSandbox` says Codex's Windows sandbox is configured (the lab toggles
+ * it to simulate `codex-sandbox-unverified`).
  */
-export function checkPair(pair: FusionPairV1, codexSandbox: boolean): FusionRefusalAnswer | undefined {
+export function admitPair(pair: FusionPairV1, codexSandbox: boolean): FusionAdmission | FusionRefusalAnswer {
   const { lead, sidekick } = pair;
   if (!LEAD_HARNESSES.includes(lead.harness)) return { refusal: 'lead-harness-unsupported', role: 'lead' };
-  if (!SIDEKICK_HARNESSES.includes(sidekick.harness)) return { refusal: 'sidekick-harness-unsupported', role: 'sidekick' };
-  if (lead.permissionMode === 'read-only') return { refusal: 'read-only-lead', role: 'lead' };
-  const leadRank = rank(lead.permissionMode);
-  const sidekickRank = rank(sidekick.permissionMode);
-  if (leadRank === undefined && sidekickRank === undefined) {
-    // The same harness's native mode is the same policy on both roles.
-    if (lead.harness !== sidekick.harness) return { refusal: 'explicit-modes-required', role: 'sidekick' };
-  } else if (leadRank !== undefined && sidekickRank !== undefined) {
-    if (sidekickRank > leadRank) return { refusal: 'sidekick-exceeds-lead', role: 'sidekick' };
-  } else {
-    return { refusal: 'explicit-modes-required', role: 'sidekick' };
+  const presets = sidekickPresets(sidekick.harness);
+  if (presets.length === 0) return { refusal: 'sidekick-harness-unsupported', role: 'sidekick' };
+  const requested = sidekick.permissionMode;
+  if (lead.permissionMode === 'native') {
+    return requested === 'native' && lead.harness === sidekick.harness ? { sidekickMode: 'native' } : { refusal: 'explicit-modes-required', role: 'lead' };
   }
-  return sidekickRoleSupported(pair, codexSandbox);
+  if (!presets.includes(requested) && requested !== 'native') return { refusal: 'sidekick-needs-full-access', role: 'sidekick' };
+  if (sidekick.harness === 'codex' && requested === 'workspace-write' && !codexSandbox) return { refusal: 'codex-sandbox-unverified', role: 'sidekick' };
+  const leadCaps = capabilitiesOf(lead.harness, lead.permissionMode);
+  if (leadCaps === undefined) return { refusal: 'explicit-modes-required', role: 'lead' };
+  const found = presets.indexOf(requested);
+  const start = found >= 0 ? found : presets[0] === 'full-access' ? 1 : 0;
+  let last: FusionCapabilityDimensionV1 | undefined;
+  for (const mode of presets.slice(start)) {
+    if (sidekick.harness === 'codex' && mode === 'workspace-write' && !codexSandbox) continue;
+    const candidate = capabilitiesOf(sidekick.harness, mode);
+    if (candidate === undefined) continue;
+    const dimension = exceedsLead(candidate, sidekick.harness, leadCaps, lead.harness);
+    if (dimension === undefined) return { sidekickMode: mode, capabilities: candidate };
+    last = dimension;
+  }
+  return last === undefined ? { refusal: 'sidekick-exceeds-lead', role: 'sidekick' } : { refusal: 'sidekick-exceeds-lead', role: 'sidekick', dimension: last };
+}
+
+/** Whether the pair may start. `undefined` means admitted. */
+export function checkPair(pair: FusionPairV1, codexSandbox: boolean): FusionRefusalAnswer | undefined {
+  const admission = admitPair(pair, codexSandbox);
+  return 'refusal' in admission ? admission : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -144,6 +202,11 @@ const commandSchema = tagged('type', {
   resetSidekick: { leadSessionId: string },
   reconcileRound: { leadSessionId: string, roundId: string },
   abandonRound: { leadSessionId: string, roundId: string },
+  resumePair: { leadSessionId: string },
+  checkDelivery: { leadSessionId: string, roundId: string },
+  deliverAgain: { leadSessionId: string, roundId: string },
+  dismissReport: { leadSessionId: string, roundId: string },
+  steerSidekick: { leadSessionId: string, text: string },
 });
 
 /** Mirror of the host's `validate_id`. */
@@ -432,8 +495,8 @@ export function createLabFusion(runtime: LabSessions, bus: LabEventBus, options:
   // ---- dispatch --------------------------------------------------------------
 
   function pairCheck(pair: FusionPairV1): FusionResultV1 {
-    const refused = checkPair(pair, fusion.codexSandbox);
-    return refused === undefined ? { type: 'pairCheck', ok: true } : { type: 'pairCheck', ok: false, ...refused };
+    const admission = admitPair(pair, fusion.codexSandbox);
+    return 'refusal' in admission ? { type: 'pairCheck', ok: false, ...admission } : { type: 'pairCheck', ok: true, ...admission };
   }
 
   function dispatch(command: FusionCommandV1): FusionResultV1 {
@@ -444,9 +507,11 @@ export function createLabFusion(runtime: LabSessions, bus: LabEventBus, options:
       case 'createChat': {
         assertNotSafe();
         if (!validId(command.workspaceId)) throw workspaceFailure('INVALID_ARGUMENT');
-        const refused = checkPair(command.pair, fusion.codexSandbox);
-        if (refused !== undefined) return { type: 'pairCheck', ok: false, ...refused };
-        const { lead } = command.pair;
+        const admission = admitPair(command.pair, fusion.codexSandbox);
+        if ('refusal' in admission) return { type: 'pairCheck', ok: false, ...admission };
+        // The frozen pair records the narrowed preset the sidekick launches with.
+        const pair: FusionPairV1 = { ...command.pair, sidekick: { ...command.pair.sidekick, permissionMode: admission.sidekickMode } };
+        const { lead } = pair;
         const title = command.title ?? undefined;
         const model = lead.model ?? undefined;
         const leadSessionId = created(workspace.workspace_command_v15?.({
@@ -463,7 +528,7 @@ export function createLabFusion(runtime: LabSessions, bus: LabEventBus, options:
           protocol: FUSION_PROTOCOL,
           leadSessionId,
           workspaceId: command.workspaceId,
-          pair: structuredClone(command.pair),
+          pair: structuredClone(pair),
           sidekick: 'none',
           sessions: [],
           briefs: [],
@@ -494,6 +559,11 @@ export function createLabFusion(runtime: LabSessions, bus: LabEventBus, options:
       }
       case 'stopPair': {
         assertNotSafe();
+        const paused = slotOf(command.leadSessionId);
+        if (paused.paused !== true) {
+          paused.paused = true;
+          commit(paused);
+        }
         stopSidekick(command.leadSessionId);
         demoTimers.get(command.leadSessionId)?.();
         demoTimers.delete(command.leadSessionId);
@@ -554,6 +624,36 @@ export function createLabFusion(runtime: LabSessions, bus: LabEventBus, options:
         found.brief.state = 'stopped';
         commit(doc);
         return { type: 'state', state: view(doc) };
+      }
+      case 'resumePair': {
+        assertNotSafe();
+        const doc = slotOf(command.leadSessionId);
+        delete doc.paused;
+        commit(doc);
+        return { type: 'state', state: view(doc) };
+      }
+      case 'checkDelivery':
+      case 'deliverAgain':
+      case 'dismissReport': {
+        assertNotSafe();
+        const doc = slotOf(command.leadSessionId);
+        const found = findRound(doc, command.roundId);
+        if (found === undefined) throw workspaceFailure('NOT_FOUND');
+        if (found.round.state !== 'finished' || found.round.delivery?.state !== 'uncertain') throw workspaceFailure('CONFLICT');
+        // The lab lead history never holds the report: a check leaves it unknown.
+        if (command.type === 'deliverAgain') found.round.delivery = { via: 'followUp', state: 'sent', updatedAt: now() };
+        if (command.type === 'dismissReport') found.round.delivery = { via: 'followUp', state: 'withdrawn', updatedAt: now() };
+        commit(doc);
+        return { type: 'state', state: view(doc) };
+      }
+      case 'steerSidekick': {
+        assertNotSafe();
+        const doc = slotOf(command.leadSessionId);
+        const open = openRound(doc);
+        if (open === undefined || command.text.trim() === '') throw workspaceFailure('CONFLICT');
+        open.round.personSteers = (open.round.personSteers ?? 0) + 1;
+        commit(doc);
+        return { type: 'accepted' };
       }
       default: {
         const exhaustive: never = command;

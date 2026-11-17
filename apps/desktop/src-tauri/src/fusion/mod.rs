@@ -5,6 +5,7 @@
 //! each report to the lead exactly once.
 
 pub(crate) mod broker;
+pub(crate) mod capability;
 pub(crate) mod logic;
 pub(crate) mod model;
 pub(crate) mod store;
@@ -15,8 +16,8 @@ use crate::api::verified_project_directory;
 use crate::review_api::{self, ReviewArea, ReviewContentV1, ReviewFileV1};
 use crate::state::HostState;
 use crate::workspace_api::{
-    FusionAnswerFuture, FusionSessionHooks, FusionSessionSetup, TurnState, WorkspaceError,
-    WorkspaceLaunchRequest, authorize_live_session, event_publisher,
+    FusionAnswerFuture, FusionSessionHooks, FusionSessionSetup, SendFailure, TurnState,
+    WorkspaceError, WorkspaceLaunchRequest, authorize_live_session, event_publisher,
 };
 use broker::{FusionBroker, FusionHost, HostFailure, HostFuture, SessionActivity, SidekickLaunch};
 use model::{
@@ -347,10 +348,16 @@ impl FusionHost for TauriFusionHost {
         let app = self.app.clone();
         Box::pin(async move {
             let host = app.state::<HostState>();
-            gated(host.inner(), &session_id, async |host| {
-                host.workspace.send(&session_id, text, mode).await
+            // A refusal before the write fails the send; a failure after it
+            // is `AcceptanceUnknown` (ADR-076), never a refusal.
+            let outcome = gated(host.inner(), &session_id, async |host| {
+                Ok(host.workspace.send_outcome(&session_id, text, mode).await)
             })
-            .await
+            .await?;
+            outcome.map_err(|failed| match failed {
+                SendFailure::AcceptanceUnknown => HostFailure::AcceptanceUnknown,
+                SendFailure::Refused(error) => failure(&error),
+            })
         })
     }
 
@@ -438,6 +445,28 @@ impl FusionHost for TauriFusionHost {
         })
     }
 
+    fn history_contains(
+        &self,
+        session_id: String,
+        needle: String,
+    ) -> HostFuture<Result<bool, HostFailure>> {
+        let app = self.app.clone();
+        Box::pin(async move {
+            let host = app.state::<HostState>();
+            let snapshot = host
+                .workspace
+                .snapshot(&session_id)
+                .await
+                .map_err(|error| failure(&error))?;
+            Ok(snapshot.blocks.iter().any(|block| {
+                block
+                    .text
+                    .as_deref()
+                    .is_some_and(|text| text.contains(&needle))
+            }))
+        })
+    }
+
     fn activity(&self, session_id: String) -> HostFuture<SessionActivity> {
         let app = self.app.clone();
         Box::pin(async move {
@@ -500,6 +529,27 @@ pub(crate) async fn fusion_command_v1(
     dispatch(state.inner(), fusion.inner(), command, &app).await
 }
 
+fn pair_check(admission: Result<capability::Admitted, capability::Refused>) -> FusionResultV1 {
+    match admission {
+        Ok(admitted) => FusionResultV1::PairCheck {
+            ok: true,
+            refusal: None,
+            role: None,
+            dimension: None,
+            sidekick_mode: Some(admitted.sidekick_mode),
+            capabilities: admitted.capabilities,
+        },
+        Err((refusal, role, dimension)) => FusionResultV1::PairCheck {
+            ok: false,
+            refusal: Some(refusal),
+            role: Some(role),
+            dimension,
+            sidekick_mode: None,
+            capabilities: None,
+        },
+    }
+}
+
 fn validate_id(id: &str) -> Result<(), WorkspaceError> {
     (!id.is_empty()
         && id.len() <= 128
@@ -550,18 +600,7 @@ async fn dispatch(
     match command {
         FusionCommandV1::CheckPair { workspace_id, pair } => {
             validate_id(&workspace_id)?;
-            Ok(match logic::check_pair(&pair, broker.codex_sandbox()) {
-                Ok(()) => FusionResultV1::PairCheck {
-                    ok: true,
-                    refusal: None,
-                    role: None,
-                },
-                Err((refusal, role)) => FusionResultV1::PairCheck {
-                    ok: false,
-                    refusal: Some(refusal),
-                    role: Some(role),
-                },
-            })
+            Ok(pair_check(capability::admit(&pair, broker.codex_sandbox())))
         }
         FusionCommandV1::CreateChat {
             workspace_id,
@@ -569,12 +608,12 @@ async fn dispatch(
             title,
         } => {
             validate_id(&workspace_id)?;
-            if let Err((refusal, role)) = logic::check_pair(&pair, broker.codex_sandbox()) {
-                return Ok(FusionResultV1::PairCheck {
-                    ok: false,
-                    refusal: Some(refusal),
-                    role: Some(role),
-                });
+            let mut pair = pair;
+            match capability::admit(&pair, broker.codex_sandbox()) {
+                // The narrowed preset is the one the sidekick launches with
+                // and the frozen pair records.
+                Ok(admitted) => pair.sidekick.permission_mode = admitted.sidekick_mode,
+                refused @ Err(_) => return Ok(pair_check(refused)),
             }
             let lead = host.workspace.allocate_orchestration_session_id();
             broker
@@ -649,6 +688,11 @@ async fn dispatch(
             ) {
                 return Err(WorkspaceError::not_found());
             }
+            // The pair is paused before anything is interrupted (ADR-076):
+            // no follow-up can wake the lead and no brief is admitted while
+            // the stop runs, and both stay off until the person resumes the
+            // pair or speaks in the lead chat.
+            broker.pause_pair(&lead_session_id).await.map_err(refused)?;
             // The lead's start and any prompt still being admitted finish
             // first (operation gate); queued input is paused and the composer
             // gate is held before the status decides whether to interrupt. The
@@ -697,6 +741,58 @@ async fn dispatch(
                 .await
                 .map_err(refused)?;
             state_of(&lead_session_id).await
+        }
+        FusionCommandV1::ResumePair { lead_session_id } => {
+            validate_id(&lead_session_id)?;
+            broker
+                .resume_pair(&lead_session_id)
+                .await
+                .map_err(refused)?;
+            state_of(&lead_session_id).await
+        }
+        FusionCommandV1::CheckDelivery {
+            lead_session_id,
+            round_id,
+        } => {
+            validate_id(&lead_session_id)?;
+            broker
+                .check_delivery(&lead_session_id, &round_id)
+                .await
+                .map_err(refused)?;
+            state_of(&lead_session_id).await
+        }
+        FusionCommandV1::DeliverAgain {
+            lead_session_id,
+            round_id,
+        } => {
+            validate_id(&lead_session_id)?;
+            broker
+                .deliver_again(&lead_session_id, &round_id)
+                .await
+                .map_err(refused)?;
+            state_of(&lead_session_id).await
+        }
+        FusionCommandV1::DismissReport {
+            lead_session_id,
+            round_id,
+        } => {
+            validate_id(&lead_session_id)?;
+            broker
+                .dismiss_report(&lead_session_id, &round_id)
+                .await
+                .map_err(refused)?;
+            state_of(&lead_session_id).await
+        }
+        FusionCommandV1::SteerSidekick {
+            lead_session_id,
+            text,
+        } => {
+            validate_id(&lead_session_id)?;
+            broker
+                .person_steer(&lead_session_id, &text)
+                .await
+                .map_err(refused)?;
+            Ok(FusionResultV1::Accepted {})
         }
     }
 }

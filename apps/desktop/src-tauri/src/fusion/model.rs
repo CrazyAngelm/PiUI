@@ -11,6 +11,11 @@ pub(crate) const MAX_WAIT_SECONDS: u64 = 540;
 pub(crate) const MAX_LIVE_BRIEFS: usize = 200;
 pub(crate) const CORRECTION_HINT_ROUNDS: usize = 2;
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum FusionRoleName {
@@ -81,6 +86,8 @@ pub(crate) enum FusionRefusal {
     SidekickExceedsLead,
     SidekickNeedsFullAccess,
     CodexSandboxUnverified,
+    /// No longer produced (ADR-076 admits a read-only lead with a read-only
+    /// sidekick); kept for older answers.
     ReadOnlyLead,
 }
 
@@ -197,6 +204,9 @@ pub(crate) enum SidekickOperation {
         outcome: BriefOutcome,
         #[serde(default)]
         note: Option<String>,
+        /// Accepted as the note (the tool schema shares `reason` with reset).
+        #[serde(default)]
+        reason: Option<String>,
     },
     Reset {
         #[serde(default)]
@@ -476,6 +486,9 @@ pub(crate) struct FusionRound {
     pub delivery: Option<FusionDelivery>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub take_over: bool,
+    /// Corrections the person sent into this round (ADR-076).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub person_steers: u32,
     /// Host-private: the sidekick's last assistant block before this round
     /// (an answer equal to it is "no answer"). Never sent to the WebView; the
     /// journal keeps it in [`FusionDocument::round_hosts`].
@@ -589,6 +602,10 @@ pub(crate) struct FusionDocument {
     /// rounds when it is read ([`Self::restore_round_hosts`]); empty in memory.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub round_hosts: Vec<RoundHostRecord>,
+    /// The person stopped the pair: no round is admitted and no follow-up
+    /// is sent until they resume it (ADR-076).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paused: bool,
 }
 
 /// Host-private facts of one round that a restart needs; never part of
@@ -672,6 +689,9 @@ pub(crate) struct FusionStateV1 {
     pub briefs: Vec<FusionBrief>,
     pub stats: FusionStats,
     pub revision: u64,
+    /// Additive (ADR-076): the person stopped the pair (absent when not).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub paused: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -715,6 +735,26 @@ pub(crate) enum FusionCommandV1 {
         lead_session_id: String,
         round_id: String,
     },
+    /// Additive commands (ADR-076).
+    ResumePair {
+        lead_session_id: String,
+    },
+    CheckDelivery {
+        lead_session_id: String,
+        round_id: String,
+    },
+    DeliverAgain {
+        lead_session_id: String,
+        round_id: String,
+    },
+    DismissReport {
+        lead_session_id: String,
+        round_id: String,
+    },
+    SteerSidekick {
+        lead_session_id: String,
+        text: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -734,6 +774,17 @@ pub(crate) enum FusionResultV1 {
         refusal: Option<FusionRefusal>,
         #[serde(skip_serializing_if = "Option::is_none")]
         role: Option<FusionRoleName>,
+        /// Additive (ADR-076): the dimension a refused sidekick exceeds.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dimension: Option<super::capability::Dimension>,
+        /// Additive (ADR-076): the sidekick's launch preset once admitted
+        /// (lower than requested when it was narrowed).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sidekick_mode: Option<PermissionMode>,
+        /// Additive (ADR-076): what the sidekick is effectively allowed
+        /// (absent for a same-harness native pair).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        capabilities: Option<super::capability::Capabilities>,
     },
     State {
         state: Box<FusionStateV1>,

@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { fileURLToPath } from "node:url";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, toNamespacedPath, win32 } from "node:path";
+import { isAbsolute, join, resolve, toNamespacedPath, win32 } from "node:path";
 import test from "node:test";
 import { PassThrough } from "node:stream";
 import { createCodexAdapter } from "./codex.mjs";
@@ -36,7 +36,7 @@ const branchTurns = [
 // Keep the existing app-server fake responsible for startup, permissions and
 // cwd validation. Its transport seam supplies the native fork/list responses
 // proven separately by the read-only spike, without changing the fake itself.
-function forkTransport({ pages = [{ data: branchTurns, nextCursor: null }], childTurns = branchTurns, sourcePage, forkError } = {}) {
+function forkTransport({ pages = [{ data: branchTurns, nextCursor: null }], childTurns = branchTurns, sourcePage, forkError, listError } = {}) {
   const calls = [];
   const openChild = (program, args, options) => {
     const child = spawn(program, args, options);
@@ -50,6 +50,7 @@ function forkTransport({ pages = [{ data: branchTurns, nextCursor: null }], chil
         return true;
       };
       if (message.method === "thread/turns/list") {
+        if (listError && message.params.threadId === "source-fixture") return respond({ error: { code: -32602, message: listError } });
         const index = message.params.cursor ? Number(message.params.cursor.slice("page-".length)) : 0;
         const page = message.params.threadId === "source-fixture"
           ? sourcePage?.(index) ?? pages[index] ?? { data: [], nextCursor: null }
@@ -452,12 +453,15 @@ test("renders web search items as safe tool activity and keeps other unknown typ
     assert.doesNotMatch(webSearch.text, /SECRET-MUST-NOT-LEAK/);
     // Item types without a dedicated projection (including 0.153's
     // functionCallOutput) stay readable through the generic fallback.
-    for (const type of ["imageGeneration", "sleep", "hookPrompt", "functionCallOutput"]) {
+    for (const type of ["sleep", "hookPrompt", "functionCallOutput"]) {
       const block = adapter.snapshot().blocks.find((value) => value.id === `unsupported-${type}`);
       assert.equal(block.kind, "unknown");
       assert.equal(block.fallback, true);
       assert.match(block.safeSummary, new RegExp(type));
     }
+    // Image generation has its own projection now (a tool block, not a fallback).
+    const generation = adapter.snapshot().blocks.find((value) => value.id === "unsupported-imageGeneration");
+    assert.deepEqual([generation.kind, generation.label, generation.toolName, generation.status], ["tool", "Image generation", "image-generation", "streaming"]);
   } finally {
     await adapter.dispose();
   }
@@ -1089,6 +1093,40 @@ test("on Windows a taskkill that fails refuses startup even if the wrapper exits
   const { calls, order } = await windowsProbeRun("fails");
   assert.equal(calls.length, 2);
   assert.deepEqual(order, ["taskkill-exit", "probe.kill"]);
+});
+
+test("a sandboxed Fusion sidekick switches every configured MCP server off and refuses when the configuration is unreadable", async () => {
+  const sidekick = { ...config, nativeSubagents: false, backgroundTasks: false, permissionMode: "read-only" };
+  const adapter = await createCodexAdapter({ ...sidekick, runtimeArgs: [fixture, "--expect-permission", "read-only", "--expect-mcp-off"] }, () => {});
+  await adapter.dispose();
+  await assert.rejects(
+    createCodexAdapter({ ...sidekick, runtimeArgs: [fixture, "--expect-permission", "read-only", "--config-read-fails"] }, () => {}),
+    { bridgeCode: "unsupported-resource-policy" },
+  );
+});
+
+test("a Fusion sidekick proves its subagent switches off, tolerates a CLI that keeps background terminals on, and fails closed otherwise", async () => {
+  assert.deepEqual(
+    await echoedDisables({ nativeSubagents: false, backgroundTasks: false }),
+    [...BASE_DISABLES, "multi_agent", "multi_agent_v2", "unified_exec"],
+  );
+  // Codex 0.169.0 keeps unified_exec on after --disable; the sidekick still starts.
+  assert.deepEqual(
+    await echoedDisables({ nativeSubagents: false, backgroundTasks: false }, ["--sticky=unified_exec"]),
+    [...BASE_DISABLES, "multi_agent", "multi_agent_v2", "unified_exec"],
+  );
+  // No unified_exec registered: no background terminals, nothing to switch off.
+  assert.deepEqual(
+    await echoedDisables({ nativeSubagents: false, backgroundTasks: false }, ["--features-list=without:unified_exec"]),
+    [...BASE_DISABLES, "multi_agent", "multi_agent_v2"],
+  );
+  for (const [mode, code] of [["fail", "unsupported-native-subagent-policy"], ["garbage", "unsupported-native-subagent-policy"], ["removed:multi_agent", "unsupported-native-subagent-policy"], ["--sticky=multi_agent_v2", "unsupported-native-subagent-policy"]]) {
+    await assert.rejects(
+      createCodexAdapter({ ...config, nativeSubagents: false, backgroundTasks: false, runtimeArgs: [fixture, mode.startsWith("--") ? mode : `--features-list=${mode}`] }, () => {}),
+      { bridgeCode: code },
+      mode,
+    );
+  }
 });
 
 test("a native-subagent policy that cannot be proven fails closed before the app server starts", async () => {
@@ -2013,4 +2051,115 @@ test("a piui/sidekick result is written through deliver exactly once", async () 
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+const waitUntil = async (predicate) => {
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+  }
+  throw new Error("fixture condition timed out");
+};
+const olderTurn = (number) => ({ id: `turn-${number}`, status: "completed", items: [
+  { type: "userMessage", id: `paged-user-${number}`, content: [{ type: "text", text: `Question ${number}`, text_elements: [] }] },
+  { type: "agentMessage", id: `paged-answer-${number}`, text: `Answer ${number}`, phase: null, memoryCitation: null },
+] });
+
+test("a resumed Codex thread follows the cursor of its newest page and shows the whole history in order", async () => {
+  const { calls, openChild } = forkTransport({ pages: [undefined, { data: [olderTurn(2)], nextCursor: "page-2" }, { data: [olderTurn(1)], nextCursor: null }] });
+  const adapter = await createCodexAdapter({ ...config, nativeId: "source-fixture", runtimeArgs: [fixture, "--paged-history"] }, () => {}, undefined, openChild);
+  try {
+    assert.deepEqual(calls.filter(call => call.method === "thread/turns/list").map(call => call.params), [
+      { threadId: "source-fixture", sortDirection: "desc", itemsView: "full", cursor: "page-1" },
+      { threadId: "source-fixture", sortDirection: "desc", itemsView: "full", cursor: "page-2" },
+    ]);
+    assert.deepEqual(adapter.snapshot().blocks.filter(block => block.kind === "user").map(block => block.text), ["Question 1", "Question 2", "Question 3"]);
+    assert.deepEqual(adapter.snapshot().blocks.filter(block => block.kind === "assistant").map(block => block.text), ["Answer 1", "Answer 2", "Answer 3"]);
+  } finally { await adapter.dispose(); }
+});
+
+test("Codex history paging is bounded and a page that cannot be read leaves the chat open with the newest turns", async () => {
+  const endless = forkTransport({ sourcePage: () => ({ data: [], nextCursor: "page-1" }) });
+  const bounded = await createCodexAdapter({ ...config, nativeId: "source-fixture", runtimeArgs: [fixture, "--paged-history"] }, () => {}, undefined, endless.openChild);
+  try {
+    assert.equal(endless.calls.filter(call => call.method === "thread/turns/list").length, 49, "50 pages in total, the first one came with the resume");
+    assert.deepEqual(bounded.snapshot().blocks.filter(block => block.kind === "user").map(block => block.text), ["Question 3"]);
+  } finally { await bounded.dispose(); }
+
+  const failing = forkTransport({ listError: "PRIVATE_LIST_FAILURE" });
+  const partial = await createCodexAdapter({ ...config, nativeId: "source-fixture", runtimeArgs: [fixture, "--paged-history"] }, () => {}, undefined, failing.openChild);
+  try {
+    assert.equal(failing.calls.filter(call => call.method === "thread/turns/list").length, 1);
+    assert.deepEqual(partial.snapshot().blocks.filter(block => block.kind === "user").map(block => block.text), ["Question 3"]);
+  } finally { await partial.dispose(); }
+});
+
+test("Codex refuses to branch before a message inside a turn instead of dropping that turn's earlier items", async () => {
+  const turns = [
+    { id: "turn-a", status: "completed", items: [
+      { type: "userMessage", id: "opening-user", content: [{ type: "text", text: "Start", text_elements: [] }] },
+      { type: "agentMessage", id: "answer-a", text: "Working", phase: null, memoryCitation: null },
+      { type: "userMessage", id: "steer-user", content: [{ type: "text", text: "Also this", text_elements: [] }] },
+      { type: "agentMessage", id: "answer-b", text: "Done", phase: null, memoryCitation: null },
+    ] },
+    { id: "turn-b", status: "completed", items: [
+      { type: "hookPrompt", id: "hook-1", fragments: [] },
+      { type: "userMessage", id: "next-user", content: [{ type: "text", text: "Next", text_elements: [] }] },
+    ] },
+  ];
+  const steered = forkTransport({ pages: [{ data: turns, nextCursor: null }] });
+  await assert.rejects(
+    createCodexAdapter({ ...config, fork: { nativeId: "source-fixture", beforeBlockId: "steer-user" } }, () => {}, undefined, steered.openChild),
+    { bridgeCode: "branch-unsupported", safeMessage: "This chat cannot be branched natively." },
+  );
+  assert.ok(!steered.calls.some(call => ["thread/start", "thread/fork"].includes(call.method)), "nothing is forked or started");
+
+  // The opening message of a turn is an exact boundary, also after a hook prompt.
+  const exact = forkTransport({ pages: [{ data: turns, nextCursor: null }], childTurns: [turns[0]] });
+  const adapter = await createCodexAdapter({ ...config, fork: { nativeId: "source-fixture", beforeBlockId: "next-user" } }, () => {}, undefined, exact.openChild);
+  try {
+    assert.equal(exact.calls.find(call => call.method === "thread/fork").params.lastTurnId, "turn-a");
+  } finally { await adapter.dispose(); }
+});
+
+test("Codex reasoning parts stay separate paragraphs and streaming matches the completed item", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--reasoning-parts"] }, event => events.push(event));
+  try {
+    await waitUntil(() => adapter.snapshot().blocks.find(block => block.id === "reasoning-done")?.status === "complete");
+    const expected = "First part\n\nSecond\n\nRaw one\n\nRaw two";
+    const text = id => adapter.snapshot().blocks.find(block => block.id === id).text;
+    assert.equal(text("reasoning-open"), expected, "streamed only");
+    assert.equal(text("reasoning-done"), expected, "replaced by the completed item with the same text");
+    assert.equal(adapter.snapshot().blocks.find(block => block.id === "reasoning-open").status, "streaming");
+    const streamed = id => events.filter(event => event.type === "textDelta" && event.blockId === id).map(event => event.text).join("");
+    assert.equal(streamed("reasoning-open"), expected, "the deltas alone build the same text");
+    assert.equal(streamed("reasoning-done"), expected);
+  } finally { await adapter.dispose(); }
+});
+
+test("Codex emits file events for changed files, viewed and generated images and returned inline images", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--chat-files"] }, event => events.push(event));
+  const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAH8wD3AAAAABJRU5ErkJggg==";
+  try {
+    await waitUntil(() => adapter.snapshot().blocks.some(block => block.id === "mcp-image" && block.status === "complete"));
+    const cwd = process.cwd();
+    assert.deepEqual(events.filter(event => event.type === "file"), [
+      { type: "file", blockId: "change-ok", path: join(cwd, "added.txt"), origin: "written" },
+      { type: "file", blockId: "change-ok", path: join(cwd, "moved.ts"), origin: "written" },
+      { type: "file", blockId: "change-ok", path: resolve(cwd, "relative/dir/d.ts"), origin: "written" },
+      { type: "file", blockId: "view-1", path: join(cwd, "shot.PNG"), origin: "read", mimeType: "image/png" },
+      { type: "file", blockId: "gen-path", path: join(cwd, "fox.png"), origin: "generated", mimeType: "image/png" },
+      { type: "file", blockId: "gen-inline", origin: "generated", inline: { mimeType: "image/png", base64: tinyPng } },
+      { type: "file", blockId: "mcp-image", origin: "returned", inline: { mimeType: "image/png", base64: tinyPng } },
+    ]);
+    const block = id => adapter.snapshot().blocks.find(value => value.id === id);
+    assert.deepEqual([block("gen-path").kind, block("gen-path").label, block("gen-path").toolName, block("gen-path").title, block("gen-path").status],
+      ["tool", "Image generation", "image-generation", "Image generation: A red fox", "complete"]);
+    assert.equal(block("gen-failed").status, "failed");
+    // Paths and bytes never enter block text.
+    assert.doesNotMatch(JSON.stringify(adapter.snapshot().blocks.filter(value => value.kind === "tool" && value.id !== "view-1")), /fox\.png|nope\.png|SECRET-MUST-NOT-LEAK|iVBORw0KGgo/);
+  } finally { await adapter.dispose(); }
 });

@@ -221,6 +221,9 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
   if (sidekickEnabled || sessionsEnabled) childEnvironment.MCP_TOOL_TIMEOUT = SIDEKICK_TOOL_TIMEOUT_MS;
   // Fast mode is disabled for the whole CLI process, not just this session's settings.
   childEnvironment.CLAUDE_CODE_DISABLE_FAST_MODE = "1";
+  // A Fusion sidekick's round ends with its turn (ADR-076): no background Bash, no
+  // background agents, no auto-backgrounding. Claude Code's own switch, process-wide.
+  if (config.backgroundTasks === false) childEnvironment.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = "1";
   const effortOverridden = () => Object.keys(childEnvironment).some((key) => key.toUpperCase() === EFFORT_OVERRIDE);
   const dropEffortOverride = () => {
     for (const key of Object.keys(childEnvironment)) if (key.toUpperCase() === EFFORT_OVERRIDE) delete childEnvironment[key];
@@ -294,9 +297,13 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
       return part?.type === "image" ? "[image]" : "[unsupported content]";
     }).join("\n");
   };
-  // Claude Code's own heuristic for internal user entries (command wrappers,
-  // reminders and interrupt markers); such entries are not user prompts.
-  const INTERNAL_USER_TEXT = /^(?:\s*<[a-z][\w-]*[\s>]|\[Request interrupted by user[^\]]*\])/;
+  // Text Claude Code itself writes as user entries: slash-command wrappers,
+  // local command output, reminders, background-task notices and interrupt
+  // notices (seen in real transcripts and its CLI). Only these exact tags
+  // count, and only as a closed element: a prompt that merely starts with an
+  // XML-like tag (`<task>…`) is the person's own text. Mirrored by
+  // `is_internal_claude_text` in crates/piui-index/src/workspace_history.rs.
+  const INTERNAL_USER_TEXT = /^\s*<(command-name|command-message|command-args|local-command-caveat|local-command-stdout|local-command-stderr|system-reminder|task-notification|bash-input|bash-stdout|bash-stderr|ide_opened_file|ide_selection)(?:\s[^>]*)?>[\s\S]*<\/\1>|^\s*\[Request interrupted by user[^\]]*\]\s*$/;
   const userBlockId = (uuid) => opaque("claude-user", uuid);
   // A user message lists each image it carried as an `[image]` line after
   // its text; image bytes never reach a block.
@@ -316,6 +323,86 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
     return images.map((image) => ({ type: "image", source: { type: "base64", media_type: image.mimeType, data: image.data } }));
   };
   const toolBlockId = (toolUseId) => opaque("claude-tool", toolUseId);
+
+  // Edit, MultiEdit and Write results carry the change as `structuredPatch`
+  // hunks (`toolUseResult`, `tool_use_result` on the stream). The tool row's
+  // diff view reads a unified diff from the block text, as for a Codex file
+  // change: an `update: <path>` header, then hunks. A new file's content is
+  // shown as additions.
+  const diffFromResult = (result) => {
+    if (!isRecord(result)) return undefined;
+    const lines = [];
+    for (const hunk of Array.isArray(result.structuredPatch) ? result.structuredPatch.slice(0, 200) : []) {
+      if (!isRecord(hunk) || !Array.isArray(hunk.lines) || ![hunk.oldStart, hunk.oldLines, hunk.newStart, hunk.newLines].every(Number.isSafeInteger)) continue;
+      lines.push(`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`);
+      // Each line already carries its own " ", "+" or "-" prefix.
+      for (const line of hunk.lines) if (typeof line === "string") lines.push(line);
+    }
+    const created = result.type === "create";
+    if (!lines.length && created && typeof result.content === "string" && result.content) {
+      const content = result.content.split("\n");
+      if (content.at(-1) === "") content.pop();
+      lines.push(`@@ -0,0 +1,${content.length} @@`, ...content.map((line) => `+${line}`));
+    }
+    if (!lines.length) return undefined;
+    return `${created ? "add" : "update"}: ${oneLine(plain(result.filePath) || "file", 300)}\n${lines.join("\n")}`;
+  };
+
+  // Chat files (CONTRACT.md, "File events"): files a tool wrote, an image file
+  // it read, and images it returned. Only the location or the bytes are
+  // forwarded as a `file` event, never added to block text.
+  const FILE_EVENT_LIMIT = 200;
+  const INLINE_FILE_LIMIT = 20 * 1024 * 1024;
+  const INLINE_BASE64_LIMIT = Math.ceil(INLINE_FILE_LIMIT / 3) * 4;
+  const IMAGE_EXTENSION_TYPES = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+  const INLINE_MEDIA_TYPES = new Set([
+    "image/png", "image/jpeg", "image/gif", "image/webp",
+    "audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3", "audio/ogg", "audio/webm", "audio/mp4", "audio/aac", "audio/flac",
+  ]);
+  const notedFiles = new Set();
+  const imageTypeOfPath = (value) => {
+    const extension = String(value).split(".").pop().toLowerCase();
+    return Object.hasOwn(IMAGE_EXTENSION_TYPES, extension) ? IMAGE_EXTENSION_TYPES[extension] : undefined;
+  };
+  const noteFile = (blockId, rawPath, origin) => {
+    if (typeof rawPath !== "string" || notedFiles.size >= FILE_EVENT_LIMIT) return;
+    const trimmed = rawPath.trim();
+    if (!trimmed || trimmed.length > 4096 || trimmed.includes(String.fromCharCode(0))) return;
+    const absolute = isAbsolute(trimmed) ? trimmed : resolve(config.cwd, trimmed);
+    const key = JSON.stringify([blockId, absolute]);
+    if (notedFiles.has(key)) return;
+    notedFiles.add(key);
+    const mimeType = imageTypeOfPath(absolute);
+    emit({ type: "file", blockId, path: absolute, origin, ...(mimeType ? { mimeType } : {}) });
+  };
+  const noteInlineFile = (blockId, mimeType, data, origin) => {
+    const type = typeof mimeType === "string" ? mimeType.toLowerCase() : "";
+    if (!INLINE_MEDIA_TYPES.has(type) || typeof data !== "string" || !data || data.length > INLINE_BASE64_LIMIT
+      || notedFiles.size >= FILE_EVENT_LIMIT || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return;
+    const key = JSON.stringify([blockId, data.length, data.slice(0, 48), data.slice(-48)]);
+    if (notedFiles.has(key)) return;
+    notedFiles.add(key);
+    emit({ type: "file", blockId, origin, inline: { mimeType: type, base64: data } });
+  };
+  // The path a tool call names: `file_path` (Write, Edit, MultiEdit, Read) or `notebook_path`.
+  const toolFilePath = (toolName, input) => {
+    if (!isRecord(input)) return undefined;
+    if (["Write", "Edit", "MultiEdit", "Read"].includes(toolName)) return plain(input.file_path) || undefined;
+    if (toolName === "NotebookEdit") return plain(input.notebook_path) || undefined;
+    return undefined;
+  };
+  // A finished tool call: the file it changed, the image file Read showed, or
+  // an image any other tool returned (Anthropic `source` or flat MCP form).
+  const noteToolFiles = (blockId, toolName, filePath, content, isError) => {
+    if (isError) return;
+    if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(toolName)) { noteFile(blockId, filePath, "written"); return; }
+    if (toolName === "Read" && filePath && imageTypeOfPath(filePath)) { noteFile(blockId, filePath, "read"); return; }
+    for (const part of Array.isArray(content) ? content : []) {
+      if (!isRecord(part) || part.type !== "image") continue;
+      const source = isRecord(part.source) ? part.source : part;
+      noteInlineFile(blockId, source.media_type ?? source.mimeType, source.data, toolName === "Read" ? "read" : "returned");
+    }
+  };
 
   // ---------------------------------------------------------------------------
   // Catalog mapping from the native `initialize` response.
@@ -734,7 +821,9 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
     const toolName = safeToolName(name);
     const args = isRecord(input) ? input : {};
     const command = toolName === "Bash" || toolName === "PowerShell" ? plain(args.command) || tools.get(toolUseId)?.command : undefined;
-    tools.set(toolUseId, command ? { name: toolName, command } : { name: toolName });
+    // The call is announced before its input is complete: keep the path once it is known.
+    const filePath = toolFilePath(toolName, args) ?? tools.get(toolUseId)?.filePath;
+    tools.set(toolUseId, { name: toolName, ...(command ? { command } : {}), ...(filePath ? { filePath } : {}) });
     const id = toolBlockId(toolUseId);
     runBlocks.add(id);
     const existing = blocks.get(id);
@@ -743,10 +832,10 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
       title: toolTitle(toolName, args),
     });
   };
-  const finishTool = (toolUseId, content, isError) => {
+  const finishTool = (toolUseId, content, isError, nativeResult = undefined) => {
     const toolName = tools.get(toolUseId)?.name ?? "tool";
     const id = toolBlockId(toolUseId);
-    const output = boundText(toolResultText(content));
+    const output = boundText((isError ? undefined : diffFromResult(nativeResult)) ?? toolResultText(content));
     putBlock({
       ...(blocks.get(id) ?? { id, kind: "tool", label: toolName, toolName, collapsible: true, title: toolName }),
       status: isError ? "failed" : "complete",
@@ -754,6 +843,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
       truncated: output.truncated,
       safeSummary: isError ? "The tool failed." : "The tool completed.",
     });
+    noteToolFiles(id, toolName, tools.get(toolUseId)?.filePath, content, isError);
   };
   const handleStreamEvent = (message) => {
     if (message.parent_tool_use_id != null || !isRecord(message.event)) return;
@@ -850,11 +940,11 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
     if (message.parent_tool_use_id != null || !isRecord(message.message) || !Array.isArray(message.message.content)) return;
     // Other main-thread user entries are native tool results or internal
     // markers; only the tool results belong in the timeline.
-    for (const part of message.message.content) {
-      if (isRecord(part) && part.type === "tool_result" && typeof part.tool_use_id === "string") {
-        finishTool(part.tool_use_id, part.content, part.is_error === true);
-      }
-    }
+    const results = message.message.content.filter((part) => isRecord(part) && part.type === "tool_result" && typeof part.tool_use_id === "string");
+    // The native result object (the structured patch of an edit) belongs to
+    // one tool call; with several results in one message it is ambiguous.
+    const nativeResult = results.length === 1 ? (message.tool_use_result ?? message.toolUseResult) : undefined;
+    for (const part of results) finishTool(part.tool_use_id, part.content, part.is_error === true, nativeResult);
   };
   const resultErrorMessage = (message) => {
     const httpStatus = Number.isInteger(message.api_error_status) ? message.api_error_status : undefined;
@@ -991,6 +1081,11 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
       rebind(message.session_id);
     }
     if (typeof message.model === "string" && message.model) observeModel(message.model);
+    // The effective tool list must prove the delegation ban (ADR-076): a session that
+    // must not delegate stops before the model can call a subagent tool.
+    if (disableSubagents && Array.isArray(message.tools) && message.tools.some((name) => name === "Agent" || name === "Task")) {
+      stopForPolicy("Claude Code offered a subagent tool to a session that must not delegate; the session was stopped.");
+    }
   };
   const startCompaction = () => {
     if (compactionId) return;
@@ -1548,11 +1643,22 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
     const { entries, chain, omittedBefore } = await readHistoryChain(path, until);
     const result = [];
     const toolIndex = new Map();
-    const applyResult = (part) => {
+    const historyPaths = new Map();
+    // File events of finished calls; only those of blocks that are shown are emitted.
+    const fileNotes = [];
+    // The native result object (an edit's structured patch) belongs to one
+    // call, so an entry with several results gives none of them.
+    const nativeResultOf = (entry) => {
+      const parts = Array.isArray(entry.message?.content) ? entry.message.content.filter((part) => isRecord(part) && part.type === "tool_result") : [];
+      return parts.length === 1 ? entry.toolUseResult : undefined;
+    };
+    const applyResult = (part, nativeResult) => {
       const index = toolIndex.get(part.tool_use_id);
-      const output = boundText(toolResultText(part.content));
       const failedTool = part.is_error === true;
+      const output = boundText((failedTool ? undefined : diffFromResult(nativeResult)) ?? toolResultText(part.content));
       result[index] = { ...result[index], status: failedTool ? "failed" : "complete", text: output.text, truncated: output.truncated, safeSummary: failedTool ? "The tool failed." : "The tool completed." };
+      const { id, toolName } = result[index];
+      fileNotes.push({ id, run: () => noteToolFiles(id, toolName, historyPaths.get(part.tool_use_id), part.content, failedTool) });
     };
     let lineSerial = 0;
     const historyRank = rankCounter();
@@ -1577,7 +1683,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
             if (!isRecord(part)) continue;
             if (part.type === "text" && typeof part.text === "string") texts.push(part.text);
             else if (part.type === "image") images += 1;
-            else if (part.type === "tool_result" && typeof part.tool_use_id === "string" && toolIndex.has(part.tool_use_id)) applyResult(part);
+            else if (part.type === "tool_result" && typeof part.tool_use_id === "string" && toolIndex.has(part.tool_use_id)) applyResult(part, nativeResultOf(entry));
           }
         }
         const text = withImageMarkers(texts.filter((value) => !INTERNAL_USER_TEXT.test(value)).join("\n"), images);
@@ -1604,6 +1710,8 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
         } else if (part.type === "tool_use" && typeof part.id === "string") {
           const toolName = safeToolName(part.name);
           toolIndex.set(part.id, result.length);
+          const calledPath = toolFilePath(toolName, part.input);
+          if (calledPath) historyPaths.set(part.id, calledPath);
           // A call without a recorded result never finished.
           result.push({ id: toolBlockId(part.id), kind: "tool", label: toolName, toolName, collapsible: true, status: "interrupted", title: toolTitle(toolName, isRecord(part.input) ? part.input : {}), ...createdAt });
         }
@@ -1616,7 +1724,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
       if (entry.type !== "user" || entry.isSidechain === true || !Array.isArray(entry.message?.content)) continue;
       for (const part of entry.message.content) {
         if (!isRecord(part) || part.type !== "tool_result" || typeof part.tool_use_id !== "string") continue;
-        if (toolIndex.has(part.tool_use_id) && result[toolIndex.get(part.tool_use_id)].status === "interrupted") applyResult(part);
+        if (toolIndex.has(part.tool_use_id) && result[toolIndex.get(part.tool_use_id)].status === "interrupted") applyResult(part, nativeResultOf(entry));
       }
     }
     // Snapshots are single host frames: keep the newest history within budget.
@@ -1629,6 +1737,8 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
       start -= 1;
     }
     const kept = result.slice(start);
+    const keptIds = new Set(kept.map((block) => block.id));
+    for (const note of fileNotes.filter((candidate) => keptIds.has(candidate.id)).slice(-FILE_EVENT_LIMIT)) note.run();
     if (start > 0 || omittedBefore) kept.unshift({ id: opaque("claude-history", `${path}:omitted`), kind: "custom", label: "Claude Code", status: "complete", safeSummary: "Earlier Claude Code history is not shown." });
     return kept;
   };

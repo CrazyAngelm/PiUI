@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { PassThrough } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -95,6 +95,7 @@ const EVENT_KEYS = {
   usage: ["usage"], block: ["block"], textDelta: ["blockId", "text"], status: ["status"], approval: ["approval"],
   approvalResolved: ["requestId"], binding: ["nativeId", "nativePath"], turnCompleted: ["outcome"],
   coordinatorRequest: ["requestId", "operation"], boardRequest: ["requestId", "operation"], sidekickRequest: ["requestId", "operation", "identity"], notice: ["code"], error: ["message"],
+  file: ["blockId", "path", "origin", "mimeType", "inline"],
 };
 const BLOCK_KINDS = new Set(["user", "assistant", "thinking", "tool", "custom", "error", "compaction", "unknown"]);
 const BLOCK_STATUSES = new Set(["complete", "streaming", "failed", "interrupted"]);
@@ -1740,5 +1741,101 @@ test("native tasks are listed while they run, keep how they ended and can be sto
     assert.ok(records().some(record => record.kind === "control" && record.request.subtype === "stop_task" && record.request.task_id === "shell-1"));
     for (const taskId of ["claude-task-000000000000000000000000", tasks[1].id, tasks[0].id]) await assert.rejects(adapter.stopTask({taskId}), error => /not running/.test(error.safeMessage));
     assert.deepEqual(log.problems, []);
+  } finally { await adapter.dispose(); }
+});
+
+test("a session without background work disables Claude Code background tasks for the whole CLI process", async () => {
+  const quiet = setup({ backgroundTasks: false, nativeSubagents: false });
+  const adapter = await createClaudeAdapter(quiet.config, () => {});
+  try {
+    assert.equal(startRecord(quiet.records).disableBackground, "1");
+  } finally { await adapter.dispose(); }
+  const plain = setup({});
+  const other = await createClaudeAdapter(plain.config, () => {});
+  try {
+    assert.equal(startRecord(plain.records).disableBackground, process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS);
+  } finally { await other.dispose(); }
+});
+
+const claudeToolId = (toolUseId) => `claude-tool-${createHash("sha256").update(toolUseId).digest("hex").slice(0, 24)}`;
+const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAH8wD3AAAAABJRU5ErkJggg==";
+const EDIT_DIFF = "update: src/a.ts\n@@ -1,2 +1,2 @@\n keep\n-old line\n+new line\n@@ -9,1 +9,2 @@\n tail\n+added\n\\ No newline at end of file";
+const expectedFileEvents = () => [
+  { type: "file", blockId: claudeToolId("toolu_edit"), path: resolve(process.cwd(), "src/a.ts"), origin: "written" },
+  { type: "file", blockId: claudeToolId("toolu_write"), path: join(process.cwd(), "abs", "c.ts"), origin: "written" },
+  { type: "file", blockId: claudeToolId("toolu_nb"), path: resolve(process.cwd(), "analysis.ipynb"), origin: "written" },
+  { type: "file", blockId: claudeToolId("toolu_img"), path: resolve(process.cwd(), "shots/Screen.PNG"), origin: "read", mimeType: "image/png" },
+  { type: "file", blockId: claudeToolId("toolu_mcp"), origin: "returned", inline: { mimeType: "image/png", base64: TINY_PNG } },
+];
+function checkEditBlocks(blocks) {
+  const tool = (toolUseId) => blocks.find((block) => block.id === claudeToolId(toolUseId));
+  assert.equal(tool("toolu_edit").text, EDIT_DIFF, "the structured patch becomes the unified diff the tool row renders");
+  assert.equal(tool("toolu_edit").status, "complete");
+  assert.equal(tool("toolu_write").text, `add: ${join(process.cwd(), "abs", "c.ts")}\n@@ -0,0 +1,2 @@\n+a\n+b`, "a new file shows its content as additions");
+  assert.deepEqual([tool("toolu_bad").status, tool("toolu_bad").text], ["failed", "String to replace not found"], "a failed edit keeps the tool's own message");
+  assert.equal(tool("toolu_nb").text, "Edited cell");
+  // Paths and bytes never enter block text.
+  assert.doesNotMatch(JSON.stringify(blocks), /iVBORw0KGgo/);
+}
+
+test("Claude Edit and Write results carry their structured patch, and written, read and returned files become file events", async () => {
+  const { config } = setup();
+  const log = recorder();
+  const adapter = await createClaudeAdapter(config, log.emit);
+  try {
+    await runTurn(adapter, log, "edits");
+    checkEditBlocks((await adapter.snapshot()).blocks);
+    assert.deepEqual(log.of("file"), expectedFileEvents());
+    assert.deepEqual(log.problems, []);
+  } finally { await adapter.dispose(); }
+});
+
+test("a reopened Claude transcript shows the same diffs and announces the same files", async () => {
+  const first = setup();
+  const log = recorder();
+  const adapter = await createClaudeAdapter(first.config, log.emit);
+  let nativeId;
+  let live;
+  try {
+    await runTurn(adapter, log, "edits");
+    ({ nativeId } = await adapter.snapshot());
+    live = (await adapter.snapshot()).blocks.filter((block) => block.kind === "tool");
+  } finally { await adapter.dispose(); }
+  const reopenedLog = recorder();
+  const reopened = await createClaudeAdapter(setup({ nativeId }).config, reopenedLog.emit);
+  try {
+    const blocks = (await reopened.snapshot()).blocks;
+    checkEditBlocks(blocks);
+    assert.deepEqual(blocks.filter((block) => block.kind === "tool").map((block) => block.id), live.map((block) => block.id), "same tool blocks as live");
+    assert.deepEqual(reopenedLog.of("file"), expectedFileEvents());
+    assert.deepEqual(reopenedLog.problems, []);
+  } finally { await reopened.dispose(); }
+});
+
+test("only Claude Code's own marker tags hide a user entry: a prompt that starts with another tag stays visible", async () => {
+  const nativeId = "33333333-3333-4333-8444-555555555555";
+  mkdirSync(projectDir, { recursive: true });
+  const prompts = [
+    "<task>Summarize this repository</task>",
+    "<system-reminder>The date changed.</system-reminder>",
+    "<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>",
+    "<local-command-stdout>done</local-command-stdout>",
+    "<local-command-caveat>Caveat: generated by local commands.</local-command-caveat>",
+    "<task-notification><task-id>t1</task-id></task-notification>",
+    "[Request interrupted by user for tool use]",
+    "[Request interrupted by user] and then I typed more",
+    "<system-reminder>never closed",
+    "<div>hello</div> world",
+  ];
+  const lines = prompts.map((text, index) => JSON.stringify({
+    sessionId: nativeId, timestamp: "2026-11-18T10:00:00.000Z", type: "user", uuid: `m${index}`, parentUuid: index ? `m${index - 1}` : null,
+    message: { role: "user", content: text },
+  }));
+  writeFileSync(join(projectDir, `${nativeId}.jsonl`), lines.join("\n"));
+  const { config } = setup({ nativeId, nativePath: join(projectDir, `${nativeId}.jsonl`) });
+  const adapter = await createClaudeAdapter(config, () => {});
+  try {
+    const shown = (await adapter.snapshot()).blocks.filter((block) => block.kind === "user").map((block) => block.text);
+    assert.deepEqual(shown, [prompts[0], prompts[7], prompts[8], prompts[9]]);
   } finally { await adapter.dispose(); }
 });

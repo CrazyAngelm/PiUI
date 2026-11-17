@@ -23,6 +23,9 @@ pub(crate) mod attachments;
 #[path = "workspace_composer_inputs.rs"]
 pub mod composer_inputs;
 
+#[path = "workspace_chat_files.rs"]
+pub mod chat_files;
+
 use crate::api::verified_project_directory;
 use crate::dto::ApiError;
 use crate::session_links::model::BranchOrigin;
@@ -501,6 +504,30 @@ fn runtime_failure(error: &NativeRuntimeError) -> WorkspaceError {
             }
         }
         _ => WorkspaceError::runtime(),
+    }
+}
+
+/// Why a prompt was not confirmed (ADR-076).
+#[derive(Debug)]
+pub(crate) enum SendFailure {
+    /// Refused before the harness could accept it: nothing runs.
+    Refused(WorkspaceError),
+    /// The request was written but its acceptance is unknown.
+    AcceptanceUnknown,
+}
+
+impl SendFailure {
+    pub(crate) fn into_error(self) -> WorkspaceError {
+        match self {
+            Self::Refused(error) => error,
+            Self::AcceptanceUnknown => WorkspaceError::runtime(),
+        }
+    }
+}
+
+impl From<WorkspaceError> for SendFailure {
+    fn from(error: WorkspaceError) -> Self {
+        Self::Refused(error)
     }
 }
 
@@ -1224,6 +1251,8 @@ struct WorkspaceHostInner {
     native_root: PathBuf,
     /// Composer images held in PiUI's app data until their message settles.
     attachments: attachments::AttachmentStore,
+    /// Files each session's agent wrote, read, generated or returned (ADR-074).
+    chat_files: Arc<chat_files::ChatFileRegistry>,
     /// Receives extension UI surface events; unset until the app is set up.
     extension_ui: Mutex<Option<ExtensionUiPublisher>>,
     /// Plugin MCP servers for ordinary chats; unset until the app is set up.
@@ -1280,6 +1309,7 @@ impl WorkspaceHost {
                 starting: Mutex::new(HashMap::new()),
                 native_root,
                 attachments: attachments::AttachmentStore::open(app_data_dir)?,
+                chat_files: Arc::new(chat_files::ChatFileRegistry::open(app_data_dir)?),
                 extension_ui: Mutex::new(None),
                 plugin_mcp: Mutex::new(None),
                 board: Mutex::new(None),
@@ -2204,6 +2234,7 @@ impl WorkspaceHost {
                 network_access,
                 allowed_tools,
                 native_subagents,
+                background_tasks: sidekick.then_some(false),
                 coordination: coordinator.is_some(),
                 plugin_mcp_servers,
                 daemon_socket: isolated_daemon_socket(
@@ -2584,6 +2615,21 @@ impl WorkspaceHost {
         text: String,
         mode: PromptMode,
     ) -> Result<(), WorkspaceError> {
+        self.send_outcome(session_id, text, mode)
+            .await
+            .map_err(SendFailure::into_error)
+    }
+
+    /// [`Self::send`] with the outcome the Fusion broker needs (ADR-076): a
+    /// refusal before the harness could accept the prompt, or a failure after
+    /// the request was written (a timeout, a lost acknowledgement, a dead
+    /// runtime), when the harness may already be running it.
+    pub(crate) async fn send_outcome(
+        &self,
+        session_id: &str,
+        text: String,
+        mode: PromptMode,
+    ) -> Result<(), SendFailure> {
         let (runtime, state) = self
             .live_runtime(session_id)?
             .ok_or_else(WorkspaceError::closed)?;
@@ -2610,10 +2656,15 @@ impl WorkspaceHost {
             board.turn.fetch_add(1, Ordering::AcqRel);
             board.hooks.begin_turn(&board.turn_key());
         }
-        runtime
-            .prompt(text, mode)
-            .await
-            .map_err(|_| WorkspaceError::runtime())?;
+        runtime.prompt(text, mode).await.map_err(|error| {
+            // The bridge answering with a refusal proves the prompt was not
+            // taken; anything else may follow an accepted write.
+            if sidekick_response_unconsumed(&error) {
+                SendFailure::Refused(WorkspaceError::runtime())
+            } else {
+                SendFailure::AcceptanceUnknown
+            }
+        })?;
         // The harness accepted the prompt: the send happened. The catalog
         // flag below is rebuildable metadata, so failing to write it must not
         // report the accepted prompt as unsent (a caller would send it again,
@@ -2978,6 +3029,7 @@ impl WorkspaceHost {
             network_access: false,
             allowed_tools: None,
             native_subagents: None,
+            background_tasks: None,
             coordination: false,
             plugin_mcp_servers: Vec::new(),
             daemon_socket: None,
@@ -3345,13 +3397,17 @@ fn resume_binding(
     }
 }
 
+/// `files` is the chat-file registry to fill from the history (ADR-074); safe mode passes none.
 async fn historical_snapshot(
     record: PersistedSession,
     directory: ProjectDirectory,
+    files: Option<Arc<chat_files::ChatFileRegistry>>,
 ) -> Result<SessionSnapshot, WorkspaceError> {
-    tokio::task::spawn_blocking(move || historical_snapshot_blocking(record, &directory))
-        .await
-        .map_err(|_| WorkspaceError::io())?
+    tokio::task::spawn_blocking(move || {
+        historical_content_registering(record, &directory, false, files.as_deref())
+    })
+    .await
+    .map_err(|_| WorkspaceError::io())?
 }
 
 async fn historical_reference_text(
@@ -3378,6 +3434,7 @@ async fn historical_reference_text(
     .map_err(|_| WorkspaceError::io())?
 }
 
+#[cfg(test)]
 fn historical_snapshot_blocking(
     record: PersistedSession,
     directory: &ProjectDirectory,
@@ -3389,6 +3446,17 @@ fn historical_content_blocking(
     record: PersistedSession,
     directory: &ProjectDirectory,
     full_answers: bool,
+) -> Result<SessionSnapshot, WorkspaceError> {
+    historical_content_registering(record, directory, full_answers, None)
+}
+
+/// Reads a closed chat's history and, when `files` is given, registers the files
+/// it says the agent wrote, read or generated (ADR-074).
+fn historical_content_registering(
+    record: PersistedSession,
+    directory: &ProjectDirectory,
+    full_answers: bool,
+    files: Option<&chat_files::ChatFileRegistry>,
 ) -> Result<SessionSnapshot, WorkspaceError> {
     // A closed ACP chat has no host-readable history: opening it replays the
     // conversation through the agent's own `session/load`.
@@ -3409,6 +3477,14 @@ fn historical_content_blocking(
     let source = HostNativeHistorySource::new(PathBuf::from(native_path), native_id, format);
     project_native_workspace_history(&source, directory)
         .map(|projection| {
+            if let Some(registry) = files {
+                chat_files::record_history(
+                    registry,
+                    &record.id,
+                    directory.canonical_path(),
+                    projection.chat_files(),
+                );
+            }
             let mut snapshot = snapshot_from_history(record, &projection);
             if full_answers {
                 for block in &mut snapshot.blocks {
@@ -3510,14 +3586,20 @@ fn history_block(block: &GenericTimelineBlock) -> NativeBlock {
 }
 
 /// A user entry that carried images reads like a live bridge block: its text
-/// and an `[image]` line (the history index records only that images exist).
+/// and one `[image]` line per image (the history index records how many there
+/// were, never the images).
 fn history_block_text(kind: BlockKind, block: &GenericTimelineBlock) -> Option<String> {
-    if kind != BlockKind::User || !block.has_image {
+    let images = block
+        .attachment_count
+        .max(usize::from(block.has_image))
+        .min(16);
+    if kind != BlockKind::User || images == 0 {
         return block.preview.clone();
     }
+    let markers = vec!["[image]"; images].join("\n");
     Some(match block.preview.as_deref() {
-        Some(text) if !text.is_empty() => format!("{text}\n\n[image]"),
-        _ => "[image]".to_owned(),
+        Some(text) if !text.is_empty() => format!("{text}\n\n{markers}"),
+        _ => markers,
     })
 }
 
@@ -4420,6 +4502,7 @@ async fn spawn_catalog_probe(
         network_access: false,
         allowed_tools: None,
         native_subagents: None,
+        background_tasks: None,
         coordination: false,
         plugin_mcp_servers: Vec::new(),
         daemon_socket: isolated_daemon_socket(harness, &state.workspace.inner.native_root, &id),
@@ -4551,6 +4634,7 @@ async fn delete_session_command(
         })
         .map_err(|_| WorkspaceError::io())?;
     state.workspace.inner.settings.discard(&session_id);
+    state.workspace.inner.chat_files.forget_session(&session_id);
     if let Some(hooks) = fusion {
         hooks.session_deleted(session_id.clone()).await;
     }
@@ -4649,7 +4733,8 @@ pub(crate) async fn dispatch_workspace_command(
         } else {
             let directory = verified_project_directory(host, &record.workspace_id, false)?;
             let directory = host.workspace.history_directory(&record.id, directory)?;
-            historical_snapshot(record, directory).await?
+            let files = (!host.safe_mode).then(|| Arc::clone(&host.workspace.inner.chat_files));
+            historical_snapshot(record, directory, files).await?
         };
         return Ok(WorkspaceResult::Session {
             snapshot: Box::new(snapshot),
@@ -4879,7 +4964,16 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                 let _ = runtime.dispose().await;
                 return;
             };
+            // Files the agent reported (ADR-074) go to the host registry only;
+            // the WebView lists them through `workspace_chat_files_v1`.
+            // `session_id` is this forwarder's session, never the frame's own.
             let payload = match event {
+                NativeEvent::File(file) => {
+                    if let Some(file) = file.into_event(&session_id) {
+                        chat_files::record_report(&inner.chat_files, &session_id, file.into(), None);
+                    }
+                    continue;
+                }
                 NativeEvent::Usage { usage } => {
                     // Receipts are cached at once and written in batches: on
                     // turn completion, after USAGE_PERSIST_DELAY, with any

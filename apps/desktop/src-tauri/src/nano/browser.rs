@@ -28,6 +28,28 @@ fn is_loopback_host(host: &str) -> bool {
     matches!(host, "127.0.0.1" | "localhost" | "[::1]")
 }
 
+/// Whether `url` is an ordinary web address a person may be asked about:
+/// `http` or `https`, a host, no user name or password. Unlike
+/// [`is_openable`] it allows plain `http` on any host, so it is only for a
+/// caller that shows the person the exact address and asks first (chat links,
+/// ADR-075); Nano's own links keep the stricter rule above.
+pub(crate) fn is_web_link(url: &Url) -> bool {
+    url.username().is_empty()
+        && url.password().is_none()
+        && url.host_str().is_some_and(|host| !host.is_empty())
+        && matches!(url.scheme(), "https" | "http")
+}
+
+/// Opens a web address the host has already validated and the person has
+/// confirmed. `Err(())` is `browser-failed`; an address that is not a web link
+/// is never launched.
+pub(crate) fn open_web_link(url: &Url) -> Result<(), ()> {
+    if !is_web_link(url) {
+        return Err(());
+    }
+    platform::open(url.as_str())
+}
+
 /// Opens `url` in the system browser. `Err(())` is `browser-failed`.
 pub(crate) fn open_external(url: &Url, allow_loopback_http: bool) -> Result<(), ()> {
     if !is_openable(url, allow_loopback_http) {
@@ -125,6 +147,26 @@ mod tests {
         ] {
             if let Ok(parsed) = Url::parse(refused) {
                 assert!(!is_openable(&parsed, true), "{refused}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_web_link_is_http_or_https_without_credentials() {
+        assert!(is_web_link(&url("https://example.com/a?b=c#d")));
+        assert!(is_web_link(&url("http://example.com/")));
+        for refused in [
+            "javascript:alert(1)",
+            "file:///C:/Windows/System32/calc.exe",
+            "data:text/html,hi",
+            "ms-settings:privacy",
+            "ftp://example.com/",
+            concat!("https://user", "@example.com/"),
+            concat!("http://user:secret", "@example.com/"),
+        ] {
+            if let Ok(parsed) = Url::parse(refused) {
+                assert!(!is_web_link(&parsed), "{refused}");
+                assert_eq!(open_web_link(&parsed), Err(()), "{refused}");
             }
         }
     }

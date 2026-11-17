@@ -17,7 +17,7 @@
     "test:smoke": "node scripts/e2e-smoke.mjs",
     "test:e2e": "node scripts/e2e-platform.mjs",
     "test:e2e:tauri:windows": "cargo build --quiet --target-dir ../../target -p piui-platform --features e2e-harness --bin piui-e2e-job && node scripts/tauri-webview2-e2e-controller.mjs",
-    "contract:test": "vitest run src/host-api/composerClient.test.ts src/host-api/types.test.ts src/host-api/workspaceContracts.test.ts src/host-api/runtimeSettings.test.ts src/host-api/workspaceLifecycle.test.ts src/host-api/workspaceClient.test.ts src/host-api/orchestrationClient.test.ts src/features/orchestration/systemFile.test.ts src/host-api/scriptTestClient.test.ts src/host-api/runDebuggingClient.test.ts src/host-api/extensionUiClient.test.ts src/host-api/appUpdateClient.test.ts src/host-api/composerInputsClient.test.ts src/host-api/pluginManifest.test.ts src/host-api/pluginsClient.test.ts src/host-api/pluginBridge.test.ts src/host-api/triggersContracts.test.ts src/host-api/triggerPatterns.test.ts src/host-api/sessionTools.test.ts src/host-api/fusionClient.test.ts src/host-api/dictationClient.test.ts src/host-api/nanoRemoteClient.test.ts",
+    "contract:test": "vitest run src/host-api/composerClient.test.ts src/host-api/types.test.ts src/host-api/workspaceContracts.test.ts src/host-api/runtimeSettings.test.ts src/host-api/workspaceLifecycle.test.ts src/host-api/workspaceClient.test.ts src/host-api/orchestrationClient.test.ts src/features/orchestration/systemFile.test.ts src/host-api/scriptTestClient.test.ts src/host-api/runDebuggingClient.test.ts src/host-api/extensionUiClient.test.ts src/host-api/appUpdateClient.test.ts src/host-api/composerInputsClient.test.ts src/host-api/chatFilesClient.test.ts src/host-api/chatLinkClient.test.ts src/host-api/pluginManifest.test.ts src/host-api/pluginsClient.test.ts src/host-api/pluginBridge.test.ts src/host-api/triggersContracts.test.ts src/host-api/triggerPatterns.test.ts src/host-api/sessionTools.test.ts src/host-api/fusionClient.test.ts src/host-api/dictationClient.test.ts src/host-api/nanoRemoteClient.test.ts",
     "perf:smoke": "node scripts/perf-smoke.mjs",
     "tauri": "tauri"
   },
@@ -36,6 +36,8 @@
     "@tauri-apps/api": "2.11.1",
     "@xyflow/svelte": "1.7.0",
     "bits-ui": "2.19.3",
+    "katex": "0.16.21",
+    "marked": "18.0.3",
     "svelte": "5.57.1"
   },
   "devDependencies": {
@@ -45,6 +47,7 @@
     "@tauri-apps/cli": "2.11.4",
     "@types/node": "22.15.21",
     "ajv": "^8.20.0",
+    "jsdom": "26.1.0",
     "prettier": "3.9.9",
     "prettier-plugin-svelte": "4.1.1",
     "svelte-check": "4.3.1",

@@ -3,7 +3,7 @@ import { previewImage } from '../../../host-api/composerInputsClient';
 /**
  * Decoded composer image previews. Bytes are decoded in memory
  * (`createImageBitmap`) and drawn on a canvas, so no `blob:` or `data:` URL
- * is needed under the desktop CSP (`img-src 'self' asset:`). Pasted images
+ * is needed here (the desktop CSP allows `blob:` only for chat files, ADR-074). Pasted images
  * reuse the clipboard blob; picked ones read their bytes from the host once.
  */
 const cache = new Map<string, Promise<ImageBitmap | undefined>>();

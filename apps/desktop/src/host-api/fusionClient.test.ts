@@ -18,6 +18,13 @@ describe('fusion v1 contract', () => {
   it('drops malformed results and maps host errors to fixed codes', async () => {
     expect(decodeFusionResult({ type: 'state', state: { protocol: 2 } })).toBeUndefined();
     expect(decodeFusionResult({ type: 'pairCheck', ok: false })).toBeUndefined();
+    const capabilities = { writes: 'workspace', reads: 'workspace', shell: 'none', network: 'none', mcp: 'none' };
+    expect(decodeFusionResult({ type: 'pairCheck', ok: true, sidekickMode: 'workspace-write', capabilities, extra: 1 })).toEqual({
+      type: 'pairCheck', ok: true, sidekickMode: 'workspace-write', capabilities,
+    });
+    expect(decodeFusionResult({ type: 'pairCheck', ok: true, sidekickMode: 'root', capabilities: { ...capabilities, shell: 'any' } })).toEqual({ type: 'pairCheck', ok: true });
+    expect(decodeFusionResult({ type: 'pairCheck', ok: false, refusal: 'sidekick-exceeds-lead', role: 'sidekick', dimension: 'shell' })).toMatchObject({ dimension: 'shell' });
+    expect(decodeFusionResult({ type: 'pairCheck', ok: false, refusal: 'sidekick-exceeds-lead', role: 'sidekick', dimension: 'disk' })).toBeUndefined();
     expect(decodeFusionChanged({ protocol: 1, leadSessionId: '', revision: 1 })).toBeUndefined();
     expect(fusionError({ code: 'SAFE_MODE', message: 'host text' }).code).toBe('SAFE_MODE');
     expect(fusionError('{"code":"CONFLICT"}').code).toBe('CONFLICT');

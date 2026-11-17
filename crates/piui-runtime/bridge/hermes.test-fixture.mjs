@@ -1,4 +1,6 @@
 import { createInterface } from 'node:readline';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 const send = value => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...value })}\n`);
 const notify = update => send({ method: 'session/update', params: { sessionId: 'saved', update } });
 const models = { currentModelId: 'fixture:model', availableModels: [{ modelId: 'fixture:model', name: 'Fixture' }] };
@@ -59,6 +61,36 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       // Well-formed JSON-RPC whose update fields this adapter cannot process.
       for (let index = 0; index < 2; index++) notify({ sessionUpdate: 'tool_call', toolCallId: 'broken', content: {} });
       notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'after malformed' } });
+      send({ id: m.id, result: { stopReason: 'end_turn' } });
+      continue;
+    }
+    if (text === 'interleave') {
+      // A tool update is not answer text, so it must not split the surrounding text.
+      notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'AAA ' } });
+      notify({ sessionUpdate: 'tool_call', toolCallId: 'i1', title: 'First', status: 'in_progress' });
+      notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'BBB ' } });
+      notify({ sessionUpdate: 'tool_call_update', toolCallId: 'i1', status: 'in_progress' });
+      notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'CCC' } });
+      notify({ sessionUpdate: 'tool_call_update', toolCallId: 'i1', status: 'completed' });
+      notify({ sessionUpdate: 'tool_call', toolCallId: 'i2', title: 'Second', status: 'completed' });
+      notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'DDD' } });
+      send({ id: m.id, result: { stopReason: 'end_turn' } });
+      continue;
+    }
+    if (text === 'files') {
+      const tiny = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAH8wD3AAAAABJRU5ErkJggg==';
+      // An edit announces its location first and finishes later; the file is reported once, when it is done.
+      notify({ sessionUpdate: 'tool_call', toolCallId: 'f-edit', title: 'Edit', kind: 'edit', status: 'in_progress', locations: [{ path: 'src/x.ts' }] });
+      notify({ sessionUpdate: 'tool_call_update', toolCallId: 'f-edit', status: 'completed', content: [{ type: 'diff', path: 'src/x.ts', oldText: 'a', newText: 'b' }] });
+      notify({ sessionUpdate: 'tool_call', toolCallId: 'f-read', title: 'Read', kind: 'read', status: 'completed', locations: [{ path: 'pics/A.PNG' }, { path: 'notes.txt' }] });
+      notify({ sessionUpdate: 'tool_call', toolCallId: 'f-media', title: 'Fetch', kind: 'fetch', status: 'completed', content: [
+        { type: 'content', content: { type: 'image', mimeType: 'image/png', data: tiny } },
+        { type: 'content', content: { type: 'audio', mimeType: 'audio/wav', data: 'UklGRg==' } },
+        { type: 'content', content: { type: 'resource_link', uri: pathToFileURL(join(process.cwd(), 'out', 'report.pdf')).href, name: 'report' } },
+        { type: 'content', content: { type: 'resource_link', uri: 'https://example.invalid/remote.pdf', name: 'remote' } },
+        { type: 'content', content: { type: 'image', mimeType: 'image/svg+xml', data: tiny } },
+      ] });
+      notify({ sessionUpdate: 'tool_call', toolCallId: 'f-running', title: 'Pending', kind: 'edit', status: 'in_progress', locations: [{ path: 'never.ts' }] });
       send({ id: m.id, result: { stopReason: 'end_turn' } });
       continue;
     }

@@ -187,6 +187,8 @@ export class WorkspaceStore {
   snapshots = $state.raw<Record<string, SessionSnapshot>>({});
   route = $state<Route>({ name: 'home' });
   selectedWorkspaceId = $state('');
+  /** The last "New chat in <project>" request; the open new-chat composer switches to it. */
+  newChatRequest = $state<{ workspaceId: string; seq: number } | undefined>(undefined);
   sessionLoading = $state(false);
   sessionError = $state<string>();
   /** Chats shown beside the selected one (split panes); set by the workbench. */
@@ -411,7 +413,10 @@ export class WorkspaceStore {
 
   goHome(workspaceId?: string): void {
     this.guard(() => {
-      if (workspaceId) this.selectWorkspace(workspaceId);
+      if (workspaceId) {
+        this.selectWorkspace(workspaceId);
+        this.newChatRequest = { workspaceId, seq: (this.newChatRequest?.seq ?? 0) + 1 };
+      }
       this.route = { name: 'home' };
       writeJson(ROUTE_KEY, this.route);
     });

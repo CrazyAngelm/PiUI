@@ -442,8 +442,45 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       if (typeof item.path === "string" && item.path.trim()) title = oneLine(item.path, 160);
       addLine("Path", item.path);
       status = "complete";
+    } else if (item.type === "imageGeneration") {
+      // Fields (app-server 0.165): status, revisedPrompt, savedPath, failure and
+      // either an inline `result` or a `fileId`. The saved path and the image
+      // bytes leave only as a file event, never as block text.
+      toolName = "image-generation";
+      title = "Image generation";
+      if (typeof item.revisedPrompt === "string" && item.revisedPrompt.trim()) title += `: ${oneLine(item.revisedPrompt, 100)}`;
+      addLine("Prompt", item.revisedPrompt);
+      status = item.failure || item.status === "failed" ? "failed" : ["inProgress", "in_progress", "generating", "pending"].includes(item.status) ? "streaming" : "complete";
     } else return {};
     return { ...boundText(lines.join("\n")), toolName, ...(title ? { title } : {}), status };
+  };
+  // A reasoning item has summary parts (`summary`, streamed with a
+  // `summaryIndex`) and raw parts (`content`, `contentIndex`). Streaming and
+  // the completed item produce the same text: the non-empty parts, summary
+  // first, each part its own paragraph.
+  const reasoningText = (summary, content) => [...(Array.isArray(summary) ? summary : []), ...(Array.isArray(content) ? content : [])]
+    .filter((part) => typeof part === "string" && part.trim()).join("\n\n");
+  const reasoningParts = new Map();
+  const MAX_REASONING_PARTS = 200;
+  const reasoningPartIndex = (value) => (Number.isSafeInteger(value) && value >= 0 && value < MAX_REASONING_PARTS ? value : 0);
+  const reasoningState = (blockId) => {
+    if (!blocks.has(blockId)) putItem({ id: blockId, type: "reasoning", text: "" }, "streaming");
+    let parts = reasoningParts.get(blockId);
+    if (!parts) {
+      parts = { summary: [], content: [] };
+      reasoningParts.set(blockId, parts);
+    }
+    return parts;
+  };
+  const appendReasoning = (blockId, channel, index, delta) => {
+    const parts = reasoningState(blockId);
+    const block = blocks.get(blockId);
+    const opens = !parts[channel][index];
+    parts[channel][index] = `${parts[channel][index] ?? ""}${delta}`;
+    // The first text of a later part opens a new paragraph after the earlier ones.
+    const text = `${opens && delta.trim() && (block.text ?? "") !== "" ? "\n\n" : ""}${delta}`;
+    block.text = `${block.text ?? ""}${text}`;
+    emit({ type: "textDelta", blockId, text });
   };
   const itemText = (item) => {
     if (item?.type === "userMessage") {
@@ -457,7 +494,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       return text ? `${text}\n\n${markers}` : markers;
     }
     if (item?.type === "agentMessage" || item?.type === "plan") return item.text || "";
-    if (item?.type === "reasoning") return [...(item.summary || []), ...(item.content || [])].join("\n");
+    if (item?.type === "reasoning") return reasoningText(item.summary, item.content);
     if (item?.type === "webSearch") return webSearchText(item);
     if (item?.type === "commandExecution") {
       return [
@@ -474,7 +511,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     if (type === "agentMessage") return "assistant";
     if (type === "reasoning" || type === "plan") return "thinking";
     if (type === "contextCompaction") return "compaction";
-    if (["commandExecution", "fileChange", "webSearch", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "subAgentActivity", "imageView"].includes(type)) return "tool";
+    if (["commandExecution", "fileChange", "webSearch", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "subAgentActivity", "imageView", "imageGeneration"].includes(type)) return "tool";
     return "unknown";
   };
   const itemLabel = (type) => ({
@@ -490,8 +527,75 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     collabAgentToolCall: "Agent",
     subAgentActivity: "Agent",
     imageView: "Image",
+    imageGeneration: "Image generation",
     contextCompaction: "Compaction",
   })[type] || "Codex item";
+  // Chat files (CONTRACT.md, "File events"): where a tool wrote or showed a
+  // file, and images a tool returned or generated. Only the location or the
+  // bytes are forwarded as a `file` event, never added to block text.
+  const FILE_EVENT_LIMIT = 200;
+  const INLINE_FILE_LIMIT = 20 * 1024 * 1024;
+  const INLINE_BASE64_LIMIT = Math.ceil(INLINE_FILE_LIMIT / 3) * 4;
+  const IMAGE_EXTENSION_TYPES = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+  const INLINE_MEDIA_TYPES = new Set([
+    "image/png", "image/jpeg", "image/gif", "image/webp",
+    "audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3", "audio/ogg", "audio/webm", "audio/mp4", "audio/aac", "audio/flac",
+  ]);
+  const notedFiles = new Set();
+  const imageTypeOfPath = (value) => {
+    const extension = String(value).split(".").pop().toLowerCase();
+    return Object.hasOwn(IMAGE_EXTENSION_TYPES, extension) ? IMAGE_EXTENSION_TYPES[extension] : undefined;
+  };
+  const noteFile = (blockId, rawPath, origin) => {
+    if (typeof rawPath !== "string" || notedFiles.size >= FILE_EVENT_LIMIT) return;
+    const trimmed = rawPath.trim();
+    if (!trimmed || trimmed.length > 4096 || trimmed.includes(String.fromCharCode(0))) return;
+    const absolute = path.isAbsolute(trimmed) ? trimmed : path.resolve(config.cwd, trimmed);
+    const key = JSON.stringify([blockId, absolute]);
+    if (notedFiles.has(key)) return;
+    notedFiles.add(key);
+    const mimeType = imageTypeOfPath(absolute);
+    emit({ type: "file", blockId, path: absolute, origin, ...(mimeType ? { mimeType } : {}) });
+  };
+  const noteInlineFile = (blockId, mimeType, data, origin) => {
+    const type = typeof mimeType === "string" ? mimeType.toLowerCase() : "";
+    if (!INLINE_MEDIA_TYPES.has(type) || typeof data !== "string" || !data || data.length > INLINE_BASE64_LIMIT
+      || notedFiles.size >= FILE_EVENT_LIMIT || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return;
+    const key = JSON.stringify([blockId, data.length, data.slice(0, 48), data.slice(-48)]);
+    if (notedFiles.has(key)) return;
+    notedFiles.add(key);
+    emit({ type: "file", blockId, origin, inline: { mimeType: type, base64: data } });
+  };
+  // `data:<type>;base64,<data>` (dynamic tool image items and generated images).
+  const noteDataUrlFile = (blockId, url, origin) => {
+    const match = typeof url === "string" ? /^data:([^;,]+);base64,(.+)$/s.exec(url) : null;
+    if (match) noteInlineFile(blockId, match[1], match[2], origin);
+  };
+  const sniffImageType = (base64) => base64.startsWith("iVBORw0KGgo") ? "image/png" : base64.startsWith("/9j/") ? "image/jpeg"
+    : base64.startsWith("R0lGOD") ? "image/gif" : base64.startsWith("UklGR") ? "image/webp" : undefined;
+  const noteItemFiles = (blockId, item) => {
+    if (item.type === "fileChange") {
+      if (item.status !== "completed") return;
+      for (const change of Array.isArray(item.changes) ? item.changes : []) {
+        if (!change || typeof change !== "object" || change.kind?.type === "delete") continue;
+        const moved = change.kind?.type === "update" && typeof change.kind.move_path === "string" && change.kind.move_path ? change.kind.move_path : undefined;
+        noteFile(blockId, moved ?? change.path, "written");
+      }
+    } else if (item.type === "imageView") noteFile(blockId, item.path, "read");
+    else if (item.type === "imageGeneration") {
+      if (item.failure || ["inProgress", "in_progress", "generating", "pending", "failed"].includes(item.status)) return;
+      if (typeof item.savedPath === "string" && item.savedPath) noteFile(blockId, item.savedPath, "generated");
+      else if (typeof item.result === "string" && item.result) {
+        if (item.result.startsWith("data:")) noteDataUrlFile(blockId, item.result, "generated");
+        else noteInlineFile(blockId, sniffImageType(item.result), item.result, "generated");
+      }
+    } else if (isToolCall(item) && item.status !== "inProgress") {
+      for (const part of Array.isArray(item.type === "mcpToolCall" ? item.result?.content : item.contentItems) ? (item.type === "mcpToolCall" ? item.result.content : item.contentItems) : []) {
+        if (["image", "audio"].includes(part?.type)) noteInlineFile(blockId, part.mimeType, part.data, "returned");
+        else if (part?.type === "inputImage") noteDataUrlFile(blockId, part.imageUrl, "returned");
+      }
+    }
+  };
   const putItem = (item, overrideStatus) => {
     if (!item || typeof item.id !== "string") return;
     const kind = itemKind(item.type);
@@ -514,6 +618,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     };
     blocks.set(item.id, block);
     emit({ type: "block", block });
+    try { noteItemFiles(item.id, item); } catch { /* a malformed item shows its block without files */ }
   };
   // One fallback block per method name: a stream of some new event must not
   // flood the transcript, and a handler that keeps failing on one method is
@@ -1296,6 +1401,8 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       return;
     }
     if (method === "item/completed") {
+      // The completed reasoning item carries every part: it replaces the streamed text.
+      if (params.item?.type === "reasoning" && typeof params.item.id === "string") reasoningParts.delete(params.item.id);
       putItem(params.item);
       return;
     }
@@ -1309,10 +1416,28 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       }
       return;
     }
-    if (["item/reasoning/summaryTextDelta", "item/reasoning/textDelta", "item/plan/delta"].includes(method)) {
+    if (method === "item/reasoning/summaryTextDelta" || method === "item/reasoning/textDelta") {
       const blockId = params.itemId;
       if (typeof blockId === "string" && typeof params.delta === "string") {
-        if (!blocks.has(blockId)) putItem({ id: blockId, type: method.includes("plan") ? "plan" : "reasoning", text: "" }, "streaming");
+        const summary = method === "item/reasoning/summaryTextDelta";
+        appendReasoning(blockId, summary ? "summary" : "content", reasoningPartIndex(summary ? params.summaryIndex : params.contentIndex), params.delta);
+      }
+      return;
+    }
+    if (method === "item/reasoning/summaryPartAdded") {
+      // A new summary part: the block exists and the part is known before its first text.
+      const blockId = params.itemId;
+      if (typeof blockId === "string") {
+        const parts = reasoningState(blockId);
+        const index = reasoningPartIndex(params.summaryIndex);
+        parts.summary[index] ??= "";
+      }
+      return;
+    }
+    if (method === "item/plan/delta") {
+      const blockId = params.itemId;
+      if (typeof blockId === "string" && typeof params.delta === "string") {
+        if (!blocks.has(blockId)) putItem({ id: blockId, type: "plan", text: "" }, "streaming");
         const block = blocks.get(blockId);
         block.text = `${block.text || ""}${params.delta}`;
         emit({ type: "textDelta", blockId, text: params.delta });
@@ -1356,7 +1481,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       emit({ type: "block", block });
       return;
     }
-    if (method === "item/commandExecution/terminalInteraction" || method === "item/reasoning/summaryPartAdded") return;
+    if (method === "item/commandExecution/terminalInteraction") return;
     if (method === "serverRequest/resolved") {
       resolveApproval(params.requestId);
       return;
@@ -1469,14 +1594,20 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   // shape makes the whole listing unrecognized, because a name misread as
   // absent would silently drop a restriction.
   const FEATURE_ROW = /^([A-Za-z][A-Za-z0-9_.-]*)\s+([A-Za-z][A-Za-z _-]*?)\s+(true|false)$/;
+  // The `<enabled>` column of each parsed listing (read only by the Fusion
+  // sidekick's background-terminal check below).
+  const listingEnabled = new WeakMap();
   const parseFeatureListing = (text) => {
     const rows = text.split(/\r?\n/).map((row) => row.trimEnd()).filter((row) => row.trim() !== "");
     const features = new Map();
+    const enabled = new Map();
     for (const row of rows) {
       const match = FEATURE_ROW.exec(row);
       if (!match) return undefined;
       features.set(match[1], match[2]);
+      enabled.set(match[1], match[3] === "true");
     }
+    listingEnabled.set(features, enabled);
     // A real listing names the features PiUI already restricts.
     const known = [...DISABLED_FEATURES, ...SUBAGENT_FEATURES].some((name) => features.has(name));
     return rows.length >= 5 && known ? features : undefined;
@@ -1485,8 +1616,11 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   // (a pooled workspace opens many sessions through one process).
   const featureCache = (globalThis.__piuiCodexFeatureListings ??= new Map());
   const PROBE_NOT_ENDED = Symbol("probe-not-ended");
-  const probeFeatures = async () => {
-    const key = JSON.stringify([config.runtimeProgram, config.runtimeArgs]);
+  // `extraArgs`: global options placed before `features list`, to read what
+  // they actually switch (Codex 0.169.0 keeps `unified_exec` on after
+  // `--disable unified_exec`).
+  const probeFeatures = async (extraArgs = []) => {
+    const key = JSON.stringify([config.runtimeProgram, config.runtimeArgs, extraArgs]);
     if (featureCache.has(key)) return featureCache.get(key);
     const probePlatform = probeHooks.platform ?? process.platform;
     const probeSpawn = probeHooks.spawn ?? spawn;
@@ -1502,7 +1636,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       };
       let probe;
       try {
-        probe = probeSpawn(config.runtimeProgram, [...config.runtimeArgs, "features", "list"], {
+        probe = probeSpawn(config.runtimeProgram, [...config.runtimeArgs, ...extraArgs, "features", "list"], {
           cwd: config.cwd,
           env: nativeEnvironment,
           windowsHide: true,
@@ -1602,9 +1736,29 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   if (listedFeatures && subagentsOff && SUBAGENT_FEATURES.some((name) => !listedFeatures.has(name) || listedFeatures.get(name) === "removed")) {
     throw fail("unsupported-native-subagent-policy", "Codex cannot prove that native subagents are disabled for this session.");
   }
+  // A Fusion sidekick (`backgroundTasks: false`, ADR-076) must prove from the
+  // installed CLI's own listing that it cannot delegate: the subagent switches
+  // read `false` once disabled (verified on 0.165.0 and 0.169.0, where
+  // `multi_agent` is `deprecated`). Background terminals (`unified_exec`) are
+  // switched off where that takes effect; a CLI that keeps them on (0.169.0)
+  // still starts, and the sidekick's instructions plus the broker's turn end
+  // bound the work. An absent `unified_exec` has no background terminals.
+  const noBackground = config.backgroundTasks === false;
+  if (noBackground && (!listedFeatures || SUBAGENT_FEATURES.some((name) => !listedFeatures.has(name) || listedFeatures.get(name) === "removed"))) {
+    throw fail("unsupported-native-subagent-policy", "Codex cannot prove that native subagents are disabled for this session.");
+  }
+  if (noBackground) {
+    const switched = await probeFeatures(SUBAGENT_FEATURES.flatMap((name) => ["--disable", name]));
+    const enabled = switched && listingEnabled.get(switched);
+    if (!enabled || SUBAGENT_FEATURES.some((name) => enabled.get(name) !== false)) {
+      throw fail("unsupported-native-subagent-policy", "Codex cannot prove that native subagents are disabled for this session.");
+    }
+  }
+  const unifiedExecListed = Boolean(listedFeatures?.has("unified_exec")) && listedFeatures.get("unified_exec") !== "removed";
   const disabledFeatures = [
     ...DISABLED_FEATURES.filter((name) => !listedFeatures || listedFeatures.has(name)),
     ...(subagentsOff ? SUBAGENT_FEATURES : []),
+    ...(noBackground && unifiedExecListed ? ["unified_exec"] : []),
     ...(nanoSource ? ["hooks"] : []),
   ];
   const args = [
@@ -2177,6 +2331,21 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       resourceConfig[`mcp_servers.${rule.id}.enabled`] = rule.enabled;
     } else throw cleanupStartupFailure(fail("unsupported-resource-policy", "The resource policy is invalid."));
   }
+  // A Fusion sidekick in a sandboxed preset runs without the person's MCP
+  // servers (ADR-076): their processes run outside the sandbox, so a lead that
+  // has none must not get them through its sidekick. Every configured server
+  // is switched off for this thread; an unreadable configuration refuses.
+  if (config.backgroundTasks === false && (config.permissionMode === "read-only" || config.permissionMode === "workspace-write")) {
+    const refuse = () => cleanupStartupFailure(fail("unsupported-resource-policy", "Codex cannot prove that MCP servers are off for this sidekick."));
+    const read = await readConfig().catch(() => undefined);
+    if (!read?.config || typeof read.config !== "object") throw refuse();
+    const servers = read.config.mcp_servers ?? {};
+    if (typeof servers !== "object" || Array.isArray(servers)) throw refuse();
+    for (const id of Object.keys(servers)) {
+      if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw refuse();
+      resourceConfig[`mcp_servers.${id}.enabled`] = false;
+    }
+  }
   const threadParams = {
     cwd: config.cwd,
     ...(serviceTier ? { serviceTier: serviceTier === "fast" ? "fast" : "default" } : {}),
@@ -2202,7 +2371,14 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
         if (!Array.isArray(turns?.data)) throw cleanupStartupFailure(protocolMismatch());
         for (const turn of turns.data) {
           if (typeof turn?.id !== "string" || !Array.isArray(turn.items)) throw cleanupStartupFailure(protocolMismatch());
-          if (turn.items.some(item => item?.type === "userMessage" && item.id === fork.beforeBlockId)) {
+          const at = turn.items.findIndex(item => item?.type === "userMessage" && item.id === fork.beforeBlockId);
+          if (at >= 0) {
+            // `lastTurnId` cuts between turns. A message inside a turn (a steer
+            // sent while it ran) has earlier items of that turn before it, and
+            // cutting at the previous turn would silently drop them: refuse.
+            if (turn.items.slice(0, at).some(item => !["hookPrompt", "contextCompaction"].includes(item?.type))) {
+              throw cleanupStartupFailure(fail("branch-unsupported", "This chat cannot be branched natively."));
+            }
             found = true;
             empty = previousTurnId === undefined;
             break;
@@ -2298,9 +2474,24 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     const effectiveName = currentModel?.id === opened.model ? currentModel.name : opened.model;
     currentModel = { id: opened.model, ...(currentProvider ? { provider: currentProvider } : {}), name: effectiveName };
   }
-  const initialTurns = Array.isArray(opened.initialTurnsPage?.data)
-    ? [...opened.initialTurnsPage.data].reverse()
-    : thread.turns || [];
+  // `initialTurnsPage` is only the newest page of the thread (newest turn
+  // first). Follow its cursor through older pages so a resumed or forked chat
+  // shows its whole history, within MAX_HISTORY_PAGES pages in total. A page
+  // that cannot be read ends the walk: the chat opens with what was loaded.
+  const MAX_HISTORY_PAGES = 50;
+  const newestFirst = Array.isArray(opened.initialTurnsPage?.data) ? [...opened.initialTurnsPage.data] : undefined;
+  if (newestFirst) {
+    let cursor = opened.initialTurnsPage.nextCursor;
+    for (let page = 1; typeof cursor === "string" && cursor && page < MAX_HISTORY_PAGES; page += 1) {
+      let older;
+      try { older = await callNative("thread/turns/list", { threadId: thread.id, sortDirection: "desc", itemsView: "full", cursor }); }
+      catch { break; }
+      if (!Array.isArray(older?.data)) break;
+      newestFirst.push(...older.data);
+      cursor = older.nextCursor;
+    }
+  }
+  const initialTurns = newestFirst ? newestFirst.reverse() : thread.turns || [];
   for (const turn of initialTurns) for (const item of turn.items || []) putItem(item);
   const resumedActiveTurn = [...initialTurns].reverse().find((turn) => turn?.status === "inProgress");
   if (resumedActiveTurn?.id) activeTurnId = resumedActiveTurn.id;

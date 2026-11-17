@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createPiAdapter } from "./pi.mjs";
@@ -1074,5 +1075,86 @@ test("a guard-style select dialog reaches the host as an approval card and a can
     assert.deepEqual(approval.decisions, ["approve-once", "cancel"]);
     await adapter.respond({ requestId: approval.id, decision: "cancel" });
     assert.equal((await adapter.snapshot()).title, "ui:cancelled", "a cancelled dialog is a refusal the guard blocks on");
+  } finally { await adapter.dispose(); }
+});
+
+const piToolId = (callId) => `pi-tool-${createHash("sha256").update(callId).digest("hex").slice(0, 24)}`;
+const piStampedId = (kind, timestamp, rank) => `pi-${kind}-${createHash("sha256").update(`${timestamp}:${rank}`).digest("hex").slice(0, 24)}`;
+const RICH_TIMESTAMP = 1790000000900;
+
+test("Pi routes text, thinking and tool-call updates apart: streamed tool arguments are never assistant prose", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    await runScenario(adapter, events, "richlive");
+    const blocks = (await adapter.snapshot()).blocks.filter((block) => block.kind !== "user");
+    assert.deepEqual(blocks.map((block) => [block.kind, block.text]), [
+      ["thinking", "plan the change"], ["assistant", "First part."], ["assistant", "Second part."], ["tool", "Wrote notes.md"],
+    ]);
+    assert.ok(blocks.every((block) => block.status === "complete"));
+    assert.deepEqual(blocks.map((block) => block.id), [
+      piStampedId("thinking", RICH_TIMESTAMP, 0), piStampedId("assistant", RICH_TIMESTAMP, 0), piStampedId("assistant", RICH_TIMESTAMP, 1), piToolId("call-write"),
+    ]);
+    assert.doesNotMatch(JSON.stringify(events), /TOOLCALL-ARGS-MUST-NOT-BE-PROSE/);
+  } finally { await adapter.dispose(); }
+});
+
+test("Pi text_end heals a dropped delta and an unknown update type gets one fallback block", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    await runScenario(adapter, events, "updatekinds");
+    const blocks = (await adapter.snapshot()).blocks.filter((block) => block.kind !== "user");
+    assert.deepEqual(blocks.map((block) => [block.kind, block.text ?? null, block.safeSummary ?? null]), [
+      ["assistant", "Hello", null], ["unknown", null, "Unsupported Pi event: message_update.mystery_delta"],
+    ]);
+    assert.doesNotMatch(JSON.stringify(events), /TOOLCALL-ARGS-MUST-NOT-BE-PROSE/);
+  } finally { await adapter.dispose(); }
+});
+
+test("resumed Pi history projects the active branch with the blocks and ids the stream produced", async () => {
+  const liveEvents = [];
+  const live = await createPiAdapter(config(), (event) => liveEvents.push(event));
+  let liveBlocks;
+  try {
+    await runScenario(live, liveEvents, "richlive");
+    liveBlocks = (await live.snapshot()).blocks.filter((block) => block.kind !== "user");
+  } finally { await live.dispose(); }
+
+  const events = [];
+  const resumed = await createPiAdapter(config({ runtimeArgs: [fixture, "--history-rich"] }), (event) => events.push(event));
+  try {
+    const blocks = (await resumed.snapshot()).blocks;
+    assert.deepEqual(blocks.map((block) => [block.kind, block.text ?? null]), [
+      ["user", "do it"], ["thinking", "plan the change"], ["assistant", "First part."], ["assistant", "Second part."],
+      ["tool", "Wrote notes.md"], ["compaction", null], ["assistant", "Done."],
+    ], "thinking, separate text blocks, the linked tool, the compaction; the abandoned branch is absent");
+    // The stream's blocks and the restored ones are the same blocks.
+    for (const block of liveBlocks) assert.deepEqual(blocks.find((candidate) => candidate.id === block.id)?.kind, block.kind);
+    const tool = blocks.find((block) => block.kind === "tool");
+    assert.deepEqual([tool.id, tool.status, tool.toolName, tool.title, tool.safeSummary], [piToolId("call-write"), "complete", "write", "write: notes.md", "The tool completed."]);
+    assert.equal(blocks.find((block) => block.kind === "compaction").status, "complete");
+    assert.equal(new Set(blocks.map((block) => block.id)).size, blocks.length);
+    assert.doesNotMatch(JSON.stringify(blocks), /ABANDONED|SECRET-MUST-NOT-LEAK/);
+    assert.deepEqual(events.filter((event) => event.type === "file"), [
+      { type: "file", blockId: piToolId("call-write"), path: resolve(process.cwd(), "notes.md"), origin: "written" },
+    ]);
+  } finally { await resumed.dispose(); }
+});
+
+test("Pi emits file events for written paths, an image file read and returned inline images only", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAH8wD3AAAAABJRU5ErkJggg==";
+  try {
+    await runScenario(adapter, events, "files");
+    assert.deepEqual(events.filter((event) => event.type === "file"), [
+      { type: "file", blockId: piToolId("call-w1"), path: resolve(process.cwd(), "out/a.txt"), origin: "written" },
+      { type: "file", blockId: piToolId("call-e1"), path: resolve(process.cwd(), "src/b.ts"), origin: "written" },
+      { type: "file", blockId: piToolId("call-r1"), path: resolve(process.cwd(), "shots/screen.PNG"), origin: "read", mimeType: "image/png" },
+      { type: "file", blockId: piToolId("call-b1"), origin: "returned", inline: { mimeType: "image/png", base64: tinyPng } },
+    ]);
+    // Block text never carries the path or the bytes beyond what it already showed.
+    assert.ok((await adapter.snapshot()).blocks.every((block) => !JSON.stringify(block).includes(tinyPng)));
   } finally { await adapter.dispose(); }
 });

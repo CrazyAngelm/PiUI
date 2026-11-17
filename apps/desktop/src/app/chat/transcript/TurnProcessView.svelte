@@ -5,6 +5,8 @@
   const t = useTranslation();
   import type { TimelineTurnProcess } from '../../../features/sessions/timelineView';
   import MarkdownContent from '../../../components/MarkdownContent.svelte';
+  import { answerText, useAnswerSource } from '../../../shared/conversation/answerSource';
+  import FullAnswerNotice from '../../../shared/conversation/FullAnswerNotice.svelte';
   import { Spinner } from '../../../lib/ui';
   import ActivityGroupView from './ActivityGroupView.svelte';
   import DiffStats from './DiffStats.svelte';
@@ -28,6 +30,8 @@
   const state = $derived(activityState(item.blocks));
   // A process of one group has nothing to outline: opening it lists the calls.
   const flat = $derived(item.parts.length === 1);
+  // A reply folded into the process reads the same text as in the chat: the full answer once loaded, no service markup.
+  const answers = useAnswerSource();
 </script>
 
 <div class="turn">
@@ -46,10 +50,14 @@
       {#each item.parts as part (part.type === 'block' ? part.block.id : part.id)}
         {#if part.type === 'activity-group'}
           <ActivityGroupView group={part} {language} {openState} {onOpenChange} {flat} />
-        {:else if (part.block.text ?? part.block.safeSummary ?? '').trim()}
-          <div class="turn__note" data-timeline-block={part.block.id}>
-            <MarkdownContent source={part.block.text ?? part.block.safeSummary ?? ''} compact={true} />
-          </div>
+        {:else}
+          {@const note = part.block.text ? answerText(part.block, answers.full(part.block.id)) : (part.block.safeSummary ?? '')}
+          {#if note.trim() !== ''}
+            <div class="turn__note" data-timeline-block={part.block.id}>
+              <MarkdownContent source={note} compact={true} streaming={part.block.status === 'streaming'} />
+              <FullAnswerNotice block={part.block} />
+            </div>
+          {/if}
         {/if}
       {/each}
     </div>

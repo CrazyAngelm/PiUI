@@ -457,3 +457,30 @@ presentation and existing owner behavior.
 # Session tasks (ADR-072)
 
 `workspace-session-tasks-v1.ts` adds `workspace_task_stop_v1` and the additive v15 `SessionSnapshot.tasks` field and `tasks` event: the subagents and shell commands a live agent runs, including background ones, at most 32 one-line entries. A harness that reports none sends neither.
+
+# Chat files v1
+
+`chat-files-v1.ts` is an independently versioned route (`workspace_chat_files_v1`,
+`protocol: 1`) for files the agent writes, reads, generates or returns (ADR-074).
+The WebView never names a path: it sends a session id and an opaque file id. The
+host keeps a per-session registry (at most 200 files, filled only from that
+session's native events and history), re-canonicalizes on every call, serves
+regular files only and refuses symlinks. `list` returns `ChatFileV1` entries
+(kind, size, `openable`, `previewable`, `revealable`; one entry per reporting
+block, the same `id` for the same file); `preview` returns base64 bytes sniffed
+from their magic bytes (image up to 20 MB, audio and video up to 64 MB, SVG and
+documents are cards); `save` opens the native Save as dialog and copies
+(`saved: false` on cancel); `reveal` shows the file in its folder; `open` uses the
+system default application and is refused for executable types (`.exe`, `.bat`,
+`.cmd`, `.ps1`, `.lnk`, `.msi`, ...); `resolve` finds a file by name or workspace-
+relative path (absolute paths, drive letters, UNC and `..` refused). Every command
+refuses safe mode. Inline bytes (a read image, an MCP result) are stored by the
+host under its app data (`chat-files-v1`, capped per session, cleared at startup).
+New codes: `CHAT_FILE_UNAVAILABLE`, `CHAT_FILE_NOT_PREVIEWABLE`,
+`CHAT_FILE_OPEN_REFUSED`, `CHAT_FILE_FAILED`. `fixtures/chat-files-v1.json` is
+checked by the Rust host and the TypeScript client. The desktop CSP gains `blob:`
+in `img-src` and `media-src 'self' blob:`.
+
+# Chat links v1
+
+`chat-link-v1.ts` is the route `chat_open_link_v1` with arguments `{ request: { url, language? } }` and the result `{ opened }` (ADR-075). The WebView supplies the address, so the host never opens it on that say-so: it parses it again, accepts only `http` and `https` with a host, no user name or password, at most 2048 bytes and no whitespace or control character, refuses safe mode, and asks the person in a native dialog that shows the exact address. Only Yes opens it (`opened: true`); No answers `opened: false`. One dialog is open at a time. `language` (`en` or `ru`) only picks the wording of the dialog. Errors are `{ code }` with `INVALID_LINK`, `SAFE_MODE`, `BUSY` and `OPEN_FAILED`; unknown request fields are rejected.

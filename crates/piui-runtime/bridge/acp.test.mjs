@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync } from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createAcpAdapter } from './acp.mjs';
 
 const fixture = fileURLToPath(new URL('./acp.test-fixture.mjs', import.meta.url));
@@ -607,4 +607,48 @@ test('Goose starts privately, preserves the project cwd and locks the Nano model
     await a?.dispose();
     rmdirSync(root);
   }
+});
+
+test('a tool update does not end the answer text; a new tool call does; message ids keep their own block', async () => {
+  const e = events(); const a = await createAcpAdapter(config(), e.emit);
+  try {
+    const done = turnDone(e);
+    await a.prompt({ text: 'interleave', mode: 'prompt' });
+    assert.equal((await done).outcome, 'succeeded');
+    assert.deepEqual(a.snapshot().blocks.filter(b => b.kind === 'assistant').map(b => [b.text, b.status]), [
+      ['AAA ', 'complete'], ['BBB CCC DDD', 'complete'], ['one two', 'complete'],
+    ]);
+  } finally { await a.dispose(); }
+});
+
+test('the stop reason decides how open blocks end: cancelled is interrupted, a refusal is failed', async () => {
+  for (const [text, status, outcome] of [['cancelled-stream', 'interrupted', 'interrupted'], ['refused-stream', 'failed', 'failed']]) {
+    const e = events(); const a = await createAcpAdapter(config(), e.emit);
+    try {
+      const done = turnDone(e);
+      await a.prompt({ text, mode: 'prompt' });
+      assert.equal((await done).outcome, outcome);
+      assert.deepEqual(a.snapshot().blocks.filter(b => ['assistant', 'thinking'].includes(b.kind)).map(b => [b.text, b.status]), [
+        ['half an answer', status], ['half a thought', status],
+      ]);
+    } finally { await a.dispose(); }
+  }
+});
+
+test('finished edit and read tools, media and file links become file events without touching block text', async () => {
+  const e = events(); const a = await createAcpAdapter(config(), e.emit);
+  const tiny = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAH8wD3AAAAABJRU5ErkJggg==';
+  try {
+    const done = turnDone(e);
+    await a.prompt({ text: 'files', mode: 'prompt' });
+    assert.equal((await done).outcome, 'succeeded');
+    assert.deepEqual(e.values.filter(v => v.type === 'file'), [
+      { type: 'file', blockId: 'acp-tool-f-edit', path: resolve(process.cwd(), 'src/x.ts'), origin: 'written' },
+      { type: 'file', blockId: 'acp-tool-f-read', path: resolve(process.cwd(), 'pics/A.PNG'), origin: 'read', mimeType: 'image/png' },
+      { type: 'file', blockId: 'acp-tool-f-media', origin: 'returned', inline: { mimeType: 'image/png', base64: tiny } },
+      { type: 'file', blockId: 'acp-tool-f-media', origin: 'returned', inline: { mimeType: 'audio/wav', base64: 'UklGRg==' } },
+      { type: 'file', blockId: 'acp-tool-f-media', path: join(process.cwd(), 'out', 'report.pdf'), origin: 'returned' },
+    ]);
+    assert.doesNotMatch(JSON.stringify(a.snapshot().blocks), /iVBORw0KGgo|report\.pdf/);
+  } finally { await a.dispose(); }
 });

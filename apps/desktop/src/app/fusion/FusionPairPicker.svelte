@@ -1,10 +1,10 @@
 <script lang="ts">
   import Check from '@lucide/svelte/icons/check';
   import { t } from '../../features/locale/language';
-  import { fusionHost, type BriefPolicyV1, type FusionPairV1, type FusionRefusalV1, type FusionRoleNameV1, type FusionRoleV1 } from '../../host-api/fusionClient';
+  import { fusionHost, type BriefPolicyV1, type FusionCapabilitiesV1, type FusionCapabilityDimensionV1, type FusionPairV1, type FusionRefusalV1, type FusionRoleNameV1, type FusionRoleV1 } from '../../host-api/fusionClient';
   import { Segmented, Spinner, Switch } from '../../lib/ui';
   import FusionRolePicker, { type FusionHarnessOption } from './FusionRolePicker.svelte';
-  import { defaultPair, fusionErrorText, pairKey, refusalCopy, rememberablePair, restorePair, withOptions, withRole } from './fusionPair';
+  import { allowancePhrases, defaultPair, fusionErrorText, pairKey, refusalCopy, rememberablePair, restorePair, withOptions, withRole } from './fusionPair';
 
   /**
    * The pair of a new Fusion chat (ADR-043): who leads, who is the sidekick,
@@ -28,8 +28,8 @@
   const CHECK_DELAY_MS = 250;
 
   type Verdict =
-    | { key: string; kind: 'ok' }
-    | { key: string; kind: 'refused'; refusal: FusionRefusalV1; role: FusionRoleNameV1 }
+    | { key: string; kind: 'ok'; sidekickMode: FusionRoleV1['permissionMode'] | undefined; capabilities: FusionCapabilitiesV1 | undefined }
+    | { key: string; kind: 'refused'; refusal: FusionRefusalV1; role: FusionRoleNameV1; dimension: FusionCapabilityDimensionV1 | undefined }
     | { key: string; kind: 'error'; message: string };
 
   let verdict = $state<Verdict | undefined>();
@@ -77,7 +77,9 @@
         .request({ type: 'checkPair', workspaceId: id, pair: current })
         .then((result): Verdict => {
           if (result.type !== 'pairCheck') return { key, kind: 'error', message: fusionErrorText(undefined) };
-          return result.ok ? { key, kind: 'ok' } : { key, kind: 'refused', refusal: result.refusal, role: result.role };
+          return result.ok
+            ? { key, kind: 'ok', sidekickMode: result.sidekickMode, capabilities: result.capabilities }
+            : { key, kind: 'refused', refusal: result.refusal, role: result.role, dimension: result.dimension };
         })
         .catch((error: unknown): Verdict => ({ key, kind: 'error', message: fusionErrorText(error) }))
         .then((answer) => {
@@ -97,7 +99,19 @@
     ready = settled && verdict?.kind === 'ok';
   });
 
-  const refusalFor = (role: FusionRoleNameV1) => (verdict?.kind === 'refused' && verdict.role === role ? refusalCopy(verdict.refusal) : undefined);
+  const refusalFor = (role: FusionRoleNameV1) => (verdict?.kind === 'refused' && verdict.role === role ? refusalCopy(verdict.refusal, verdict.dimension) : undefined);
+
+  // What the sidekick will effectively be allowed, from the host's matrix (ADR-076).
+  const allowance = $derived(
+    verdict?.kind === 'ok' && settled
+      ? {
+          text: allowancePhrases(verdict.capabilities)
+            .map((phrase) => $t(phrase))
+            .join(', '),
+          narrowed: verdict.sidekickMode !== undefined && verdict.sidekickMode !== pair?.sidekick.permissionMode,
+        }
+      : undefined,
+  );
 
   function change(role: FusionRoleNameV1, next: FusionRoleV1): void {
     if (pair) pair = withRole(pair, role, next);
@@ -143,6 +157,9 @@
         <Spinner size={12} /> {$t('Checking the pair…')}
       {:else if verdict?.kind === 'ok'}
         <Check size={14} aria-hidden="true" /> {$t('This pair can start.')}
+        {#if allowance}
+          <span class="allowance">{$t('Sidekick allowance')}: {allowance.text}{#if allowance.narrowed} ({$t('lowered to fit the lead')}){/if}</span>
+        {/if}
       {:else if verdict?.kind === 'refused'}
         {$t('This pair cannot start yet. See the highlighted role.')}
       {:else if verdict?.kind === 'error'}
@@ -210,6 +227,9 @@
     margin: 0;
     color: var(--piui-text-muted);
     font-size: var(--piui-text-sm);
+  }
+  .allowance {
+    color: var(--piui-text);
   }
   .status--problem {
     color: var(--piui-warning-text);

@@ -20,6 +20,7 @@ mod board;
 mod board_runs;
 mod board_sessions;
 mod catalog_watch;
+mod chat_link;
 mod contributions;
 mod dto;
 mod fusion;
@@ -1034,6 +1035,8 @@ pub fn run() -> Result<(), tauri::Error> {
             nano::remote::nano_remote_kick_v1,
             nano::remote::nano_remote_forget_v1,
             workspace_api::composer_inputs::workspace_composer_inputs_v1,
+            workspace_api::chat_files::workspace_chat_files_v1,
+            chat_link::chat_open_link_v1,
             plugins::api::plugins_v1,
             plugins::api::plugin_command_v1,
             plugins::api::plugin_template_v1,

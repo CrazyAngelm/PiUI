@@ -7,7 +7,8 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
   const { spawn } = await import('node:child_process');
   const { createServer } = await import('node:http');
   const { createHash, randomUUID } = await import('node:crypto');
-  const { isAbsolute, join } = await import('node:path');
+  const { isAbsolute, join, resolve: resolvePath } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
   const { mkdtemp, readFile, rm, rmdir } = await import('node:fs/promises');
 
   const PROTOCOL_VERSION = 1;
@@ -163,6 +164,8 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
   // --- Session state --------------------------------------------------------
   const blocks = new Map();
   const messageKeys = new Map();
+  // `<kind>:<message id>` -> the block that message streams into.
+  const messageStreams = new Map();
   const tools = new Map();
   const approvals = new Map();
   const followUps = [];
@@ -197,6 +200,7 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
   const finishStreaming = (state = 'complete') => {
     for (const block of blocks.values()) if (block.status === 'streaming' && block.kind !== 'tool') put({ ...block, status: state });
     streaming = undefined;
+    messageStreams.clear();
   };
 
   // --- Catalog: session config options first, legacy models/modes second ---
@@ -370,6 +374,64 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
     }
     return bounded(parts.join('\n\n'));
   };
+  // Chat files (CONTRACT.md, "File events"): files an edit tool wrote, image
+  // files it read, and media or file links it returned. Only the location or
+  // the bytes are forwarded as a `file` event, never added to block text.
+  const FILE_EVENT_LIMIT = 200;
+  const INLINE_FILE_LIMIT = 20 * 1024 * 1024;
+  const INLINE_BASE64_LIMIT = Math.ceil(INLINE_FILE_LIMIT / 3) * 4;
+  const IMAGE_EXTENSION_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+  const INLINE_MEDIA_TYPES = new Set([
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+    'audio/wav', 'audio/x-wav', 'audio/mpeg', 'audio/mp3', 'audio/ogg', 'audio/webm', 'audio/mp4', 'audio/aac', 'audio/flac',
+  ]);
+  const notedFiles = new Set();
+  const imageTypeOfPath = value => {
+    const extension = String(value).split('.').pop().toLowerCase();
+    return Object.hasOwn(IMAGE_EXTENSION_TYPES, extension) ? IMAGE_EXTENSION_TYPES[extension] : undefined;
+  };
+  const noteFile = (blockId, rawPath, origin) => {
+    if (typeof rawPath !== 'string' || notedFiles.size >= FILE_EVENT_LIMIT) return;
+    const trimmed = rawPath.trim();
+    if (!trimmed || trimmed.length > 4096 || trimmed.includes(String.fromCharCode(0))) return;
+    const absolute = isAbsolute(trimmed) ? trimmed : resolvePath(cwd, trimmed);
+    const key = JSON.stringify([blockId, absolute]);
+    if (notedFiles.has(key)) return;
+    notedFiles.add(key);
+    const mimeType = imageTypeOfPath(absolute);
+    emit({ type: 'file', blockId, path: absolute, origin, ...(mimeType ? { mimeType } : {}) });
+  };
+  const noteInlineFile = (blockId, mimeType, data, origin) => {
+    const type = typeof mimeType === 'string' ? mimeType.toLowerCase() : '';
+    if (!INLINE_MEDIA_TYPES.has(type) || typeof data !== 'string' || !data || data.length > INLINE_BASE64_LIMIT
+      || notedFiles.size >= FILE_EVENT_LIMIT || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return;
+    const key = JSON.stringify([blockId, data.length, data.slice(0, 48), data.slice(-48)]);
+    if (notedFiles.has(key)) return;
+    notedFiles.add(key);
+    emit({ type: 'file', blockId, origin, inline: { mimeType: type, base64: data } });
+  };
+  // A `resource_link` names a file only through a `file:` URI.
+  const noteFileUri = (blockId, uri, origin) => {
+    if (typeof uri !== 'string' || uri.length > 4096 || !/^file:\/\//i.test(uri)) return;
+    let localPath;
+    try { localPath = fileURLToPath(uri); } catch { return; }
+    noteFile(blockId, localPath, origin);
+  };
+  const noteToolFiles = state => {
+    if (state.status !== 'completed') return;
+    for (const item of state.content) {
+      if (item?.type === 'diff') noteFile(state.blockId, item.path, 'written');
+      else if (item?.type === 'content' && item.content) {
+        const part = item.content;
+        if (part.type === 'image' || part.type === 'audio') noteInlineFile(state.blockId, part.mimeType, part.data, 'returned');
+        else if (part.type === 'resource_link') noteFileUri(state.blockId, part.uri, 'returned');
+      }
+    }
+    for (const location of state.locations) {
+      if (state.kind === 'edit') noteFile(state.blockId, location?.path, 'written');
+      else if (state.kind === 'read' && typeof location?.path === 'string' && imageTypeOfPath(location.path)) noteFile(state.blockId, location.path, 'read');
+    }
+  };
   const renderTool = state => {
     const { text, truncated } = toolText(state);
     const statusValue = state.status === 'completed' ? 'complete' : state.status === 'failed' ? 'failed' : state.status === 'cancelled' ? 'interrupted' : loading ? 'complete' : 'streaming';
@@ -386,9 +448,13 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
     if (Array.isArray(update.locations)) state.locations = update.locations.slice(0, 50);
     if (update.rawInput !== undefined) state.rawInput = update.rawInput;
     if (!created && !tools.has(key) && !update.title) state.title = `${name} tool`;
+    // A new tool call ends the text before it; an update of a call that is
+    // already shown is not part of the answer text and leaves its stream open.
+    const known = tools.has(key);
     tools.set(key, state);
-    streaming = undefined;
+    if (!known) streaming = undefined;
     renderTool(state);
+    try { noteToolFiles(state); } catch { /* a malformed tool update shows its block without files */ }
   };
   const appendText = (role, update) => {
     const content = update.content;
@@ -399,8 +465,13 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
     }
     const kind = role === 'assistant' ? 'assistant' : role === 'thinking' ? 'thinking' : 'user';
     const messageId = typeof update.messageId === 'string' ? update.messageId : undefined;
-    const current = streaming && blocks.get(streaming);
-    if (current && current.kind === kind && (messageId === undefined || messageKeys.get(current.id) === messageId)) {
+    // Chunks that name their message belong to that message's block, whatever
+    // tool updates or other messages came between; chunks without a message id
+    // continue the block of the same kind that is open.
+    const keyed = messageId === undefined ? undefined : blocks.get(messageStreams.get(`${kind}:${messageId}`));
+    const open = streaming && blocks.get(streaming);
+    const current = messageId === undefined ? (open?.kind === kind ? open : undefined) : keyed;
+    if (current) {
       const block = { ...current, text: `${current.text ?? ''}${content.text}` };
       blocks.set(block.id, block);
       // A replay sends whole blocks: its events may reach the host after the snapshot.
@@ -410,7 +481,10 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
     }
     const block = put({ id: `acp-${kind}-${++sequence}`, kind, label: kind === 'assistant' ? name : kind === 'thinking' ? 'Thinking' : 'You', text: content.text, status: loading ? 'complete' : 'streaming' });
     streaming = block.id;
-    if (messageId !== undefined) messageKeys.set(block.id, messageId);
+    if (messageId !== undefined) {
+      messageKeys.set(block.id, messageId);
+      messageStreams.set(`${kind}:${messageId}`, block.id);
+    }
   };
   const planBlock = entries => {
     const marks = { completed: '[x]', in_progress: '[~]', pending: '[ ]' };
@@ -505,7 +579,11 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
     instructionsSent = true;
     const input = instructions ? `Agent instructions:\n${instructions}\n\nTask:\n${text}` : text;
     void request('session/prompt', { sessionId, prompt: [{ type: 'text', text: input }] }).then(result => {
-      finishStreaming();
+      // The stop reason decides how the open blocks end: a cancelled turn is
+      // interrupted, a refusal or limit is failed, not complete.
+      const reason = result?.stopReason;
+      const outcome = reason === 'end_turn' ? 'succeeded' : reason === 'cancelled' ? 'interrupted' : 'failed';
+      finishStreaming(outcome === 'succeeded' ? 'complete' : outcome);
       settleApprovals();
       const usage = result?.usage;
       if (usage && typeof usage === 'object') {
@@ -515,8 +593,6 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
         }
         emit({ type: 'usage', usage: receipt });
       }
-      const reason = result?.stopReason;
-      const outcome = reason === 'end_turn' ? 'succeeded' : reason === 'cancelled' ? 'interrupted' : 'failed';
       if (outcome === 'failed') showError(STOP_FAILURES[reason] ?? `${name} ended the turn without a recognised outcome.`);
       emit({ type: 'turnCompleted', outcome });
       finishTurn();

@@ -46,6 +46,7 @@ export type {
   NativeCommand,
   NativeSkill,
 } from '../../../../../contracts/workspace-composer-inputs-v1';
+export type { ChatFileV1, ChatFilesCommand, ChatFilesResult } from '../../../../../contracts/chat-files-v1';
 export type {
   HarnessCatalogModel,
   HarnessModelsRequest,

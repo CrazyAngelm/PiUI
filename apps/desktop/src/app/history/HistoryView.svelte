@@ -37,6 +37,7 @@
     type HistoryFilter,
   } from './chatHistory.svelte';
   import { historyAgentLabel, parseStateLabel, scopeForWorkspace } from './piHistory';
+  import { openLinkInHost } from '../chat/openChatLink';
 
   interface Props {
     workspaceId: string;
@@ -356,6 +357,7 @@
           {:else}
             {#key chat.id}
               <Transcript
+                onOpenLink={openLinkInHost}
                 blocks={chatReader.blocks}
                 messageControls={chatControls}
                 onMessageAction={(id, action) => (action === 'copy' ? copyMessage(chatReader.blocks, id) : Promise.resolve())}
@@ -398,6 +400,7 @@
             {/if}
             {#key reader.sessionId}
               <Transcript
+                onOpenLink={openLinkInHost}
                 blocks={reader.blocks}
                 messageControls={readerControls}
                 onMessageAction={(id, action) => (action === 'copy' ? copyMessage(reader.blocks, id) : Promise.resolve())}

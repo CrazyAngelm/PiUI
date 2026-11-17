@@ -30,9 +30,53 @@ the sidekick (later).
 | Sidekick | Codex | workspace-write needs `[windows] sandbox = "unelevated"\|"elevated"` in the person's Codex `config.toml` (read-only check; PiUI never writes it) |
 | Sidekick | Pi | lead and sidekick both full access |
 
-Authority never grows: ranks read-only < workspace-write < full-access; the
-sidekick's rank is at most the lead's. Native modes are comparable only within
-one harness, so a cross-harness pair needs explicit modes on both roles.
+Authority never grows (ADR-076). Each adapter preset has an effective
+capability snapshot derived from what its bridge launches
+(`fusion/capability.rs`): writes, reads, shell, network and MCP. Claude Code
+read-only (`plan`) and workspace-write (`acceptEdits`) run no command, MCP
+tool or outside read, because PiUI lets their approvals only be denied; Codex
+read-only / workspace-write run any command inside the sandbox and read the
+whole disk; for a sidekick the bridge switches every configured MCP server off
+(their processes run outside the sandbox; an unreadable configuration refuses);
+Nano `native` asks the person before bash, write and edit; full access is
+unrestricted everywhere. Every dimension of the sidekick must be at most the
+lead's, except reads: by the owner's decision (2026-11-18, "Разрешить чтение
+вне проекта") a sidekick may read outside the project folder even when the lead
+cannot. It is a deliberate exception to same-or-less, made because restricting
+Codex reads on Windows needs the elevated sandbox backend (FUSION_EVIDENCE S12)
+and the Claude Code + Codex pair is the main use case; the allowance line still
+shows "reads outside the project". With reads exempt, a sandboxed command is
+covered by a lead that may make the sandbox's writes; a person-approved command
+is covered only by the same or an unrestricted shell; another harness's MCP
+servers only by a lead with unrestricted shell. When the requested sidekick
+preset exceeds the lead, the host narrows it to the strongest preset of that
+harness that fits and launches with that; it refuses only when no preset fits
+and names the dimension (`sidekick-exceeds-lead` + `dimension`). A read-only
+lead gets a read-only sidekick (Claude Code, Codex or Nano); a Claude Code
+workspace-write lead gets a Codex workspace-write sidekick; Pi still needs a
+full-access lead. Native modes stay comparable only within one harness. The
+picker shows the sidekick's allowance from the same matrix (`pairCheck`
+`sidekickMode` + `capabilities`) before launch. The picker's
+defaults come from the same matrix and are always admissible (a Codex
+sidekick still needs the sandbox check), and the picker remembers each role's
+model, reasoning and Fast; a remembered model is checked against the fresh
+catalog (`checkRoleAgainstCatalog`) and never silently replaced.
+
+A sidekick session must prove at launch that it cannot delegate or keep
+working after its turn (ADR-076): Claude Code gets
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` and `--disallowed-tools Agent`, and
+the first `system/init` tool list must not contain `Agent` or `Task` (else the
+session is stopped); Codex needs a successful `features list` that registers
+`multi_agent` and `multi_agent_v2`, and a second listing with both passed as
+`--disable` must read them `false` (verified on 0.165.0 and 0.169.0, where
+`multi_agent` is `deprecated`), else the launch is refused with
+`unsupported-native-subagent-policy`. `unified_exec` (background terminals)
+is passed as `--disable` when registered; Codex 0.169.0 keeps it on despite
+the flag, so there the sidekick instructions and the broker's turn end bound
+the work. Pi and Nano run
+every command inside the turn. A brief whose `scope` or `leaveAlone` points
+outside the project folder is refused, and its file facts are read from the
+sidekick's own folder.
 `checkPair` answers with the refusal code and the role it concerns; a refused
 `createChat` starts nothing.
 
@@ -289,7 +333,27 @@ placeholder. `wait` and `report` read it back the same way.
 pending start and prompt admission, pauses its queued input, interrupts it
 if a turn is active, then stops the sidekick; either failure is returned,
 never acknowledged), `stopSidekick`,
-`resetSidekick`, `reconcileRound`, `abandonRound`. Reads work in safe mode;
+`resetSidekick`, `reconcileRound`, `abandonRound`, and (ADR-076)
+`resumePair`, `checkDelivery`, `deliverAgain`, `dismissReport`,
+`steerSidekick`. Stop pair first **pauses** the pair (journaled `paused`):
+no brief is admitted and no follow-up is sent; a follow-up already past its
+pause check finishes its send before the pause returns, so the lead interrupt
+that follows reaches it, and the delivery worker re-checks the pause right
+before it claims `sending`. The pair resumes only with `resumePair` or when
+the person starts a new lead turn (a lead tool call from a turn newer than the
+stopped one). A send that was written but never confirmed (timeout, lost
+acknowledgement, dead runtime) is `acceptance-unknown`: a round becomes
+`uncertain` and keeps the writer lock until it is reconciled or abandoned; a
+follow-up becomes `followUp/uncertain` and is never resent blindly. Only a
+refusal before the write fails a round. A report whose delivery is uncertain
+is listed by `status`, shown as "report needs checking" on the badge, and the
+panel offers Check lead chat (searches the lead's native history for the
+report's stable id `[PiUI sidekick report <brief> · <round> ·`), Deliver
+again and Dismiss; `wait(roundId)` says "delivery unknown", never "already
+delivered". A tool handoff is given to the lead only after `tool/sending` is
+journaled. `steerSidekick` sends the person's correction into the running
+round as a steer marked `[PiUI: the person adds to round …]` and counts it in
+`personSteers`; it changes no authority. Reads work in safe mode;
 changes are refused there. The event `piui://fusion-changed-v1` carries the
 lead id and the journal revision. Deleting a lead chat is refused while a
 sidekick round of its pair is open or uncertain; otherwise the pair goes with

@@ -58,7 +58,14 @@ record({
   // Values of PiUI's own speed and effort controls only; never credentials.
   disableFastMode: process.env.CLAUDE_CODE_DISABLE_FAST_MODE,
   effortOverride: process.env.CLAUDE_CODE_EFFORT_LEVEL,
+  disableBackground: process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS,
 });
+// Like the real CLI, a disallowed subagent tool is absent from the init tool list.
+const disallowedTools = (() => {
+  const index = cliArgs.indexOf("--disallowed-tools");
+  return index >= 0 ? String(cliArgs[index + 1]).split(",") : [];
+})();
+const delegationTools = disallowedTools.includes("Agent") || disallowedTools.includes("Task") ? [] : ["Task"];
 
 // Native transcript, written only under a test-provided CLAUDE_CONFIG_DIR.
 const configHome = process.env.CLAUDE_CONFIG_DIR;
@@ -91,6 +98,15 @@ const toolResult = (toolUseId, content, isError = false) => {
   send({ type: "user", message, parent_tool_use_id: null, session_id: sessionId, uuid: randomUUID() });
   writeTranscript({ type: "user", message });
 };
+// A result with its native result object (`tool_use_result` on the stream,
+// `toolUseResult` in the transcript), as Edit, MultiEdit and Write produce.
+const toolResultNative = (toolUseId, content, nativeResult, isError = false) => {
+  const message = { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content, is_error: isError }] };
+  send({ type: "user", message, tool_use_result: nativeResult, parent_tool_use_id: null, session_id: sessionId, uuid: randomUUID() });
+  writeTranscript({ type: "user", message, toolUseResult: nativeResult });
+};
+// A 1x1 PNG.
+const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAH8wD3AAAAABJRU5ErkJggg==";
 const streamText = (messageId, chunks, type = "text") => {
   stream({ type: "message_start", message: { id: messageId, type: "message", role: "assistant", content: [] } });
   stream({ type: "content_block_start", index: 0, content_block: type === "text" ? { type: "text", text: "" } : { type: "thinking", thinking: "" } });
@@ -162,6 +178,30 @@ const scenarios = {
     stream({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: " world" } });
     stream({ type: "content_block_stop", index: 0 });
     assistant("msg-answer", [{ type: "text", text: "Hello world" }]);
+  },
+  // File tools: an edit with a structured patch, a new file, a failed edit, a
+  // notebook edit, an image file read and an MCP tool that returns an image.
+  async edits() {
+    const absolute = join(process.cwd(), "abs", "c.ts");
+    useTool("toolu_edit", "Edit", { file_path: "src/a.ts", old_string: "old line", new_string: "new line" });
+    toolResultNative("toolu_edit", "The file src/a.ts has been updated successfully.", {
+      filePath: "src/a.ts", oldString: "old line", newString: "new line", userModified: false, replaceAll: false,
+      structuredPatch: [
+        { oldStart: 1, oldLines: 2, newStart: 1, newLines: 2, lines: [" keep", "-old line", "+new line"] },
+        { oldStart: 9, oldLines: 1, newStart: 9, newLines: 2, lines: [" tail", "+added", "\\ No newline at end of file"] },
+      ],
+    });
+    useTool("toolu_write", "Write", { file_path: absolute, content: "a\nb\n" });
+    toolResultNative("toolu_write", `File created successfully at: ${absolute}`, { type: "create", filePath: absolute, content: "a\nb\n", structuredPatch: [] });
+    useTool("toolu_bad", "Edit", { file_path: "never.ts", old_string: "x", new_string: "y" });
+    toolResultNative("toolu_bad", "String to replace not found", { filePath: "never.ts", structuredPatch: [] }, true);
+    useTool("toolu_nb", "NotebookEdit", { notebook_path: "analysis.ipynb", new_source: "1+1" });
+    toolResult("toolu_nb", "Edited cell");
+    useTool("toolu_img", "Read", { file_path: "shots/Screen.PNG" });
+    toolResult("toolu_img", [{ type: "image", source: { type: "base64", media_type: "image/png", data: TINY_PNG } }]);
+    useTool("toolu_mcp", "mcp__docs__render", { page: 1 });
+    toolResult("toolu_mcp", [{ type: "text", text: "rendered" }, { type: "image", source: { type: "base64", media_type: "image/png", data: TINY_PNG } }, { type: "image", source: { type: "base64", media_type: "image/svg+xml", data: TINY_PNG } }]);
+    say("msg-edits-done", "Done.");
   },
   async tools() {
     useTool("toolu_bash", "Bash", { command: "npm test --silent", description: "Run tests" });
@@ -331,7 +371,7 @@ const startRun = async (batch) => {
   const initOverride = has("--fixture-init-api-key") ? "ANTHROPIC_API_KEY" : "none";
   send({
     type: "system", subtype: "init", uuid: randomUUID(), session_id: sessionId, apiKeySource: initOverride, cwd: process.cwd(),
-    tools: ["Bash", "Read", "Edit", "Write", "Grep", "Glob", "Task"], mcp_servers: [], model: resolved(model),
+    tools: ["Bash", "Read", "Edit", "Write", "Grep", "Glob", ...delegationTools], mcp_servers: [], model: resolved(model),
     permissionMode: has("--fixture-init-mode-drift") ? "default" : permissionMode, slash_commands: ["review"], output_style: "default",
     skills: [], plugins: [], capabilities: ["interrupt_receipt_v1", "interrupt_cancel_queued_v1"], claude_code_version: "2.1.232",
   });

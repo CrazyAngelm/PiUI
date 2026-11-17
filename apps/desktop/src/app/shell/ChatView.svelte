@@ -26,6 +26,10 @@
   import PluginComposerActions from '../plugins/PluginComposerActions.svelte';
   import { extensionSurfaces } from '../chat/extensions/extensionSurfaces.svelte';
   import Transcript from '../chat/transcript/Transcript.svelte';
+  import { openLinkInHost } from '../chat/openChatLink';
+  import { ChatFilesStore } from '../chat/files/chatFiles.svelte';
+  import { placeChatFiles } from '../chat/files/placeChatFiles';
+  import { errorMessage } from '../workspaceStore.svelte';
   import { sessionActivity } from '../chat/activity/sessionActivity';
   import SearchIcon from '@lucide/svelte/icons/search';
   import GitCompare from '@lucide/svelte/icons/git-compare';
@@ -53,6 +57,7 @@
   import { fusionMembership } from '../fusion/fusionMembership.svelte';
   import NanoPetStatus from '../nano/NanoPetStatus.svelte';
   import { remoteMode } from '../nano/remoteMode';
+  import type { InteractiveAppTarget, InteractiveReplyBlock } from '../interactive/decorate';
   import Mark from '../marks/Mark.svelte';
   import { marks } from '../marks/marks.svelte';
 
@@ -96,6 +101,32 @@
     const active = turnActive;
     untrack(() => steerEchoes.settle(sessionId, current.blocks, active));
   });
+  // Files the agent wrote, read or returned (ADR-074). A remote browser and safe mode have none: the host refuses both.
+  const chatFiles = remoteMode ? undefined : new ChatFilesStore();
+  $effect(() => {
+    const id = sessionId;
+    chatFiles?.bind(store.safeMode ? '' : id);
+  });
+  $effect(() => {
+    const blocks = snapshot?.blocks;
+    void blocks?.length;
+    void blocks?.[blocks.length - 1]?.status;
+    void snapshot?.session.status;
+    untrack(() => chatFiles?.scheduleRefresh());
+  });
+  onDestroy(() => chatFiles?.dispose());
+  const fileCards = $derived(chatFiles ? placeChatFiles(shownBlocks, chatFiles.files, $t) : []);
+  async function fileAction(action: 'open' | 'reveal' | 'save', id: string): Promise<void> {
+    if (!chatFiles) return;
+    try {
+      if (action === 'save') {
+        if (await chatFiles.save(id)) toasts.success($t('File saved'));
+      } else if (action === 'reveal') await chatFiles.reveal(id);
+      else await chatFiles.open(id);
+    } catch (error) {
+      toasts.error($t(errorMessage(error)));
+    }
+  }
   const workspace = $derived(store.catalog.workspaces.find((item) => item.id === session?.workspaceId));
   const running = $derived(session ? ['starting', 'running', 'stopping'].includes(session.status) : false);
   // Project chats (not pipeline members) can have an active board card (ADR-041).
@@ -203,6 +234,25 @@
     } catch {
       return false;
     }
+  }
+
+  // Why an answer's Send button is off, read live by the widgets; mirrors `composerShown` and `reply` above.
+  const replyBlock = $derived<InteractiveReplyBlock | undefined>(
+    store.safeMode ? 'safe-mode'
+    : session?.status === 'closed' ? 'closed'
+    : isSidekick || session?.runId ? 'read-only'
+    : snapshot !== undefined && !snapshot.capabilities.prompt.supported ? 'no-prompt'
+    : running ? 'busy'
+    : undefined,
+  );
+  // The closed list of application actions an answer's button may request. A remote browser has none.
+  async function appAction(target: InteractiveAppTarget): Promise<boolean> {
+    if (remoteMode) return false;
+    if (target === 'open_settings') store.navigate({ name: 'settings', section: 'general' });
+    else if (target === 'open_schedule') store.navigate({ name: 'pipelines', section: 'schedules' });
+    else if (target === 'open_agents') store.navigate({ name: 'pipelines', section: 'agents' });
+    else store.goHome(session?.workspaceId);
+    return true;
   }
 
   // Message controls: copy everywhere; edit and branch where this chat can start another one.
@@ -382,8 +432,16 @@
             blocks={shownBlocks}
             interactive={!store.safeMode}
             onReply={reply}
+            {replyBlock}
+            onApp={remoteMode ? undefined : appAction}
+            onOpenLink={remoteMode ? undefined : openLinkInHost}
             {messageControls}
             onMessageAction={messageAction}
+            attachments={fileCards}
+            resolveAttachment={chatFiles?.resolve}
+            onOpenAttachment={chatFiles ? (id) => fileAction('open', id) : undefined}
+            onDownloadAttachment={chatFiles ? (id) => fileAction('save', id) : undefined}
+            onRevealAttachment={chatFiles ? (id) => fileAction('reveal', id) : undefined}
             loading={loadingNow}
             sessionKey={snapshot.session.id}
             historySessionId={snapshot.session.id}
