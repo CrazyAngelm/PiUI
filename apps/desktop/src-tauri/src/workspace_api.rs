@@ -463,6 +463,7 @@ impl WorkspaceError {
 /// Workspace error code of a Nano start without a signed-in Nano account
 /// (mirrors `NANO_SIGN_IN_REQUIRED` of the TypeScript error-code union).
 pub(crate) const NANO_SIGN_IN_REQUIRED: &str = "NANO_SIGN_IN_REQUIRED";
+const CODEX_THREAD_IN_USE: &str = "This chat is open in another Codex process.";
 
 fn branch_unsupported() -> WorkspaceError {
     WorkspaceError {
@@ -477,6 +478,11 @@ fn branch_unsupported() -> WorkspaceError {
 /// have dedicated, actionable statuses.
 fn runtime_failure(error: &NativeRuntimeError) -> WorkspaceError {
     match error {
+        NativeRuntimeError::Bridge(BridgeFailureCode::NativeThreadBusy) => WorkspaceError {
+            code: "CONFLICT",
+            message: CODEX_THREAD_IN_USE,
+            recoverable: true,
+        },
         NativeRuntimeError::Bridge(BridgeFailureCode::SubscriptionRequired) => {
             WorkspaceError::subscription_required()
         }
@@ -5083,7 +5089,7 @@ pub(crate) async fn dispatch_workspace_command(
             })
         }
         WorkspaceCommand::OpenSession { session_id } => {
-            let snapshot = host
+            let opened = host
                 .workspace
                 .open_session(
                     &host.live_runtime_operation_gate,
@@ -5091,7 +5097,27 @@ pub(crate) async fn dispatch_workspace_command(
                     &session_id,
                     publisher,
                 )
-                .await?;
+                .await;
+            let snapshot = match opened {
+                Ok(snapshot) => snapshot,
+                Err(error) if error.message == CODEX_THREAD_IN_USE => {
+                    // The other client retains its writer. Read through the same
+                    // validated native history path as an ordinary closed chat.
+                    let _operation = host.live_runtime_operation_gate.lock().await;
+                    let record = host.workspace.record(&session_id)?;
+                    let directory = authorize(&record.workspace_id)?;
+                    let directory = host.workspace.history_directory(&session_id, directory)?;
+                    let files = Arc::clone(&host.workspace.inner.chat_files);
+                    let mut snapshot = historical_snapshot(record, directory, Some(files)).await?;
+                    snapshot.capabilities.prompt = piui_runtime::workspace_runtime::Capability {
+                        supported: false,
+                        enforcement: piui_runtime::workspace_runtime::Enforcement::Unsupported,
+                        reason: Some(CODEX_THREAD_IN_USE.to_owned()),
+                    };
+                    snapshot
+                }
+                Err(error) => return Err(error),
+            };
             Ok(WorkspaceResult::Session {
                 snapshot: Box::new(snapshot),
             })
@@ -9403,6 +9429,53 @@ mod native_host_tests {
             .await
             .expect_err("an untrusted start is not published");
         assert_eq!(error.code, "NOT_TRUSTED");
+        assert!(no_live_or_starting_runtime(&host));
+        cleanup(host, root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn opening_a_busy_codex_chat_reads_its_native_history_without_a_writer() {
+        let root = test_root("busy-codex-history");
+        let host = Arc::new(HostState::open(&root, false).expect("host state"));
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let native_id = uuid::Uuid::new_v4().to_string();
+        let native_path = root.join("rollout.jsonl");
+        let header = serde_json::json!({
+            "type": "session_meta",
+            "payload": { "id": native_id, "cwd": host.personal_workspace.canonical_path }
+        });
+        let message = serde_json::json!({
+            "type": "event_msg", "payload": { "type": "user_message", "message": "Saved question" }
+        });
+        std::fs::write(&native_path, format!("{header}\n{message}\n")).expect("writes rollout");
+        let record = serde_json::from_value(serde_json::json!({
+            "id": session_id, "workspaceId": host.personal_workspace.project_id,
+            "harness": "codex", "title": "Busy chat", "updatedAt": "2026-11-18T00:00:00Z",
+            "permissionMode": "native", "nativeId": native_id,
+            "nativePath": native_path, "materialized": true
+        }))
+        .expect("Codex session record");
+        host.workspace.insert_record(record).expect("records chat");
+        install_test_spawner(&host.workspace, |config| {
+            NativeRuntime::spawn_test_adapter(
+                config,
+                "throw Object.assign(new Error('locked'), { bridgeCode: 'native-thread-busy', safeMessage: 'Chat is busy.' });",
+            )
+        });
+        let snapshot =
+            session_of(dispatch(&host, WorkspaceCommand::OpenSession { session_id }).await);
+        assert_eq!(snapshot.session.status, SessionStatus::Closed);
+        assert!(
+            snapshot
+                .blocks
+                .iter()
+                .any(|block| block.text.as_deref() == Some("Saved question"))
+        );
+        assert!(!snapshot.capabilities.prompt.supported);
+        assert_eq!(
+            snapshot.capabilities.prompt.reason.as_deref(),
+            Some(super::CODEX_THREAD_IN_USE)
+        );
         assert!(no_live_or_starting_runtime(&host));
         cleanup(host, root);
     }

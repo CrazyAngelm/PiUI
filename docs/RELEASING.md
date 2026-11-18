@@ -211,6 +211,13 @@ launch, the host extracts the embedded package under the application data
 directory and verifies it against the embedded manifest. Nano sessions use
 that Node.js and Pi. The ordinary Pi harness still uses the user's installation.
 
+Local release commands check the declared versions before staging. Windows
+builds reuse the archive and file manifest from a completed staging run under
+`target/nano-runtime-win32-x64-<digest>/`. The key covers the staging script
+(including pinned binary hashes), package manifest, lockfile and npm package
+metadata. Each reuse checks both file digests. The release smoke tests still
+exercise the embedded runtime before Tauri builds the application.
+
 The same environment variables as in CI turn on signing locally:
 `TAURI_SIGNING_PRIVATE_KEY` (or `TAURI_SIGNING_PRIVATE_KEY_PATH`),
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `PIUI_UPDATER_PUBKEY` and

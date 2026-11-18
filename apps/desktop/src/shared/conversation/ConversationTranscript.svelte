@@ -677,7 +677,7 @@
               <!-- Generic fallback: unknown or extension content stays readable. -->
               <details class="fallback" open={printMode || undefined}>
                 <summary class="fallback__head">
-                  <span class="fallback__label">{block.label || (printMode ? block.toolName : '') || $t('Extension message')}</span>
+                  <span class="fallback__label">{block.kind === 'custom' && !block.fallback && block.label === 'Codex warning' ? $t('Codex warning') : block.label || (printMode ? block.toolName : '') || $t('Extension message')}</span>
                   {#if block.fallback}<span class="fallback__tag">· {$t('Compatibility view')}</span>{/if}
                   <span class="fallback__chevron"><ChevronRight size={12} /></span>
                 </summary>

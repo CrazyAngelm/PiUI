@@ -178,8 +178,8 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
 
   // Control-plane notifications that describe account, project, queue, hook or
   // UI-state changes, not conversation content. They are dropped instead of
-  // becoming "Unsupported Codex event" blocks. Anything not listed (`warning`,
-  // `guardianWarning`, `model/rerouted`) still shows the generic fallback.
+  // becoming "Unsupported Codex event" blocks. Other unhandled methods
+  // (including `guardianWarning` and `model/rerouted`) keep the generic fallback.
   const QUIET_NOTIFICATIONS = new Set([
     "remoteControl/status/changed", "thread/goal/cleared", "thread/goal/updated",
     "account/updated", "account/login/completed", "thread/queue/changed",
@@ -1450,6 +1450,21 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     // Moderation metadata of a turn is service data, not a conversation item;
     // a turn the provider actually refuses still fails through `turn/completed`.
     if (method === "turn/moderationMetadata") return;
+    if (method === "warning") {
+      // WarningNotification.message is user-facing; never stringify other fields.
+      if ((params.threadId != null && typeof params.threadId !== "string")
+        || typeof params.message !== "string" || !params.message.trim()) {
+        emitUnknown(method);
+        return;
+      }
+      const block = {
+        id: `warning-${++blockSerial}`, kind: "custom", label: "Codex warning", status: "complete",
+        safeSummary: oneLine(params.message, TOOL_TEXT_LIMIT),
+      };
+      blocks.set(block.id, block);
+      emit({ type: "block", block });
+      return;
+    }
     // Configuration and deprecation warnings describe the user's native Codex
     // configuration (0.157.1 sends startup warnings right after initialize).
     // They become fixed resource warnings; native text and config paths are
@@ -1708,6 +1723,10 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       if (!waiter) return;
       pending.delete(key);
       if ("result" in message) waiter.resolve(message.result);
+      else if (waiter.method === "thread/resume" && nativeId && message.error?.code === -32600
+        && message.error.message === `thread ${nativeId} already has an active writer`) {
+        waiter.reject(fail("native-thread-busy", "Another Codex process is using this chat."));
+      }
       // `nativeRejected` marks a JSON-RPC error answer, unlike a transport
       // loss, so required startup requests can be reported as a mismatch.
       else waiter.reject(Object.assign(safeNativeError(), {
@@ -2012,7 +2031,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   };
 
   const initialize = await callDuringStartup("initialize", {
-    clientInfo: { name: "piui", title: "PiUI", version: "0.3.4" },
+    clientInfo: { name: "piui", title: "PiUI", version: "0.3.5" },
     capabilities: { experimentalApi: true, requestAttestation: false },
   });
   if (!isRecord(initialize) || typeof initialize.codexHome !== "string") {

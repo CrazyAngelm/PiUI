@@ -74,6 +74,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-workspace
+          save-if: false
       - run: pnpm install --frozen-lockfile
       - run: pnpm repo:check
       - run: python tools/validate_spec.py
@@ -81,7 +85,8 @@ jobs:
       - run: python -m unittest tools/test_validate_runtime_evidence.py -v
       - run: pnpm check
       - run: pnpm test
-      - run: pnpm contract:test
+      - name: Check generated system schema (contract specs ran in Vitest)
+        run: node scripts/system-schema.mjs --check
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
