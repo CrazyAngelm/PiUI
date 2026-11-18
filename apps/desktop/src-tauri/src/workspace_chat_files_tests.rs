@@ -631,13 +631,13 @@ fn only_a_document_or_media_file_whose_bytes_match_its_extension_is_opened() {
 
 #[test]
 fn explorer_gets_one_quoted_argument_whatever_the_path_holds() {
-    let plan = reveal_plan(Platform::Windows, Path::new(r"C:\Users\A B\x,y & z.png"))
+    let plan = reveal_plan(Platform::Windows, Path::new(r"D:\Shared Work\x,y & z.png"))
         .expect("windows plan");
     assert_eq!(plan.program, "explorer.exe");
     assert!(plan.args.is_empty());
     assert_eq!(
         plan.raw_tail.as_deref(),
-        Some(r#"/select,"C:\Users\A B\x,y & z.png""#)
+        Some(r#"/select,"D:\Shared Work\x,y & z.png""#)
     );
     // The verbatim prefix is not something Explorer understands.
     let verbatim = reveal_plan(Platform::Windows, Path::new(r"\\?\C:\a b\c.png")).expect("plan");
@@ -655,13 +655,13 @@ fn explorer_gets_one_quoted_argument_whatever_the_path_holds() {
         Err(ChatFilesError::Failed)
     );
 
-    let mac = reveal_plan(Platform::MacOs, Path::new("/Users/a b/c,d & e.png")).expect("mac");
+    let mac = reveal_plan(Platform::MacOs, Path::new("/Volumes/a b/c,d & e.png")).expect("mac");
     assert_eq!(mac.program, "open");
     assert_eq!(
         mac.args,
         vec![
             OsString::from("-R"),
-            OsString::from("/Users/a b/c,d & e.png")
+            OsString::from("/Volumes/a b/c,d & e.png")
         ]
     );
     assert_eq!(mac.raw_tail, None);

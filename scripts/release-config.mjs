@@ -2,9 +2,10 @@
 // `tauri build --config`. Without any of them the build is exactly the
 // unsigned local build: no fragment, no updater, no code signing.
 //
-// Signed updates (all three are required; otherwise updates stay off):
+// Signed updates (the key pair is required; otherwise updates stay off):
 //   PIUI_UPDATER_PUBKEY        contents of the `.key.pub` file from `pnpm tauri signer generate`
-//   PIUI_UPDATER_ENDPOINT      HTTPS URL of latest.json (several: separate with spaces or commas)
+//   PIUI_UPDATER_ENDPOINT      HTTPS URL of latest.json (several: separate with spaces or commas);
+//                              default: the rolling `updater` release of this repository
 //   TAURI_SIGNING_PRIVATE_KEY  the private key; read by the Tauri CLI, only checked for presence here
 //                              (TAURI_SIGNING_PRIVATE_KEY_PASSWORD when the key has a password)
 // Windows Authenticode (one of):
@@ -24,6 +25,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 export const PLATFORMS = ['windows', 'linux', 'macos'];
 const DEFAULT_TIMESTAMP_URL = 'http://timestamp.digicert.com';
 const MAX_ENDPOINTS = 8;
+/** The feed the release workflow and `scripts/publish-update.mjs` keep on the rolling `updater` release. */
+export const DEFAULT_UPDATER_ENDPOINT = 'https://github.com/CrazyAngelm/PiUI/releases/download/updater/latest.json';
 
 export class ReleaseConfigError extends Error {
   constructor(message) {
@@ -79,10 +82,10 @@ function updaterSection(env, notices) {
   if (pubkey !== undefined && !isTauriPublicKey(pubkey)) {
     throw new ReleaseConfigError('PIUI_UPDATER_PUBKEY is not the contents of a `tauri signer generate` .key.pub file.');
   }
-  const urls = endpoint === undefined ? undefined : endpoints(endpoint);
+  // The endpoint is public and fixed by where releases are published; only the key pair is a choice.
+  const urls = endpoints(endpoint ?? DEFAULT_UPDATER_ENDPOINT);
   const missing = [
     pubkey === undefined && 'PIUI_UPDATER_PUBKEY',
-    endpoint === undefined && 'PIUI_UPDATER_ENDPOINT',
     privateKey === undefined && 'TAURI_SIGNING_PRIVATE_KEY',
   ].filter(Boolean);
   if (missing.length > 0) {

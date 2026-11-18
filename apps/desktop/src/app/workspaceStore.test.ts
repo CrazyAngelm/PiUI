@@ -286,6 +286,22 @@ describe('WorkspaceStore split panes', () => {
     return { store, first, second };
   }
 
+  it('keeps the selected project on the project of the open chat when another one is chosen', async () => {
+    const { store, first } = await twoChats();
+    await store.openSession(first, { navigate: false });
+    const own = store.catalog.sessions.find((session) => session.id === first)?.workspaceId ?? '';
+    const other = store.catalog.workspaces.find((workspace) => workspace.id !== own)?.id;
+    if (!other) throw new Error('The Lab needs two projects.');
+    // A catalog reload that prefers another project (a project was added or trusted) moves only the
+    // choice made outside the chat: the sidebar and the chat header still name one project.
+    await store.loadCatalog(other);
+    expect(store.selectedWorkspaceId).toBe(own);
+    expect(store.selectedWorkspace?.id).toBe(own);
+    store.goHome();
+    expect(store.selectedWorkspaceId).toBe(other);
+    store.dispose();
+  });
+
   it('loads a chat for a pane without selecting it, with its own loading state', async () => {
     const { store, first, second } = await twoChats();
     await store.openSession(first, { navigate: false });

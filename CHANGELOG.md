@@ -4,6 +4,20 @@ All notable changes to Nano Desktop (formerly PiUI) are documented here.
 
 Nano Desktop is currently a developer preview. Versions before 1.0 may change without a stable migration promise; changes to typed host contracts remain versioned under `contracts/`.
 
+## [Unreleased]
+
+### Changed
+
+- While the agent works, **Stop** stands where **Send** is; **Send** comes back as soon as you type. A message written during a turn waits in a compact queue, where each one has **Send now** (the agent reads it at its next step) and **Edit**. The "Right away / After this turn" switch is gone.
+- Pi extension notices that are service messages (loaded, mode changed, tasks reset, an unsupported request) no longer appear in the chat. An extension error says plainly that the chat keeps working, with the extension's own words under **Details** and **Ask the agent**.
+- Releases built on your own computer can publish the signed update feed (`scripts/publish-update.mjs`); the feed address defaults to this repository's `updater` release, so only the key pair is needed.
+
+### Fixed
+
+- While a voice message records there is one send button: it stops the recording and sends what was said.
+- The project highlighted in the sidebar is always the project of the open chat; adding a project opens a new chat in it.
+- Text of your own messages shows its selection.
+
 ## [0.3.4] - 2026-11-18
 
 ### Added

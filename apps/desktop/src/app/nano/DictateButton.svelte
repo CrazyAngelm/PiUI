@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onDestroy, tick, untrack } from 'svelte';
-  import ArrowUp from '@lucide/svelte/icons/arrow-up';
   import Mic from '@lucide/svelte/icons/mic';
   import Square from '@lucide/svelte/icons/square';
   import { t } from '../../features/locale/language';
@@ -16,8 +15,10 @@
   interface Props {
     /** Receives the recognized words; the composer puts them at its caret. */
     onText: (text: string) => void;
-    /** Sends the composer after a recording that was stopped with "stop and send" has been turned into text. */
+    /** Sends the composer after a recording that was stopped with `stopAndSend()` has been turned into text. */
     onSend?: () => void;
+    /** True while the microphone records; the composer's own send button then stops and sends. */
+    recording?: boolean;
     /** The composer this button belongs to: `chat:<sessionId>` or `new:<workspaceId or "personal">`. One unsent recording is kept per scope. */
     scope: string;
     /** The composer cannot take input now (safe mode, sending). */
@@ -32,6 +33,7 @@
   let {
     onText,
     onSend = undefined,
+    recording = $bindable(false),
     scope,
     disabled = false,
     client = nanoAccountHost,
@@ -65,21 +67,26 @@
         environment,
       ),
   );
-  const recording = $derived(dictation.phase === 'recording');
+  const isRecording = $derived(dictation.phase === 'recording');
+  $effect(() => {
+    recording = isRecording;
+  });
   const working = $derived(dictation.phase === 'requesting' || dictation.phase === 'sending');
-  const label = $derived(recording ? $t('Stop dictation') : $t('Dictate'));
-  const tooltip = $derived(recording ? $t('Stop dictation (Esc cancels)') : $t('Dictate'));
-  const nearLimit = $derived(recording && dictationNearLimit(dictation.elapsedMs));
+  const label = $derived(isRecording ? $t('Stop dictation') : $t('Dictate'));
+  const tooltip = $derived(isRecording ? $t('Stop dictation (Esc cancels)') : $t('Dictate'));
+  const nearLimit = $derived(isRecording && dictationNearLimit(dictation.elapsedMs));
   const status = $derived(
-    recording ? $t('Recording {0}', [dictationClockWithLimit(dictation.elapsedMs)]) : dictation.phase === 'sending' ? $t('Transcribing…') : '',
+    isRecording ? $t('Recording {0}', [dictationClockWithLimit(dictation.elapsedMs)]) : dictation.phase === 'sending' ? $t('Transcribing…') : '',
   );
 
   $effect(() => {
     if (dictation.phase === 'idle') untrack(() => void (sendAfter = false));
   });
 
-  function stopAndSend(): void {
-    sendAfter = true;
+  /** The composer's send button while recording: one send action, not a second button beside it. */
+  export function stopAndSend(): void {
+    if (dictation.phase !== 'recording') return;
+    sendAfter = Boolean(onSend);
     dictation.stop();
   }
 
@@ -126,7 +133,7 @@
         {...props}
         type="button"
         class="dictate"
-        class:dictate--recording={recording}
+        class:dictate--recording={isRecording}
         class:dictate--near-limit={nearLimit}
         aria-label={label}
         aria-busy={working || undefined}
@@ -135,7 +142,7 @@
       >
         {#if working}
           <Spinner size={14} />
-        {:else if recording}
+        {:else if isRecording}
           <Square size={13} />
           <span class="dictate__clock" aria-hidden="true">{dictationClockWithLimit(dictation.elapsedMs)}</span>
         {:else}
@@ -144,15 +151,6 @@
       </button>
     {/snippet}
   </Tooltip>
-  {#if recording && onSend}
-    <Tooltip content={$t('Stop dictation and send')}>
-      {#snippet trigger(props)}
-        <button {...props} type="button" class="dictate dictate--send" aria-label={$t('Stop dictation and send')} disabled={disabled} onclick={stopAndSend}>
-          <ArrowUp size={16} />
-        </button>
-      {/snippet}
-    </Tooltip>
-  {/if}
   <span class="visually-hidden" role="status">{status}</span>
 {/if}
 
@@ -194,14 +192,6 @@
     color: var(--piui-decoration-primary);
     box-shadow: 0 0 10px var(--piui-decoration-glow);
     animation: dictate-pulse 1.4s ease-in-out infinite;
-  }
-  .dictate--send {
-    background: var(--piui-action);
-    color: var(--piui-action-ink);
-  }
-  .dictate--send:hover:not(:disabled) {
-    background: var(--piui-action-hover);
-    color: var(--piui-action-ink);
   }
   .dictate__clock {
     font-family: var(--piui-font-mono);

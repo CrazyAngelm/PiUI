@@ -58,7 +58,8 @@ describe('extension UI view state', () => {
       '',
     ).state;
     expect(invalidated.dialogs).toEqual([]);
-    expect(invalidated.notifications[0]?.message).toBe('Dialog expired.');
+    // An unsupported request is a fact for the bridge, not a notice for the person.
+    expect(invalidated.notifications).toEqual([]);
 
     let boundedDialogs = emptyExtensionUiViewState();
     for (let index = 0; index < 33; index += 1) {

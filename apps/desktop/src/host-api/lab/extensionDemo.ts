@@ -44,6 +44,9 @@ export function extensionDemoTurn(context: TurnContext, prompt: string): TurnSte
     surface({ action: 'status', key: key('status', 'checks'), text: 'Checks: passed' }),
     surface({ action: 'widget', key: key('widget', 'tip'), lines: ['Tip: extension panels can sit below the message box too.'], placement: 'belowEditor' }),
     surface({ action: 'unsupported', id: 'piui-extension-lab-custom', method: 'unsupported', safeSummary: 'This extension UI request is not supported.' }),
+    // What real Pi extensions send at the end of a turn: a service warning (kept out of the chat) and an error.
+    notice('tasks-reset', '1 task(s) left in_progress — reset to pending', 'warning'),
+    notice('agent-error', 'Agent #2 [vk-link-format] error!', 'error'),
     surface({ action: 'editorText', text: 'Summarize what the extension showed.' }),
     wait(200),
     ...streamSteps(block('done', 'assistant'), 'Done. The statuses and panels stay while this chat’s agent runs; stopping the agent clears them. The prepared text went into the message box (or waits as a suggestion if you had typed something).', random, 'delta', [20, 50]),

@@ -124,6 +124,8 @@
   }
   let catalogFor = $state('');
   let busy = $state(false);
+  let dictate = $state<{ stopAndSend: () => void } | undefined>();
+  let recording = $state(false);
   let textarea = $state<HTMLTextAreaElement | null>(null);
   let menuIndex = $state(0);
   let menuDismissed = $state(false);
@@ -1188,10 +1190,17 @@
     <div class="actions">
       {#if dictationSource.available && !remoteMode}
         {#await loadDictate() then { default: DictateButton }}
-          <DictateButton onText={dictated} onSend={() => void send()} scope={dictationScope} disabled={busy || store.safeMode} />
+          <DictateButton bind:this={dictate} bind:recording onText={dictated} onSend={() => void send()} scope={dictationScope} disabled={busy || store.safeMode} />
         {/await}
       {/if}
-      <button type="button" data-nano-composer="send" onclick={() => void send()} disabled={!canSend} aria-label={$t('Start chat')}>
+      <!-- While the microphone records, this one button stops the recording and sends what was said. -->
+      <button
+        type="button"
+        data-nano-composer="send"
+        onclick={() => (recording ? dictate?.stopAndSend() : void send())}
+        disabled={recording ? busy : !canSend}
+        aria-label={recording ? $t('Stop dictation and send') : $t('Start chat')}
+      >
         {#if busy}<Spinner size={14} />{:else}<ArrowUp size={16} />{/if}
       </button>
     </div>

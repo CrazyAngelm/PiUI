@@ -5,7 +5,12 @@ export const chatRu: Readonly<Record<string, string>> = {
   'Could not open attachment.': 'Не удалось открыть вложение.',
   // A message sent into a running turn, before the agent reads it.
   'The agent reads this at its next step': 'Агент прочитает это на ближайшем шаге',
-  'Send to the agent now…': 'Отправить агенту сразу…',
+  'Add to queue': 'Добавить в очередь',
+  'Send now': 'Отправить сейчас',
+  'A {0} extension reported an error. The chat keeps working: close this, or ask the agent what it means.': 'Расширение {0} сообщило об ошибке. Чат продолжает работать: закройте это сообщение или спросите агента, что оно значит.',
+  'Ask the agent': 'Спросить агента',
+  'The {0} extension reported an error:': 'Расширение {0} сообщило об ошибке:',
+  'What does it mean, and does anything need to be done?': 'Что это значит и нужно ли что-то сделать?',
   // Transcript activity summaries and diff statistics.
   '{0} lines added, {1} removed': 'Добавлено строк: {0}, удалено: {1}',
   'Thought': 'Размышлял',

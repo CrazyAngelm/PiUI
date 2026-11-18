@@ -68,10 +68,12 @@ describe('extension surfaces of a chat', () => {
     expect(surfaces.composerEpoch('busy')).toBe(1);
   });
 
-  it('turns an unsupported request into a warning notice and clears a stopped session', async () => {
+  it('keeps an unsupported request out of the notices and clears a stopped session', async () => {
     const surfaces = await started(drafts());
     surfaces.apply(event({ action: 'unsupported', id: 'u', method: 'unsupported', safeSummary: 'This extension UI request is not supported.' }));
-    expect(surfaces.stateFor('s').notifications).toEqual([{ id: 'u', message: 'This extension UI request is not supported.', level: 'warning' }]);
+    expect(surfaces.stateFor('s').notifications).toEqual([]);
+    surfaces.apply(event({ action: 'notify', id: 'e', message: 'Agent #2 failed', level: 'error' }));
+    expect(surfaces.stateFor('s').notifications).toHaveLength(1);
     surfaces.clear('s');
     expect(surfaces.stateFor('s').notifications).toEqual([]);
   });
@@ -89,6 +91,8 @@ describe('extension surfaces of a chat', () => {
     expect(above).not.toContain('<b>line</b>');
     expect(above).toContain('Checks: running');
     expect(above).toContain('aria-label="Dismiss notice"');
+    expect(above).toContain('Ask the agent');
+    expect(above).toContain('Details');
     expect(above).toContain('Replace draft');
     const below = render(ExtensionSurface, { props: { sessionId: 's', status: 'idle', placement: 'below', agentLabel: 'Pi', surfaces } }).body;
     expect(below).not.toContain('Checks: running');

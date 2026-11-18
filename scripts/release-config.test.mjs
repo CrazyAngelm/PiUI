@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { releasePlan } from './release-build.mjs';
 import { fileManifest, pinnedPiVersion } from './nano-runtime/stage.mjs';
-import { ReleaseConfigError, isTauriPublicKey, releaseConfig, writeReleaseConfig } from './release-config.mjs';
+import { DEFAULT_UPDATER_ENDPOINT, ReleaseConfigError, isTauriPublicKey, releaseConfig, writeReleaseConfig } from './release-config.mjs';
 
 // minisign's published test public key (from minisign-verify's tests), in the
 // Tauri encoding. No signing key is created or stored by these tests.
@@ -61,7 +61,14 @@ test('a partial updater setup skips updater artifacts and names what is missing'
   assert.ok(withoutKey.notices.some((notice) => notice.includes('TAURI_SIGNING_PRIVATE_KEY not set')));
   const keyOnly = releaseConfig({ TAURI_SIGNING_PRIVATE_KEY: PRIVATE_KEY_MARKER }, 'windows');
   assert.equal(keyOnly.updater, false);
-  assert.ok(keyOnly.notices.some((notice) => notice.includes('PIUI_UPDATER_PUBKEY, PIUI_UPDATER_ENDPOINT not set')));
+  assert.ok(keyOnly.notices.some((notice) => notice.includes('PIUI_UPDATER_PUBKEY not set')));
+});
+
+test('the key pair alone turns updates on with the rolling updater release as the feed', () => {
+  const result = releaseConfig({ ...UPDATER, PIUI_UPDATER_ENDPOINT: '' }, 'windows');
+  assert.equal(result.updater, true);
+  assert.deepEqual(result.config.plugins.updater.endpoints, [DEFAULT_UPDATER_ENDPOINT]);
+  assert.ok(DEFAULT_UPDATER_ENDPOINT.endsWith('/releases/download/updater/latest.json'));
 });
 
 test('invalid updater values fail instead of shipping silently', () => {

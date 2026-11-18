@@ -100,13 +100,10 @@ export function reduceExtensionUiState(
         ? { state: { ...state, editorSuggestion: undefined }, draft: action.text }
         : { state: { ...state, editorSuggestion: action.text }, draft };
     case 'unsupported': {
+      // The bridge already cancelled the request and the extension carries on: nothing
+      // here is for the person to act on, so it retires a dialog and shows no notice.
       const dialogs = state.dialogs.filter((dialog) => dialog.id !== action.id);
-      const notifications = [...state.notifications, {
-        id: action.id,
-        message: action.safeSummary,
-        level: 'warning' as const,
-      }].slice(-MAX_VISIBLE_NOTIFICATIONS);
-      return { state: { ...state, dialogs, notifications }, draft };
+      return { state: { ...state, dialogs }, draft };
     }
   }
 }

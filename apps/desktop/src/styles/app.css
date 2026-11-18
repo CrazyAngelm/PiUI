@@ -113,5 +113,5 @@ button {
 
 /* Native-density chrome; conversation type remains independently adjustable. */
 * { scrollbar-width: thin; scrollbar-color: var(--piui-border) transparent; }
-::selection { background: var(--piui-accent-soft); color: var(--piui-text); }
+::selection { background: var(--piui-selection); color: var(--piui-text); }
 input[type="checkbox"], input[type="radio"] { accent-color: var(--piui-accent); }

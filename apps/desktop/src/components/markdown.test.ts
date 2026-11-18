@@ -439,3 +439,14 @@ describe('long and hostile input', () => {
     expect(parseMarkdown('')).toEqual([]);
   });
 });
+
+describe('links an agent writes', () => {
+  it('links a bare loopback address, also inside bold text', () => {
+    const href = 'http://127.0.0.1:8765/FISCAL_RECEIPTS_MAP.html';
+    const link: InlineNode = { kind: 'link', label: [text(href)], href };
+    expect(parseMarkdown(`**${href}**`)).toEqual([para({ kind: 'strong', children: [link] })]);
+    expect(parseMarkdown(`open http://localhost:3000/a_b.html.`)).toEqual([
+      para(text('open '), { kind: 'link', label: [text('http://localhost:3000/a_b.html')], href: 'http://localhost:3000/a_b.html' }, text('.')),
+    ]);
+  });
+});

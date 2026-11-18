@@ -214,6 +214,9 @@ mod tests {
             "https://example.com/a/b?c=d#e",
             "http://example.com:8080/path",
             "https://[::1]:8443/",
+            // A page an agent serves on this computer opens like any other link.
+            "http://127.0.0.1:8765/FISCAL_RECEIPTS_MAP.html",
+            "http://localhost:3000/",
         ] {
             assert!(validate_link(accepted).is_ok(), "{accepted}");
         }

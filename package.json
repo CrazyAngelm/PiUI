@@ -23,7 +23,7 @@
     "perf:smoke": "pnpm --filter @piui/desktop perf:smoke",
     "mutation:test": "node scripts/mutation-index.mjs",
     "mutation:catalog-state": "node scripts/mutation-catalog-state.mjs",
-    "repo:check": "node scripts/public-repo-audit.mjs && node scripts/check-version.mjs && node --test scripts/check-version.test.mjs scripts/release-config.test.mjs scripts/release-feed.test.mjs scripts/build-cache.test.mjs scripts/collect-portable.test.mjs",
+    "repo:check": "node scripts/public-repo-audit.mjs && node scripts/check-version.mjs && node --test scripts/check-version.test.mjs scripts/release-config.test.mjs scripts/release-feed.test.mjs scripts/publish-update.test.mjs scripts/build-cache.test.mjs scripts/collect-portable.test.mjs",
     "release:windows": "node scripts/release-build.mjs windows",
     "release:linux": "node scripts/release-build.mjs linux",
     "release:macos": "node scripts/release-build.mjs macos",

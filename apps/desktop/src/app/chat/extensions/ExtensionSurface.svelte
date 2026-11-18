@@ -19,8 +19,16 @@
   let { sessionId, status, placement, agentLabel, surfaces = extensionSurfaces }: Props = $props();
 
   const view = $derived(surfaces.stateFor(sessionId));
-  // Plain "loaded" messages of extensions are quiet: only warnings and errors take space in the chat.
-  const notices = $derived(view.notifications.filter((notice) => notice.level !== 'info'));
+  // Extension info and warnings are service messages (loaded, reset, mode changed): only an error
+  // takes space in the chat, said plainly, with the extension's own words behind Details.
+  const notices = $derived(view.notifications.filter((notice) => notice.level === 'error'));
+
+  /** Puts a question about the error in the message box; a typed draft is kept as a suggestion. */
+  function askAgent(notice: { id: string; message: string }): void {
+    const question = [$t('The {0} extension reported an error:', [agentLabel]), notice.message, $t('What does it mean, and does anything need to be done?')];
+    surfaces.prepareText(sessionId, question.join('\n\n'));
+    surfaces.dismissNotice(sessionId, notice.id);
+  }
   const widgets = $derived(view.widgets.filter((widget) => widget.placement === (placement === 'above' ? 'aboveEditor' : 'belowEditor')));
 
   // A stopped runtime no longer owns what its extensions showed.
@@ -45,10 +53,19 @@
   {#if notices.length}
     <div class="notices" aria-label={$t('Extension notices')}>
       {#each notices as notice (notice.id)}
-        <div class="notice notice--{notice.level}" role={notice.level === 'error' ? 'alert' : 'status'}>
-          <span class="notice__source"><Puzzle size={13} /> {$t('{0} extension', [agentLabel])}</span>
-          <p>{notice.message}</p>
-          <IconButton size="sm" tooltip={false} label={$t('Dismiss notice')} onclick={() => surfaces.dismissNotice(sessionId, notice.id)}><X /></IconButton>
+        <div class="notice notice--{notice.level}" role="alert">
+          <Puzzle class="notice__icon" size={14} aria-hidden="true" />
+          <div class="notice__body">
+            <p class="notice__title">{$t('A {0} extension reported an error. The chat keeps working: close this, or ask the agent what it means.', [agentLabel])}</p>
+            <details class="notice__details">
+              <summary>{$t('Details')}</summary>
+              <p>{notice.message}</p>
+            </details>
+          </div>
+          <div class="notice__actions">
+            <Button size="sm" variant="ghost" onclick={() => askAgent(notice)}>{$t('Ask the agent')}</Button>
+            <IconButton size="sm" tooltip={false} label={$t('Dismiss notice')} onclick={() => surfaces.dismissNotice(sessionId, notice.id)}><X /></IconButton>
+          </div>
         </div>
       {/each}
     </div>
@@ -86,30 +103,41 @@
     gap: var(--piui-space-2);
     padding: 6px 6px 6px 10px;
     border: 1px solid var(--piui-border-subtle);
-    border-left: 3px solid var(--piui-accent);
+    border-left: 3px solid var(--piui-danger);
     border-radius: var(--piui-radius-sm);
     background: var(--piui-surface-1);
     font-size: var(--piui-text-sm);
   }
-  .notice--warning {
-    border-left-color: var(--piui-warning);
+  .notice :global(.notice__icon) {
+    margin-top: 5px;
+    color: var(--piui-text-muted);
   }
-  .notice--error {
-    border-left-color: var(--piui-danger);
+  .notice__body {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
   }
-  .notice__source {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    margin-top: 3px;
+  .notice__title {
+    margin: 4px 0 0;
+  }
+  .notice__details summary {
+    width: fit-content;
     color: var(--piui-text-muted);
     font-size: var(--piui-text-xs);
-    white-space: nowrap;
+    cursor: pointer;
   }
-  .notice p {
-    margin: 3px 0 0;
+  .notice__details p {
+    margin: 4px 0 2px;
+    color: var(--piui-text-muted);
+    font-family: var(--piui-font-mono);
+    font-size: var(--piui-text-xs);
     overflow-wrap: anywhere;
     white-space: pre-wrap;
+  }
+  .notice__actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
   }
   .statuses {
     display: flex;
