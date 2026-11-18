@@ -241,10 +241,10 @@ test('a local build uses the key pair kept on this computer unless the shell nam
   const read = (path) => (path === `${file}.pub` ? ' PUBKEY\n' : assert.fail(`read ${path}`));
   assert.deepEqual(localUpdaterKey({}, home, (path) => files.has(path), read), {
     PIUI_UPDATER_PUBKEY: 'PUBKEY',
-    TAURI_SIGNING_PRIVATE_KEY_PATH: file,
+    TAURI_SIGNING_PRIVATE_KEY: file,
     TAURI_SIGNING_PRIVATE_KEY_PASSWORD: '',
   });
   assert.deepEqual(localUpdaterKey({ TAURI_SIGNING_PRIVATE_KEY: 'k' }, home, () => true, read), {});
   assert.deepEqual(localUpdaterKey({}, home, (path) => path === file, read), {});
-  assert.equal(localUpdaterKey({ PIUI_UPDATER_KEY_FILE: 'other.key' }, home, () => true, () => 'P').TAURI_SIGNING_PRIVATE_KEY_PATH, 'other.key');
+  assert.equal(localUpdaterKey({ PIUI_UPDATER_KEY_FILE: 'other.key' }, home, () => true, () => 'P').TAURI_SIGNING_PRIVATE_KEY, 'other.key');
 });

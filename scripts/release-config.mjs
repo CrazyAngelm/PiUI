@@ -39,7 +39,8 @@ export class ReleaseConfigError extends Error {
 
 /**
  * The updater key pair kept on this computer, as the variables the build reads, when the shell sets
- * none of them. The private key is passed by path, so its contents never enter this process.
+ * none of them. The Tauri CLI takes the private key's path in TAURI_SIGNING_PRIVATE_KEY, so its contents
+ * never enter this process.
  */
 export function localUpdaterKey(env, home, exists, read) {
   const named = ['PIUI_UPDATER_PUBKEY', 'TAURI_SIGNING_PRIVATE_KEY', 'TAURI_SIGNING_PRIVATE_KEY_PATH'];
@@ -48,7 +49,7 @@ export function localUpdaterKey(env, home, exists, read) {
   if (!exists(file) || !exists(`${file}.pub`)) return {};
   return {
     PIUI_UPDATER_PUBKEY: read(`${file}.pub`).trim(),
-    TAURI_SIGNING_PRIVATE_KEY_PATH: file,
+    TAURI_SIGNING_PRIVATE_KEY: file,
     TAURI_SIGNING_PRIVATE_KEY_PASSWORD: env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? '',
   };
 }
