@@ -9,6 +9,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -194,7 +195,35 @@ export function pinnedPiVersion(lock, requestedVersion) {
   return requestedVersion;
 }
 
-/** Stage one Windows release. The caller owns cleanup after the build exits. */
+// Only publish complete entries. Cargo tracks these paths as well as their
+// contents, so even identical bytes in a new temporary directory cost a rebuild.
+export function readCachedRuntime(directory, version) {
+  if (!lstatSync(directory, { throwIfNoEntry: false })) return null;
+  if (realpathSync(directory) !== directory || !lstatSync(directory).isDirectory()) {
+    throw new Error('Invalid Nano runtime cache directory.');
+  }
+  const archive = join(directory, 'nano-runtime.tar.zst');
+  const manifest = join(directory, 'nano-runtime-files.json');
+  const receipt = join(directory, 'checksums.json');
+  for (const path of [archive, manifest, receipt]) {
+    const info = lstatSync(path);
+    if (!info.isFile() || info.nlink !== 1) throw new Error('Invalid Nano runtime cache file.');
+  }
+  const hashes = JSON.parse(readFileSync(receipt, 'utf8'));
+  if (hashFile(archive) !== hashes.archive || hashFile(manifest) !== hashes.manifest) {
+    throw new Error(`Corrupt Nano runtime cache entry: ${directory}`);
+  }
+  return {
+    files: Object.keys(JSON.parse(readFileSync(manifest, 'utf8'))).length,
+    bytes: lstatSync(archive).size,
+    env: {
+      PIUI_NANO_RUNTIME_ARCHIVE: archive,
+      PIUI_NANO_RUNTIME_MANIFEST: manifest,
+      PIUI_NANO_RUNTIME_VERSION: version,
+    },
+  };
+}
+
 export async function stageWindowsNanoRuntime() {
   if (process.platform !== 'win32' || process.arch !== 'x64') {
     throw new Error('The Nano runtime release payload requires a Windows x64 build host.');
@@ -210,6 +239,17 @@ export async function stageWindowsNanoRuntime() {
   mkdirSync(target, { recursive: true });
   if (lstatSync(target).isSymbolicLink() || realpathSync(target) !== target) {
     throw new Error('Nano runtime staging requires a plain repository target directory.');
+  }
+  const recipe = createHash('sha256');
+  for (const path of [fileURLToPath(import.meta.url), join(SOURCES, 'package.json'),
+    join(SOURCES, 'package-lock.json'), join(dirname(npm), '../package.json')]) {
+    recipe.update(hashFile(path));
+  }
+  const entry = join(target, 'nano-runtime-win32-x64-' + recipe.digest('hex'));
+  const hit = readCachedRuntime(entry, version);
+  if (hit) {
+    console.log('Reusing verified Windows Nano runtime archive.');
+    return hit;
   }
   // Retain npm's content-addressed downloads between release builds. The
   // normal target/ budget owns this cache, and npm ci verifies every hash.
@@ -275,28 +315,25 @@ export async function stageWindowsNanoRuntime() {
     await streamTarToFile([
       '--zstd', '--options', 'zstd:compression-level=12', '-cf', '-', '-C', payload, ...ARCHIVE_ENTRIES,
     ], archive);
-    return {
-      dispose,
-      files: Object.keys(manifest).length,
-      bytes: lstatSync(archive).size,
-      env: {
-        PIUI_NANO_RUNTIME_ARCHIVE: archive,
-        PIUI_NANO_RUNTIME_MANIFEST: manifestPath,
-        PIUI_NANO_RUNTIME_VERSION: version,
-      },
-    };
-  } catch (error) {
+    const ready = join(stage, 'ready');
+    mkdirSync(ready);
+    writeFileSync(join(ready, 'checksums.json'), JSON.stringify({ archive: hashFile(archive), manifest: hashFile(manifestPath) }));
+    renameSync(archive, join(ready, 'nano-runtime.tar.zst'));
+    renameSync(manifestPath, join(ready, 'nano-runtime-files.json'));
+    try {
+      renameSync(ready, entry);
+    } catch (error) {
+      // A concurrent builder can win publication with equivalent inputs.
+      if (!lstatSync(entry, { throwIfNoEntry: false })) throw error;
+    }
+    return readCachedRuntime(entry, version);
+  } finally {
     dispose();
-    throw error;
   }
 }
 
 // Developer smoke check for the build input without rebuilding Rust or Tauri.
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const staged = await stageWindowsNanoRuntime();
-  try {
-    console.log(`Nano runtime Pi ${staged.env.PIUI_NANO_RUNTIME_VERSION}: ${staged.files} files, ${staged.bytes} archive bytes.`);
-  } finally {
-    staged.dispose();
-  }
+  console.log(`Nano runtime Pi ${staged.env.PIUI_NANO_RUNTIME_VERSION}: ${staged.files} files, ${staged.bytes} archive bytes.`);
 }

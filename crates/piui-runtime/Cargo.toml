@@ -7,6 +7,8 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+# Decodes the inline bytes of a bridge `file` event (chat_file).
+base64 = "0.22"
 ed25519-dalek.workspace = true
 piui-contracts = { path = "../piui-contracts" }
 piui-platform = { path = "../piui-platform" }

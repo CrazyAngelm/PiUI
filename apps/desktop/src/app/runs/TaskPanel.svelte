@@ -48,6 +48,7 @@
   import { REVIEW_RETRY_PINNED } from '../../host-api/pinnedData';
   import PinOutputButton from './PinOutputButton.svelte';
   import PinnedTaskNote from './PinnedTaskNote.svelte';
+  import { openLinkInHost } from '../chat/openChatLink';
 
   interface Props {
     runs: RunsStore;
@@ -350,6 +351,7 @@
         {#if snapshot && sessionId}
           <div class="conversation">
             <Transcript
+              onOpenLink={openLinkInHost}
               blocks={snapshot.blocks}
               messageControls={copyControls}
               onMessageAction={copyAction}

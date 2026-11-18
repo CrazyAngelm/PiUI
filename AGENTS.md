@@ -253,6 +253,13 @@ Design and behaviour: `docs/NANO_DESKTOP.md`; server contract:
   any other bridge frame, argv, a file or a catalog cache. Token types redact `Debug`. Never add a Tauri
   plugin that can return a secret to JavaScript, and never open a URL the
   WebView supplied: links are enums resolved in the host.
+- The one exception is a link in the chat feed (ADR-075, `chat_open_link_v1`):
+  the WebView supplies the address, so the host parses it again, accepts only
+  `http` and `https`, and opens it in the system browser only after its own
+  native confirmation dialog that shows the exact address and the person's Yes.
+  It is never used for a Nano, account or cloud link (those stay enums), is
+  refused in safe mode, and a launcher failure is an error so the page falls
+  back to copying the address.
 - The relay is the only new listener: `127.0.0.1:<ephemeral>`, per-session
   256-bit key compared in constant time before the body is parsed, `Host`
   check, refusal of any `Origin` or `Sec-Fetch-Site`, fixed path allowlist, an

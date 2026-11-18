@@ -11,6 +11,8 @@ import { createLabNanoRemote, remoteScenarioFromSearch, type LabRemoteScenario }
 import { nanoChatGptHandler, nanoProvidersHandler } from './nanoProvidersFake';
 import { composerHandlers } from './composerFake';
 import { composerInputsHandlers } from './composerInputsFake';
+import { chatFilesHandlers } from './chatFilesFake';
+import { chatLinkHandlers } from './chatLinkFake';
 import { dictationHandlers } from './dictationFake';
 import { demoExtensions, extensionHandlers } from './extensionsFake';
 import { codexSandboxFromSearch, createLabFusion, fusionHandlers, type LabFusion } from './fusionFake';
@@ -199,6 +201,8 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ...workspaceHandlers(runtime),
     ...composerHandlers(runtime),
     ...composerInputsHandlers(runtime),
+    ...chatFilesHandlers(runtime),
+    ...chatLinkHandlers(state),
     ...classicHandlers(runtime),
     ...orchestrationHandlers(runtime, scheduler, bus),
     ...scriptTestHandlers(runtime),

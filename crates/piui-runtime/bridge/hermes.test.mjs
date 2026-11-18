@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -307,5 +308,52 @@ test('a handler failure on one native message does not end the session', async (
     assert.ok(a.snapshot().blocks.some(b => b.text === 'client-error:-32602'));
     assert.equal(a.snapshot().approvals.length, 0);
     assert.equal(a.snapshot().status, 'idle');
+  } finally { await a.dispose(); }
+});
+
+test('a tool update does not end the answer text; a new tool call does', async () => {
+  const e = events(), a = await createHermesAdapter(config, e.emit);
+  try {
+    const done = e.next(v => v.type === 'turnCompleted');
+    await a.prompt({ text: 'interleave', mode: 'prompt' });
+    assert.equal((await done).outcome, 'succeeded');
+    assert.deepEqual(a.snapshot().blocks.filter(b => b.kind === 'assistant').map(b => [b.text, b.status]), [
+      ['AAA ', 'complete'], ['BBB CCC', 'complete'], ['DDD', 'complete'],
+    ]);
+  } finally { await a.dispose(); }
+});
+
+test('finished edit and read tools, media and file links become file events without touching block text', async () => {
+  const e = events(), a = await createHermesAdapter(config, e.emit);
+  const tiny = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAH8wD3AAAAABJRU5ErkJggg==';
+  try {
+    const done = e.next(v => v.type === 'turnCompleted');
+    await a.prompt({ text: 'files', mode: 'prompt' });
+    assert.equal((await done).outcome, 'succeeded');
+    assert.deepEqual(e.values.filter(v => v.type === 'file'), [
+      { type: 'file', blockId: 'hermes-tool-f-edit', path: resolve(process.cwd(), 'src/x.ts'), origin: 'written' },
+      { type: 'file', blockId: 'hermes-tool-f-read', path: resolve(process.cwd(), 'pics/A.PNG'), origin: 'read', mimeType: 'image/png' },
+      { type: 'file', blockId: 'hermes-tool-f-media', origin: 'returned', inline: { mimeType: 'image/png', base64: tiny } },
+      { type: 'file', blockId: 'hermes-tool-f-media', origin: 'returned', inline: { mimeType: 'audio/wav', base64: 'UklGRg==' } },
+      { type: 'file', blockId: 'hermes-tool-f-media', path: join(process.cwd(), 'out', 'report.pdf'), origin: 'returned' },
+    ], 'a running tool, a text file read, a remote link and an unlisted media type report nothing');
+    assert.doesNotMatch(JSON.stringify(a.snapshot().blocks), /iVBORw0KGgo|report\.pdf|src\/x\.ts|never\.ts/);
+  } finally { await a.dispose(); }
+});
+
+test('only tool calls in flight are tracked for files: finished calls are dropped and a turn end clears the open ones', async () => {
+  const e = events(), a = await createHermesAdapter(config, e.emit);
+  try {
+    let done = e.next(v => v.type === 'turnCompleted');
+    await a.prompt({ text: 'many-tools', mode: 'prompt' });
+    assert.equal((await done).outcome, 'succeeded');
+    assert.deepEqual(e.values.filter(v => v.type === 'file'), [
+      { type: 'file', blockId: 'hermes-tool-m-edit', path: resolve(process.cwd(), 'late.ts'), origin: 'written' },
+    ], 'a call finished after 300 others still reports its file, and the open one has not finished');
+    const before = e.values.length;
+    done = e.next(v => v.type === 'turnCompleted' && e.values.length > before);
+    await a.prompt({ text: 'late-update', mode: 'prompt' });
+    await done;
+    assert.equal(e.values.filter(v => v.type === 'file').length, 1, 'what the finished turn left open is forgotten');
   } finally { await a.dispose(); }
 });

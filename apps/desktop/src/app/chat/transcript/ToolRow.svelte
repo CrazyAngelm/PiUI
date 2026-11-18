@@ -12,6 +12,7 @@
   import { Badge, IconButton, Spinner } from '../../../lib/ui';
   import MarkdownContent from '../../../components/MarkdownContent.svelte';
   import DiffView from './DiffView.svelte';
+  import { followEnd } from './followEnd';
   import { toolIcons } from './toolIcons';
   import { looksLikeDiff, reasoningPreview, toolKind, toolTitle } from './toolKinds';
   import SidekickBriefCard from '../../fusion/SidekickBriefCard.svelte';
@@ -98,10 +99,10 @@
       {:else if isDiff}
         <DiffView text={body} />
       {:else if kind === 'thinking'}
-        <div class="thinking"><MarkdownContent source={body} compact={true} /></div>
+        <div class="thinking"><MarkdownContent source={body} compact={true} streaming={block.status === 'streaming'} /></div>
       {:else}
         <div class="output">
-          <pre>{body}</pre>
+          <pre use:followEnd={block.status === 'streaming'}>{body}</pre>
           <span class="output__copy"><IconButton size="sm" label={$t('Copy output')} onclick={() => void copy()}><Copy /></IconButton></span>
         </div>
       {/if}

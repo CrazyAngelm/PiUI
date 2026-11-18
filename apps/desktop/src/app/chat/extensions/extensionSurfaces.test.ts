@@ -31,13 +31,13 @@ async function started(access: DraftAccess): Promise<ExtensionSurfaces> {
 describe('extension surfaces of a chat', () => {
   it('keeps notices, statuses, widgets and the title per session', async () => {
     const surfaces = await started(drafts());
-    surfaces.apply(event({ action: 'notify', id: 'n1', message: 'Built', level: 'info' }));
+    surfaces.apply(event({ action: 'notify', id: 'n1', message: 'Build failed', level: 'error' }));
     surfaces.apply(event({ action: 'status', key: 'k', text: 'Checks: running' }));
     surfaces.apply(event({ action: 'widget', key: 'w', lines: ['a', 'b'], placement: 'belowEditor' }));
     surfaces.apply(event({ action: 'title', title: 'Reviewing' }));
     surfaces.apply(event({ action: 'status', key: 'other' }, 't'));
     const view = surfaces.stateFor('s');
-    expect(view.notifications.map((notice) => notice.message)).toEqual(['Built']);
+    expect(view.notifications.map((notice) => notice.message)).toEqual(['Build failed']);
     expect(view.statuses).toEqual([{ key: 'k', text: 'Checks: running' }]);
     expect(view.widgets).toEqual([{ key: 'w', lines: ['a', 'b'], placement: 'belowEditor' }]);
     expect(view.title).toBe('Reviewing');
@@ -68,10 +68,12 @@ describe('extension surfaces of a chat', () => {
     expect(surfaces.composerEpoch('busy')).toBe(1);
   });
 
-  it('turns an unsupported request into a warning notice and clears a stopped session', async () => {
+  it('keeps an unsupported request out of the notices and clears a stopped session', async () => {
     const surfaces = await started(drafts());
     surfaces.apply(event({ action: 'unsupported', id: 'u', method: 'unsupported', safeSummary: 'This extension UI request is not supported.' }));
-    expect(surfaces.stateFor('s').notifications).toEqual([{ id: 'u', message: 'This extension UI request is not supported.', level: 'warning' }]);
+    expect(surfaces.stateFor('s').notifications).toEqual([]);
+    surfaces.apply(event({ action: 'notify', id: 'e', message: 'Agent #2 failed', level: 'error' }));
+    expect(surfaces.stateFor('s').notifications).toHaveLength(1);
     surfaces.clear('s');
     expect(surfaces.stateFor('s').notifications).toEqual([]);
   });
@@ -82,14 +84,20 @@ describe('extension surfaces of a chat', () => {
     surfaces.apply(event({ action: 'status', key: 'k', text: 'Checks: running' }));
     surfaces.apply(event({ action: 'widget', key: 'w', lines: ['<b>line</b>'], placement: 'aboveEditor' }));
     surfaces.apply(event({ action: 'editorText', text: 'Prepared' }));
-    const above = render(ExtensionSurface, { props: { sessionId: 's', status: 'idle', placement: 'above', agentLabel: 'Pi', surfaces } }).body;
+    const above = render(ExtensionSurface, { props: { sessionId: 's', status: 'idle', placement: 'above', agentLabel: 'Pi', canMessage: true, surfaces } }).body;
     expect(above).toContain('role="alert"');
     expect(above).not.toContain('<img src=x');
     expect(above).toContain('&lt;img');
     expect(above).not.toContain('<b>line</b>');
     expect(above).toContain('Checks: running');
     expect(above).toContain('aria-label="Dismiss notice"');
+    expect(above).toContain('Ask the agent');
+    expect(above).toContain('Details');
     expect(above).toContain('Replace draft');
+    // A chat without a message box (a sidekick, a pipeline member) offers no question to send.
+    const readOnly = render(ExtensionSurface, { props: { sessionId: 's', status: 'idle', placement: 'above', agentLabel: 'Pi', surfaces } }).body;
+    expect(readOnly).toContain('role="alert"');
+    expect(readOnly).not.toContain('Ask the agent');
     const below = render(ExtensionSurface, { props: { sessionId: 's', status: 'idle', placement: 'below', agentLabel: 'Pi', surfaces } }).body;
     expect(below).not.toContain('Checks: running');
     expect(below).not.toContain('line');

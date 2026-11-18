@@ -38,8 +38,20 @@
   });
 
   const pair = $derived(model?.state);
+  const project = $derived(store.catalog.workspaces.find((workspace) => workspace.id === pair?.workspaceId));
+  const trusted = $derived(Boolean(project && !project.missing && (project.personal || project.trust === 'trusted')));
+  const harnesses = $derived(store.catalog.harnesses.map((item) => ({
+    kind: item.kind,
+    name: item.name,
+    available: item.status === 'available',
+    reason: item.reason,
+  })));
   const sidekickName = $derived(pair ? harnessMeta(pair.pair.sidekick.harness).short : '');
-  const stateText = $derived(pair ? $t(sidekickStateLabel(pair.sidekick)) : '');
+  // A stopped pair or a report whose delivery is unknown outranks the sidekick's own state (ADR-076).
+  const needsCheck = $derived(pair ? pair.briefs.some((brief) => brief.rounds.some((round) => round.state === 'finished' && round.delivery?.state === 'uncertain')) : false);
+  const stateText = $derived(
+    pair ? (needsCheck ? $t('report needs checking') : pair.paused ? $t('pair stopped') : $t(sidekickStateLabel(pair.sidekick))) : '',
+  );
   const label = $derived(
     pair
       ? $t('Fusion pair, sidekick {0} {1}. Open details.', [sidekickName, stateText])
@@ -99,11 +111,11 @@
     <button type="button" class="badge" bind:this={triggerEl} {...props} aria-label={label}>
       <Swords size={13} aria-hidden="true" />
       <span class="badge__text">{$t('Fusion')}{pair ? ` · ${sidekickName} ${stateText}` : ''}</span>
-      {#if pair}<StatusDot status={sidekickStateDot(pair.sidekick)} />{/if}
+      {#if pair}<StatusDot status={needsCheck || pair.paused ? 'waiting' : sidekickStateDot(pair.sidekick)} />{/if}
     </button>
   {/snippet}
   {#if model}
-    <FusionPanel {model} safeMode={store.safeMode} onOpenSession={openSession} onConfirm={ask} />
+    <FusionPanel {model} safeMode={store.safeMode} {trusted} {harnesses} onOpenSession={openSession} onConfirm={ask} />
   {/if}
 </Popover>
 

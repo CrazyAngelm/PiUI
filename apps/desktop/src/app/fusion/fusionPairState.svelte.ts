@@ -1,10 +1,23 @@
 import { fusionHost, type FusionCommandV1, type FusionStateV1 } from '../../host-api/fusionClient';
-import { fusionErrorText } from './fusionPair';
+import { fusionErrorText, rememberFusionPair } from './fusionPair';
 
 /** The commands the person can give to an existing pair. */
 export type FusionAction = Extract<
   FusionCommandV1,
-  { type: 'stopPair' | 'stopSidekick' | 'resetSidekick' | 'reconcileRound' | 'abandonRound' }
+  {
+    type:
+      | 'stopPair'
+      | 'stopSidekick'
+      | 'resetSidekick'
+      | 'changeSidekick'
+      | 'reconcileRound'
+      | 'abandonRound'
+      | 'resumePair'
+      | 'checkDelivery'
+      | 'deliverAgain'
+      | 'dismissReport'
+      | 'steerSidekick';
+  }
 >;
 
 /**
@@ -84,7 +97,12 @@ export class FusionPairState {
     let ok = true;
     let failure = '';
     try {
-      await fusionHost.request(command);
+      const result = await fusionHost.request(command);
+      if (command.type === 'changeSidekick') {
+        if (result.type !== 'state' || result.state.leadSessionId !== this.leadSessionId) throw new Error('Unexpected Fusion change result');
+        rememberFusionPair(result.state.pair);
+        if (!this.disposed && (this.state === undefined || result.state.revision >= this.state.revision)) this.state = result.state;
+      }
     } catch (cause) {
       ok = false;
       failure = fusionErrorText(cause);

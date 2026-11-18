@@ -158,6 +158,10 @@ pub struct GenericTimelineBlock {
     pub created_at: Option<String>,
     pub preview: Option<String>,
     pub has_image: bool,
+    /// How many images or other attachments the entry carried; the bytes are
+    /// never projected. Zero in caches written before the field existed.
+    #[serde(default)]
+    pub attachment_count: usize,
     /// Render-path-only semantic metadata. Scanner/index projections retain
     /// their preview-only defaults.
     pub title: Option<String>,
@@ -1909,9 +1913,56 @@ fn scan_bytes_for_display_with_root(
     report
 }
 
+/// Where one scanner block came from in the native Pi transcript. It is
+/// host-private: workspace history uses it to give a block the identity the
+/// live runtime gives the same block, and it never reaches an IPC payload.
+#[derive(Clone, Debug, Default)]
+struct BlockOrigin {
+    entry_id: Option<String>,
+    /// `message.timestamp` (milliseconds); Pi fixes it when an answer starts.
+    message_timestamp: Option<i64>,
+    item: Option<OriginItem>,
+}
+
+#[derive(Clone, Debug)]
+enum OriginItem {
+    /// An assistant text part and its rank among the text parts of its message.
+    Text { rank: usize },
+    /// A thinking part and its rank among the thinking parts of its message.
+    Thinking { rank: usize },
+    ToolCall {
+        call_id: Option<String>,
+        name: Option<String>,
+        path: Option<String>,
+    },
+}
+
+/// The report (counts, diagnostics, partial tail) comes from `bytes`, the
+/// timeline blocks from `blocks_from`: the same transcript reduced to the
+/// entries the chat is on (a Pi branch), so an abandoned branch never shows.
+fn scan_bytes_for_display_with_origins_on(
+    source_name: &str,
+    bytes: &[u8],
+    blocks_from: &[u8],
+    project_root: Option<&Path>,
+) -> (ScanReport, Vec<BlockOrigin>) {
+    let mut report = scan_bytes(source_name, bytes);
+    let (blocks, origins) = semantic_blocks_with_origins(blocks_from, project_root);
+    report.timeline_blocks = blocks;
+    (report, origins)
+}
+
 fn semantic_blocks(bytes: &[u8], project_root: Option<&Path>) -> Vec<GenericTimelineBlock> {
+    semantic_blocks_with_origins(bytes, project_root).0
+}
+
+fn semantic_blocks_with_origins(
+    bytes: &[u8],
+    project_root: Option<&Path>,
+) -> (Vec<GenericTimelineBlock>, Vec<BlockOrigin>) {
     let (frames, _) = lf_frames(bytes);
     let mut blocks = Vec::new();
+    let mut origins: Vec<BlockOrigin> = Vec::new();
     let mut tool_blocks: HashMap<String, usize> = HashMap::new();
     for (_, frame) in frames {
         let Ok(text) = std::str::from_utf8(frame) else {
@@ -1955,6 +2006,15 @@ fn semantic_blocks(bytes: &[u8], project_root: Option<&Path>) -> Vec<GenericTime
             Some("aborted") => GenericBlockStatus::Interrupted,
             _ => GenericBlockStatus::Complete,
         };
+        let entry_origin = BlockOrigin {
+            entry_id: raw_string_field(entry, &["id"]),
+            message_timestamp: message
+                .and_then(|value| value.get("timestamp"))
+                .and_then(Value::as_i64),
+            item: None,
+        };
+        // Set just before a `push` that names a content item of the entry.
+        let item_hint: std::cell::Cell<Option<OriginItem>> = std::cell::Cell::new(None);
         let mut push = |kind,
                         source_type: &str,
                         title: Option<String>,
@@ -1965,6 +2025,10 @@ fn semantic_blocks(bytes: &[u8], project_root: Option<&Path>) -> Vec<GenericTime
                         status| {
             let (preview, truncated) = bounded_display(text.as_deref(), display_limit(kind));
             let index = blocks.len();
+            origins.push(BlockOrigin {
+                item: item_hint.take(),
+                ..entry_origin.clone()
+            });
             blocks.push(GenericTimelineBlock {
                 id: timeline_block_id(index),
                 parent_id: None,
@@ -1973,6 +2037,7 @@ fn semantic_blocks(bytes: &[u8], project_root: Option<&Path>) -> Vec<GenericTime
                 created_at: created_at.clone(),
                 preview,
                 has_image: content.is_some_and(content_has_image),
+                attachment_count: usize::from(content.is_some_and(content_has_image)),
                 title,
                 tool_name,
                 collapsible,
@@ -2087,6 +2152,8 @@ fn semantic_blocks(bytes: &[u8], project_root: Option<&Path>) -> Vec<GenericTime
             None => Vec::new(),
         };
         let mut recognized_assistant_detail = false;
+        let mut text_rank = 0_usize;
+        let mut thinking_rank = 0_usize;
         for item in &items {
             let Some(object) = item.as_object() else {
                 continue;
@@ -2096,6 +2163,8 @@ fn semantic_blocks(bytes: &[u8], project_root: Option<&Path>) -> Vec<GenericTime
                 && matches!(item_type.as_str(), "text" | "markdown")
             {
                 recognized_assistant_detail = true;
+                item_hint.set(Some(OriginItem::Text { rank: text_rank }));
+                text_rank += 1;
                 push(
                     GenericBlockKind::Assistant,
                     "message",
@@ -2110,6 +2179,10 @@ fn semantic_blocks(bytes: &[u8], project_root: Option<&Path>) -> Vec<GenericTime
                 );
             } else if role.as_deref() == Some("assistant") && item_type == "thinking" {
                 recognized_assistant_detail = true;
+                item_hint.set(Some(OriginItem::Thinking {
+                    rank: thinking_rank,
+                }));
+                thinking_rank += 1;
                 push(
                     GenericBlockKind::Thinking,
                     "thinking",
@@ -2129,6 +2202,14 @@ fn semantic_blocks(bytes: &[u8], project_root: Option<&Path>) -> Vec<GenericTime
                     .map(|name| safe_text(&name, TYPE_LIMIT));
                 let safe_name = tool_title(name.as_deref());
                 let call_id = string_field(object, &["id", "toolCallId", "tool_call_id"]);
+                item_hint.set(Some(OriginItem::ToolCall {
+                    call_id: raw_string_field(object, &["id", "toolCallId", "tool_call_id"]),
+                    name: raw_string_field(object, &["name", "toolName"]),
+                    path: ["arguments", "input", "args"]
+                        .iter()
+                        .find_map(|key| object.get(*key).and_then(Value::as_object))
+                        .and_then(|arguments| raw_string_field(arguments, &["path", "file_path"])),
+                }));
                 let index = push(
                     GenericBlockKind::Tool,
                     "tool_call",
@@ -2265,6 +2346,7 @@ fn semantic_blocks(bytes: &[u8], project_root: Option<&Path>) -> Vec<GenericTime
                     .and_then(|value| display_content(Some(value)))
             });
             if let Some(display) = display {
+                item_hint.set(Some(OriginItem::Text { rank: 0 }));
                 push(
                     GenericBlockKind::Assistant,
                     "message",
@@ -2280,7 +2362,7 @@ fn semantic_blocks(bytes: &[u8], project_root: Option<&Path>) -> Vec<GenericTime
     }
     trim_old_display(&mut blocks);
     redact_timeline_paths(&mut blocks, project_root);
-    blocks
+    (blocks, origins)
 }
 
 /// Redacts absolute filesystem paths from a bounded UI-facing string when no
@@ -2623,6 +2705,7 @@ fn generic_blocks(entries: &[IndexedEntry]) -> Vec<GenericTimelineBlock> {
             created_at: entry.created_at.clone(),
             preview: entry.preview.clone(),
             has_image: entry.has_image,
+            attachment_count: usize::from(entry.has_image),
             title: None,
             tool_name: None,
             collapsible: matches!(
@@ -2951,6 +3034,19 @@ fn string_field(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
             .map(|value| safe_text(value, PREVIEW_LIMIT))
+    })
+}
+
+/// The first non-empty string among `keys`, exactly as written: identities
+/// are hashed by the runtime bridges, so they must not be shortened or
+/// normalized like display text.
+fn raw_string_field(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        object
+            .get(*key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
     })
 }
 

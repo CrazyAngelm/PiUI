@@ -69,6 +69,22 @@ describe('workspace event revision handling', () => {
     expect(resolved.snapshot.approvals).toEqual([]);
   });
 
+  it('puts a history page before the shown blocks and never replaces one that is already shown', () => {
+    const older = (id: string, text: string) => ({ id, kind: 'assistant' as const, label: 'Codex', status: 'complete' as const, text });
+    const first = applyWorkspaceEvent(snapshot(), event(5, { type: 'historyPage', blocks: [older('old-2', 'Two'), older('assistant-1', 'stale copy')] }));
+    expect(first.type).toBe('applied');
+    expect(first.snapshot.revision).toBe(5);
+    expect(first.snapshot.blocks.map((block) => block.id)).toEqual(['old-2', 'assistant-1']);
+    expect(first.snapshot.blocks[1]?.text).toBe('Start');
+    // The next, older page lands before the first one.
+    const second = applyWorkspaceEvent(first.snapshot, event(6, { type: 'historyPage', blocks: [older('old-0', 'Zero'), older('old-1', 'One')] }));
+    expect(second.snapshot.blocks.map((block) => block.id)).toEqual(['old-0', 'old-1', 'old-2', 'assistant-1']);
+    // Nothing new changes only the revision.
+    const same = applyWorkspaceEvent(second.snapshot, event(7, { type: 'historyPage', blocks: [older('old-0', 'again')] }));
+    expect(same.snapshot.blocks).toEqual(second.snapshot.blocks);
+    expect(same.snapshot.revision).toBe(7);
+  });
+
   it('replaces the whole task list with a tasks event and advances the revision', () => {
     const first: SessionTaskV1 = { id: 'task-1', kind: 'agent', title: 'Review the diff', status: 'running', background: true, startedAt: '2026-03-01T10:00:00Z' };
     const second: SessionTaskV1 = { id: 'task-2', kind: 'command', title: 'pnpm test', status: 'completed', background: false, startedAt: '2026-03-01T10:01:00Z', endedAt: '2026-03-01T10:02:00Z' };

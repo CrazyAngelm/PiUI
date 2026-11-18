@@ -12,6 +12,11 @@ export interface ConversationPresentation {
   notify: (level: 'success' | 'error', message: string) => void;
   /** Only the native wrapper supplies trusted native plugin frames. */
   renderer?: (block: TimelineBlock) => ConversationRenderer | undefined;
+  /**
+   * Opens an `http(s)` address from a message in the system browser. Only the host may do that:
+   * resolve `false` (or reject) when it cannot, and the address is copied instead.
+   */
+  openLink?: (url: string) => Promise<boolean>;
 }
 
 const PRESENTATION_CONTEXT = Symbol('piui.conversation.presentation');

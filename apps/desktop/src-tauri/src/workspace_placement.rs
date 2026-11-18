@@ -176,6 +176,23 @@ impl WorkspaceHost {
         }
     }
 
+    /// The folder a chat's agent really works in, for chat files (ADR-074):
+    /// its own worktree, else the project folder. `None` when its worktree was
+    /// removed or is gone, so nothing is then served from "the working folder".
+    pub(crate) fn session_cwd(&self, session_id: &str, project: &Path) -> Option<PathBuf> {
+        match self.inner.tools.placement(session_id) {
+            Ok(Some(SessionPlacement {
+                worktree: Some(binding),
+                ..
+            })) => {
+                let cwd = binding.cwd();
+                (!binding.removed() && cwd.is_dir()).then_some(cwd)
+            }
+            Ok(_) => Some(project.to_path_buf()),
+            Err(_) => None,
+        }
+    }
+
     /// Adopted terminal sessions keep their own name: PiUI never passes a
     /// title that Pi would write into the session file.
     pub(super) fn adopted(&self, session_id: &str) -> bool {

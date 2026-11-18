@@ -4,6 +4,48 @@ All notable changes to Nano Desktop (formerly PiUI) are documented here.
 
 Nano Desktop is currently a developer preview. Versions before 1.0 may change without a stable migration promise; changes to typed host contracts remain versioned under `contracts/`.
 
+## [0.3.6] - 2026-11-18
+
+### Changed
+
+- While the agent works, **Stop** stands where **Send** is; **Send** comes back as soon as you type. A message written during a turn waits in a compact queue, where each one has **Send now** (the agent reads it at its next step) and **Edit**. The "Right away / After this turn" switch is gone.
+- Pi extension notices that are service messages (loaded, mode changed, tasks reset, an unsupported request) no longer appear in the chat. An extension error says plainly that the chat keeps working, with the extension's own words under **Details** and **Ask the agent**.
+- Releases built on your own computer can publish the signed update feed (`scripts/publish-update.mjs`); the feed address defaults to this repository's `updater` release, so only the key pair is needed.
+
+### Fixed
+
+- While a voice message records there is one send button: it stops the recording and sends what was said.
+- The project highlighted in the sidebar is always the project of the open chat; adding a project opens a new chat in it.
+- Text of your own messages shows its selection.
+
+## [0.3.5] - 2026-11-18
+
+### Added
+
+- **Files in chat.** Images, audio, video and other files the agent writes, reads or generates appear in the chat with a preview or a file card, and **Open**, **Save as…** and **Open containing folder**. Only files in the chat's own folder, files the agent itself wrote, and files the app stored are shown; installers and scripts are never opened, only saved or shown in their folder (ADR-074).
+- **Interactive answers, complete.** Agent widgets now show images, galleries, video and audio players with markers and seeking, crop frames and regions on an image, and formulas. Pictures come only from files of the project or the chat; nothing is loaded from the internet (ADR-077).
+- **Links in answers open.** Clicking a link asks in a system dialog, with the full address, before your browser opens it.
+- **Formulas** in answers are typeset.
+- **Fusion:** change the sidekick's model, reasoning or Fast later, or switch to a sidekick of another agent after detaching the current one. **Resume pair** after Stop pair, send your own correction to the running sidekick, and check or deliver again a report whose delivery is unknown.
+
+### Changed
+
+- Chat text is parsed as full CommonMark and GitHub Markdown: nested lists, code blocks of any fence, tables, escapes and entities render as the agent wrote them, and an unfinished block no longer flickers while it streams (ADR-075).
+- Fusion pairs of different agents work in every permission mode: the sidekick is narrowed to at most the lead's writes, commands, network and MCP instead of being refused, and the picker shows what it will be allowed. Reads outside the project are allowed (ADR-076).
+- "New chat in <project>" selects that project even when the new-chat screen is already open.
+
+### Fixed
+
+- Pi and Nano no longer show a tool's arguments as an answer, and a reopened chat keeps its reasoning and tools.
+- Codex reasoning parts no longer run together; long Codex chats open with all their history.
+- A chat held open by another Codex process opens for reading. Resume reconnects when that process releases the chat.
+- Codex warning events show their message in the chat timeline.
+- An answer split by an ACP tool update stays one message; a cancelled answer is marked stopped.
+- A message that starts with a tag such as `<task>` no longer disappears from Claude history; an image-only message keeps its turn.
+- A JSON answer is no longer hidden as service data; a failed compaction says so.
+- Selecting text while an answer streams no longer scrolls away; the reading position is kept by message.
+- Fusion: Stop pair can no longer be undone by a late tool call or an automatic report, and an unconfirmed send never starts a second sidekick.
+
 ## [0.3.4] - 2026-11-18
 
 ### Added

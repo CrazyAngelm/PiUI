@@ -33,7 +33,11 @@ export type WorkspaceErrorCode =
   | 'IMAGES_UNSUPPORTED'
   | 'ATTACHMENT_UNAVAILABLE'
   | 'FILES_UNAVAILABLE'
-  | 'DROP_EXPIRED';
+  | 'DROP_EXPIRED'
+  | 'CHAT_FILE_UNAVAILABLE'
+  | 'CHAT_FILE_NOT_PREVIEWABLE'
+  | 'CHAT_FILE_OPEN_REFUSED'
+  | 'CHAT_FILE_FAILED';
 
 /** `SESSION_CLOSED` is the host's `closed()` constructor: code NOT_FOUND with its own message. */
 const WORKSPACE_ERRORS: Readonly<Record<WorkspaceErrorCode, readonly [string, string]>> = {
@@ -59,6 +63,11 @@ const WORKSPACE_ERRORS: Readonly<Record<WorkspaceErrorCode, readonly [string, st
   ATTACHMENT_UNAVAILABLE: ['ATTACHMENT_UNAVAILABLE', 'An attached image is no longer available. Attach it again.'],
   FILES_UNAVAILABLE: ['FILES_UNAVAILABLE', 'The project files could not be listed.'],
   DROP_EXPIRED: ['DROP_EXPIRED', 'The dropped files are no longer available. Drop them again.'],
+  // Chat files v1 (ADR-074).
+  CHAT_FILE_UNAVAILABLE: ['CHAT_FILE_UNAVAILABLE', 'This file is no longer available.'],
+  CHAT_FILE_NOT_PREVIEWABLE: ['CHAT_FILE_NOT_PREVIEWABLE', 'This file cannot be previewed. Open it or save a copy.'],
+  CHAT_FILE_OPEN_REFUSED: ['CHAT_FILE_OPEN_REFUSED', 'Nano Desktop does not open this kind of file. Save a copy or show it in its folder.'],
+  CHAT_FILE_FAILED: ['CHAT_FILE_FAILED', 'The file action could not be completed.'],
 };
 
 export function workspaceFailure(kind: WorkspaceErrorCode): HostErrorPayload {

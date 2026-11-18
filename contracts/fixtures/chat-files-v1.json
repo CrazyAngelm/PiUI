@@ -1,0 +1,132 @@
+{
+  "commands": [
+    { "type": "list", "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d" },
+    { "type": "preview", "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "fileId": "0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b" },
+    { "type": "save", "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "fileId": "0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b" },
+    { "type": "reveal", "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "fileId": "0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b" },
+    { "type": "open", "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "fileId": "0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b" },
+    { "type": "resolve", "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "name": "docs/render.png" }
+  ],
+  "invalidCommands": [
+    { "type": "list", "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "path": "C:\\Users\\me\\secret.txt" },
+    { "type": "preview", "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d" },
+    { "type": "save", "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "fileId": "0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b", "destination": "D:\\out.png" },
+    { "type": "read", "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "fileId": "0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b" },
+    { "type": "resolve", "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d" }
+  ],
+  "events": [
+    { "protocol": 1, "type": "changed", "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d" }
+  ],
+  "results": {
+    "files": {
+      "type": "files",
+      "protocol": 1,
+      "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "files": [
+        {
+          "id": "0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b",
+          "blockId": "block-4",
+          "name": "render.png",
+          "kind": "image",
+          "mediaType": "image/png",
+          "size": 1024,
+          "origin": "generated",
+          "openable": true,
+          "previewable": true,
+          "revealable": true
+        },
+        {
+          "id": "6a1b2c3d-4e5f-4a6b-8c7d-0123456789ab",
+          "blockId": "block-4",
+          "name": "narration.wav",
+          "kind": "audio",
+          "mediaType": "audio/wav",
+          "size": 88200,
+          "origin": "generated",
+          "openable": true,
+          "previewable": true,
+          "revealable": true
+        },
+        {
+          "id": "7b2c3d4e-5f60-4b7c-9d8e-123456789abc",
+          "blockId": "block-6",
+          "name": "setup.exe",
+          "kind": "file",
+          "mediaType": "application/octet-stream",
+          "size": 4096,
+          "origin": "written",
+          "openable": false,
+          "previewable": false,
+          "revealable": true
+        },
+        {
+          "id": "8c3d4e5f-6071-4c8d-8e9f-23456789abcd",
+          "blockId": "block-6",
+          "name": "old-notes.txt",
+          "kind": "file",
+          "origin": "read",
+          "openable": false,
+          "previewable": false,
+          "revealable": false,
+          "unavailable": true
+        }
+      ]
+    },
+    "preview": {
+      "type": "preview",
+      "protocol": 1,
+      "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "fileId": "0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b",
+      "mediaType": "image/png",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+    },
+    "saved": {
+      "type": "saved",
+      "protocol": 1,
+      "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "fileId": "0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b",
+      "saved": true
+    },
+    "revealed": {
+      "type": "revealed",
+      "protocol": 1,
+      "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "fileId": "0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b"
+    },
+    "opened": {
+      "type": "opened",
+      "protocol": 1,
+      "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "fileId": "0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b"
+    },
+    "resolved": {
+      "type": "resolved",
+      "protocol": 1,
+      "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "file": {
+        "id": "0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b",
+        "blockId": "",
+        "name": "render.png",
+        "kind": "image",
+        "mediaType": "image/png",
+        "size": 1024,
+        "origin": "returned",
+        "openable": true,
+        "previewable": true,
+        "revealable": true
+      }
+    },
+    "resolvedNone": {
+      "type": "resolved",
+      "protocol": 1,
+      "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "file": null
+    }
+  },
+  "errors": [
+    { "code": "CHAT_FILE_UNAVAILABLE", "message": "This file is no longer available.", "recoverable": true },
+    { "code": "CHAT_FILE_NOT_PREVIEWABLE", "message": "This file cannot be previewed. Open it or save a copy.", "recoverable": true },
+    { "code": "CHAT_FILE_OPEN_REFUSED", "message": "Nano Desktop does not open this kind of file. Save a copy or show it in its folder.", "recoverable": true },
+    { "code": "CHAT_FILE_FAILED", "message": "The file action could not be completed.", "recoverable": true }
+  ]
+}

@@ -104,7 +104,6 @@ export const classicRu: Readonly<Record<string, string>> = {
 
   // Extension UI in chats
   'Extension notices': 'Уведомления расширений',
-  '{0} extension': 'Расширение {0}',
   'Dismiss notice': 'Скрыть уведомление',
   'Extension panel': 'Панель расширения',
   'An extension prepared text for the message box. Your draft was kept.': 'Расширение подготовило текст для поля сообщения. Ваш черновик сохранён.',

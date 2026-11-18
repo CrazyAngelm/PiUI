@@ -570,9 +570,12 @@ test("sidekick operations need exact keys, types, enum values and bounded fields
 
 test("a refused sidekick operation names the field and the op's fields, never a value", () => {
   assert.equal(sidekickOperationProblem({ op: "close", verdict: "accepted" }),
-    "`verdict` is not a field of close. close needs briefId and outcome (accepted, rejected or superseded); optional: note.");
+    "`verdict` is not a field of close. close needs briefId and outcome (accepted, rejected or superseded); optional: note (reason is taken as the note).");
   assert.equal(sidekickOperationProblem({ op: "close", briefId: "b1" }),
-    "close is missing `outcome`. close needs briefId and outcome (accepted, rejected or superseded); optional: note.");
+    "close is missing `outcome`. close needs briefId and outcome (accepted, rejected or superseded); optional: note (reason is taken as the note).");
+  // The schema advertises `reason`; close accepts it (as its note) instead of refusing it.
+  assert.equal(sidekickOperationProblem({ op: "close", briefId: "b1", outcome: "accepted", reason: "superseded by b2" }), undefined);
+  assert.match(sidekickOperationProblem({ op: "close", briefId: "b1", outcome: "accepted", reason: 5 }), /^`reason` has an invalid value\./);
   assert.match(sidekickOperationProblem({ op: "wait", waitSeconds: 600 }), /^`waitSeconds` has an invalid value\. It is a whole number from 0 to 540\./);
   assert.match(sidekickOperationProblem({ op: "stop", roundId: "r1", briefId: "b1" }), /^Give roundId or briefId, not both\./);
   assert.match(sidekickOperationProblem({ op: "launch" }), /^`op` must be one of: brief, wait, status/);

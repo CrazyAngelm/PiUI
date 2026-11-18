@@ -20,9 +20,21 @@ describe('Russian copy for interactive answers', () => {
     const keys = rendererKeys();
     expect(keys).toContain('The interface is too large. Showing its source.');
     expect(keys).toContain('Copied');
-    expect(keys).toContain('Not sent. Try again when the agent is idle.');
+    expect(keys).toContain('Not sent. Try again.');
+    expect(keys).toContain('Waiting for the file: {0}');
+    expect(keys).toContain('{0}: arrow keys move, Shift and arrow keys resize');
     expect(keys.filter(key => translate(key, 'ru') === key)).toEqual([]);
     expect(keys.filter(key => interactiveRu[key] === undefined)).toEqual([]);
+  });
+
+  it('translates the reasons a reply is off and the block name used outside the transcript', () => {
+    const decorate = readFileSync(new URL('../../../app/interactive/decorate.ts', import.meta.url), 'utf8');
+    const keys = [...decorate.matchAll(/^ {2}(?:'[a-z-]+'|[a-z]+): '([^']+)',$/gm)].map(match => match[1]!);
+    expect(keys).toHaveLength(5);
+    for (const key of [...keys, 'Interactive block']) {
+      expect(interactiveRu[key], key).toBeDefined();
+      expect(translate(key, 'ru'), key).not.toBe(key);
+    }
   });
 
   it('translates the added Settings rows', () => {

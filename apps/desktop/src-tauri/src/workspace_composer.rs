@@ -521,10 +521,14 @@ impl WorkspaceHost {
                     }
                 };
             *lock(&state.composer_waiting)? = Some(generation);
+            let epoch = self.person_message_epoch(id);
             let result = runtime
                 .prompt_with_images(text, PromptMode::Prompt, images)
                 .await;
             self.settle_message(id, &item.id, &result)?;
+            if result.is_ok() {
+                self.person_message_admitted(id, epoch).await;
+            }
             if let Err(error) = result {
                 *lock(&state.composer_waiting)? = None;
                 return Err(native_error(error));
@@ -752,10 +756,14 @@ async fn steer(
                 return Ok(());
             }
         };
+    let epoch = host.person_message_epoch(id);
     let result = runtime
         .prompt_with_images(body, PromptMode::Steer, images)
         .await;
     host.settle_message(id, &request_id, &result)?;
+    if result.is_ok() {
+        host.person_message_admitted(id, epoch).await;
+    }
     // Once stored, failed delivery stays visible in the outbox. Returning it
     // avoids leaving a second editable copy in the composer after an ACK loss.
     Ok(())

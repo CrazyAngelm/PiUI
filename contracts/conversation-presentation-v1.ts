@@ -26,10 +26,25 @@ export interface ConversationAttachment {
   downloadable?: boolean;
   /** Upload percent already supplied by the owning upload operation. */
   progress?: number;
+  /** Additive (ADR-074): the owner can show the file in its folder (the transcript's `onRevealAttachment` port). */
+  revealable?: boolean;
+  /** Additive (ADR-074): the download action is a Save as dialog, so the card says "Save as…". */
+  saveAs?: boolean;
+  /** Additive (ADR-074): resolve the preview when the card scrolls into view, not when it mounts. */
+  deferPreview?: boolean;
 }
 
 /** An approved, ephemeral display resource resolved by the current owner. */
-export interface ConversationMedia { src: string; mediaType?: string }
+export interface ConversationMedia {
+  src: string;
+  mediaType?: string;
+  /**
+   * Gives the resource back (additive). A card calls it once it stops showing `src` (scrolled far away or
+   * collapsed); the owner then frees the bytes behind it and `resolveAttachment` fetches them again when
+   * the card is shown once more. Idempotent.
+   */
+  release?: () => void;
+}
 export interface ConversationMessagePresentation {
   blockId: string;
   literal?: boolean;

@@ -282,6 +282,7 @@ fn closed_history_lists_an_image_prompt_like_a_live_block() {
         created_at: None,
         preview: preview.map(str::to_owned),
         has_image,
+        attachment_count: usize::from(has_image),
         title: None,
         tool_name: None,
         collapsible: false,

@@ -87,7 +87,29 @@ export type FusionRefusalV1 =
   | 'sidekick-exceeds-lead'
   | 'sidekick-needs-full-access'
   | 'codex-sandbox-unverified'
+  /** No longer produced (ADR-076 admits a read-only lead with a read-only sidekick). */
   | 'read-only-lead';
+
+/**
+ * Additive (ADR-076): what a sidekick is effectively allowed, per dimension,
+ * derived from what its bridge launches. `approved`: each action is approved
+ * by the person in the app; `read-only-sandbox` / `workspace-sandbox`: any
+ * command, inside a sandbox writing nothing / only the project folder.
+ */
+export interface FusionCapabilitiesV1 {
+  writes: 'none' | 'workspace' | 'approved' | 'anywhere';
+  reads: 'workspace' | 'anywhere';
+  shell: 'none' | 'read-only-sandbox' | 'workspace-sandbox' | 'approved' | 'unrestricted';
+  network: 'none' | 'approved' | 'full';
+  /** `configured`: the MCP servers the person configured in that harness. */
+  mcp: 'none' | 'configured';
+}
+
+/**
+ * Additive (ADR-076): the dimension in which a refused sidekick exceeds the
+ * lead. Reads are shown but never compared (the person's decision).
+ */
+export type FusionCapabilityDimensionV1 = Exclude<keyof FusionCapabilitiesV1, 'reads'>;
 
 // ---------------------------------------------------------------------------
 // The `sidekick` host tool (strict key sets; the bridge validates them)
@@ -262,6 +284,8 @@ export type BriefStateV1 = 'active' | 'reported' | 'closed' | 'stopped';
 
 export interface FusionRoundV1 {
   roundId: string;
+  /** Additive (ADR-076): corrections the person sent into this round. */
+  personSteers?: number;
   kind: 'brief' | 'message';
   state: RoundStateV1;
   outcome?: RoundOutcomeV1;
@@ -315,6 +339,24 @@ export interface FusionStatsV1 {
   rounds: number;
 }
 
+export const FUSION_SIDEKICK_CHANGE_BLOCKS = [
+  'FUSION_ROUND_OPEN',
+  'FUSION_ROUND_UNCERTAIN',
+  'FUSION_REPORT_PENDING',
+  'FUSION_REPORT_UNCERTAIN',
+  'FUSION_SIDEKICK_ATTACHED',
+  'FUSION_SIDEKICK_BUSY',
+] as const;
+
+export type FusionSidekickChangeBlockV1 = (typeof FUSION_SIDEKICK_CHANGE_BLOCKS)[number];
+export type FusionSidekickChangeKindV1 = 'model' | 'replace';
+export interface FusionSidekickChangeV1 {
+  revision: number;
+  kind: FusionSidekickChangeKindV1;
+  sidekick: FusionRoleV1;
+  allowContextLoss: boolean;
+}
+
 export interface FusionStateV1 {
   protocol: typeof FUSION_PROTOCOL;
   leadSessionId: string;
@@ -325,6 +367,12 @@ export interface FusionStateV1 {
   briefs: FusionBriefV1[];
   stats: FusionStatsV1;
   revision: number;
+  /** Additive (ADR-076): the person stopped the pair; no brief starts and no report is delivered until they resume it. */
+  paused?: boolean;
+  sidekickChangeBlock?: FusionSidekickChangeBlockV1;
+  sidekickReplaceBlock?: FusionSidekickChangeBlockV1;
+  /** Native model of the current session, including an effective default provider. */
+  sidekickCurrentModel?: WorkspaceModel;
 }
 
 // ---------------------------------------------------------------------------
@@ -339,8 +387,17 @@ export type FusionCommandV1 =
   | { type: 'stopPair'; leadSessionId: string }
   | { type: 'stopSidekick'; leadSessionId: string }
   | { type: 'resetSidekick'; leadSessionId: string }
+  | { type: 'changeSidekick'; leadSessionId: string; change: FusionSidekickChangeV1 }
   | { type: 'reconcileRound'; leadSessionId: string; roundId: string }
-  | { type: 'abandonRound'; leadSessionId: string; roundId: string };
+  | { type: 'abandonRound'; leadSessionId: string; roundId: string }
+  // Additive (ADR-076): resume a stopped pair; settle a report whose delivery is unknown
+  // (look for it in the lead's history, deliver it again, or dismiss it); the person's
+  // correction of the running round.
+  | { type: 'resumePair'; leadSessionId: string }
+  | { type: 'checkDelivery'; leadSessionId: string; roundId: string }
+  | { type: 'deliverAgain'; leadSessionId: string; roundId: string }
+  | { type: 'dismissReport'; leadSessionId: string; roundId: string }
+  | { type: 'steerSidekick'; leadSessionId: string; text: string };
 
 /**
  * Host errors are `WorkspaceError` values (`SAFE_MODE`, `INVALID_ARGUMENT`,
@@ -349,8 +406,13 @@ export type FusionCommandV1 =
  */
 export type FusionResultV1 =
   | { type: 'created'; leadSessionId: string; state: FusionStateV1 }
-  | { type: 'pairCheck'; ok: true }
-  | { type: 'pairCheck'; ok: false; refusal: FusionRefusalV1; role: FusionRoleNameV1 }
+  /**
+   * Additive (ADR-076): `sidekickMode` is the preset the sidekick launches
+   * with (lower than requested when narrowed to fit the lead);
+   * `capabilities` is absent for a same-harness `native` pair.
+   */
+  | { type: 'pairCheck'; ok: true; sidekickMode?: PermissionMode; capabilities?: FusionCapabilitiesV1 }
+  | { type: 'pairCheck'; ok: false; refusal: FusionRefusalV1; role: FusionRoleNameV1; dimension?: FusionCapabilityDimensionV1 }
   | { type: 'state'; state: FusionStateV1 }
   /** `find`: the session is a lead, a sidekick of a lead, or neither. */
   | { type: 'membership'; role: FusionRoleNameV1 | null; leadSessionId?: string }

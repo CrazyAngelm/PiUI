@@ -17,6 +17,16 @@ describe('copy feedback', () => {
     expect(feedback.id).toBe('');
   });
 
+  it('copies a live interactive block as its one-line summary, and a person message unchanged', async () => {
+    const write = vi.fn(async () => undefined);
+    const feedback = new CopyFeedback(write);
+    const widget = '```hermes-ui\n{"title":"Rent calculator","body":[]}\n```';
+    await feedback.copy({ id: 'a1', kind: 'assistant', text: `Try this:\n${widget}\nDone.` });
+    expect(write).toHaveBeenLastCalledWith('Try this:\nInteractive block: Rent calculator\nDone.');
+    await feedback.copy({ id: 'u1', kind: 'user', text: widget });
+    expect(write).toHaveBeenLastCalledWith(widget);
+  });
+
   it('restarts the timer on a second copy and throws when the clipboard refuses', async () => {
     const feedback = new CopyFeedback(async () => undefined);
     await feedback.copy({ id: 'a1', kind: 'assistant', text: 'one' });

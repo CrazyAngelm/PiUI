@@ -39,7 +39,8 @@ jobs:
         run: pnpm --filter @piui/desktop check:e2e
       - name: Vitest
         run: pnpm test
-      - run: pnpm contract:test
+      - name: Check generated system schema (contract specs ran in Vitest)
+        run: node scripts/system-schema.mjs --check
       - name: System files (examples)
         run: pnpm system:check examples/systems/*.piui.json
       - name: Bridge tests

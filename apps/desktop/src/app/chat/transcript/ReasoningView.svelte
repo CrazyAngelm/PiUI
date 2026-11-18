@@ -48,7 +48,7 @@
   </button>
   {#if open && hasBody}
     <div class="reasoning__body" bind:this={body}>
-      <MarkdownContent {source} compact={true} />
+      <MarkdownContent {source} compact={true} streaming={live} />
       {#if block.truncated}<p class="reasoning__note">{$t('Output was shortened to keep the chat responsive.')}</p>{/if}
     </div>
   {/if}

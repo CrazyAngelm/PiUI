@@ -5,23 +5,25 @@ use super::broker::{
     FusionBroker, FusionHost, HostFailure, HostFuture, SessionActivity, SidekickLaunch,
     fold_old_briefs,
 };
+use super::capability::{Dimension, admit};
 use super::logic::{
-    LEAD_INSTRUCTIONS, brief_prompt, check_brief, check_pair, codex_windows_sandbox_configured,
-    command_facts, diff_pages, escape_body, message_prompt, parse_report, report_envelope,
-    report_page, round_command_facts, shell_blocks_supported, truncate_utf8,
+    LEAD_INSTRUCTIONS, brief_prompt, check_brief, codex_windows_sandbox_configured, command_facts,
+    diff_pages, escape_body, message_prompt, parse_report, report_envelope, report_page,
+    round_command_facts, shell_blocks_supported, truncate_utf8,
 };
 use super::model::{
     BriefFields, DeliveryState, DeliveryVia, FactApprovals, FactCommand, FactCommands, FactFiles,
     FactSource, FactTokens, FusionDelivery, FusionDocument, FusionOptions, FusionPair,
     FusionRefusal, FusionRole, FusionRoleName, FusionServiceTier, ReportStatus, RoundOutcome,
-    RoundState, SidekickErrorCode, SidekickFacts, SidekickReport,
+    RoundState, SidekickChange, SidekickChangeBlock, SidekickChangeKind, SidekickErrorCode,
+    SidekickFacts, SidekickReport,
 };
 use super::store::{FusionStore, MemoryFusionStore};
 use crate::review_api::{ReviewArea, ReviewContentV1, ReviewFileV1};
-use crate::workspace_api::TurnState;
+use crate::workspace_api::{TurnState, WorkspaceError};
 use piui_runtime::workspace_runtime::{
     BlockKind, BlockStatus, HarnessKind, NativeBlock, PermissionMode, PromptMode, SessionStatus,
-    SidekickCallIdentity, TurnOutcome,
+    SidekickCallIdentity, TurnOutcome, WorkspaceModel,
 };
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -83,121 +85,276 @@ fn claude_pair() -> FusionPair {
 // Pure rules
 // ---------------------------------------------------------------------------
 
-#[test]
-fn pair_admission_follows_the_v1_matrix() {
-    use HarnessKind::{ClaudeCode, Codex, Pi};
-    use PermissionMode::{FullAccess, Native, ReadOnly, WorkspaceWrite};
-    let refusal = |lead, sidekick, sandbox| {
-        check_pair(&pair(lead, sidekick), sandbox)
-            .err()
-            .map(|(refusal, _)| refusal)
-    };
-    assert_eq!(
-        refusal(
-            role(ClaudeCode, FullAccess),
-            role(ClaudeCode, FullAccess),
-            false
-        ),
-        None
-    );
-    assert_eq!(
-        refusal(role(ClaudeCode, Native), role(ClaudeCode, Native), false),
-        None
-    );
-    assert_eq!(
-        refusal(role(Codex, FullAccess), role(Codex, WorkspaceWrite), true),
-        None
-    );
-    assert_eq!(
-        refusal(role(Codex, FullAccess), role(Codex, WorkspaceWrite), false),
-        Some(FusionRefusal::CodexSandboxUnverified)
-    );
-    assert_eq!(
-        refusal(role(Pi, FullAccess), role(Codex, FullAccess), true),
-        Some(FusionRefusal::LeadHarnessUnsupported)
-    );
-    assert_eq!(
-        refusal(role(ClaudeCode, ReadOnly), role(ClaudeCode, ReadOnly), true),
-        Some(FusionRefusal::ReadOnlyLead)
-    );
-    assert_eq!(
-        refusal(role(Codex, WorkspaceWrite), role(Codex, FullAccess), true),
-        Some(FusionRefusal::SidekickExceedsLead)
-    );
-    // Native modes of different harnesses are incomparable.
-    assert_eq!(
-        refusal(role(ClaudeCode, Native), role(Codex, Native), true),
-        Some(FusionRefusal::ExplicitModesRequired)
-    );
-    assert_eq!(
-        refusal(
-            role(Codex, FullAccess),
-            role(ClaudeCode, WorkspaceWrite),
-            true
-        ),
-        Some(FusionRefusal::SidekickNeedsFullAccess)
-    );
-    assert_eq!(
-        refusal(role(Codex, WorkspaceWrite), role(Pi, WorkspaceWrite), true),
-        Some(FusionRefusal::SidekickNeedsFullAccess)
-    );
-    assert_eq!(
-        refusal(role(Codex, FullAccess), role(Pi, FullAccess), true),
-        None
-    );
-    let (_, refused_role) = check_pair(
-        &pair(role(ClaudeCode, ReadOnly), role(ClaudeCode, ReadOnly)),
-        true,
-    )
-    .unwrap_err();
-    assert_eq!(refused_role, FusionRoleName::Lead);
+type Admission = Result<PermissionMode, (FusionRefusal, FusionRoleName, Option<Dimension>)>;
+
+fn admission(lead: FusionRole, sidekick: FusionRole, sandbox: bool) -> Admission {
+    admit(&pair(lead, sidekick), sandbox).map(|admitted| admitted.sidekick_mode)
+}
+
+fn exceeds_in(dimension: Dimension) -> Admission {
+    Err((
+        FusionRefusal::SidekickExceedsLead,
+        FusionRoleName::Sidekick,
+        Some(dimension),
+    ))
 }
 
 #[test]
-fn nano_is_a_sidekick_under_the_pi_rule_and_never_the_lead() {
+fn cross_harness_pairs_are_admitted_in_every_explicit_mode_by_narrowing() {
     use HarnessKind::{ClaudeCode, Codex, Nano, Pi};
-    use PermissionMode::{FullAccess, Native, ReadOnly, WorkspaceWrite};
-    let refusal = |lead, sidekick| check_pair(&pair(lead, sidekick), true).err();
-    // Nano cannot take the sidekick host tool, so it never leads.
-    assert_eq!(
-        refusal(role(Nano, FullAccess), role(Nano, FullAccess)),
-        Some((FusionRefusal::LeadHarnessUnsupported, FusionRoleName::Lead))
-    );
-    assert_eq!(
-        refusal(role(Nano, FullAccess), role(Codex, FullAccess)),
-        Some((FusionRefusal::LeadHarnessUnsupported, FusionRoleName::Lead))
-    );
-    // As a sidekick it follows Pi: both roles must allow full access.
-    for lead in [ClaudeCode, Codex] {
+    use PermissionMode::{FullAccess, ReadOnly, WorkspaceWrite};
+    // (lead, lead mode, sidekick, requested mode) -> the launched preset or
+    // the refusal with the dimension no preset can bring under the lead.
+    let cases: &[(
+        HarnessKind,
+        PermissionMode,
+        HarnessKind,
+        PermissionMode,
+        Admission,
+    )] = &[
+        // A full-access lead covers every sidekick preset.
+        (
+            ClaudeCode,
+            FullAccess,
+            ClaudeCode,
+            FullAccess,
+            Ok(FullAccess),
+        ),
+        (ClaudeCode, FullAccess, Codex, FullAccess, Ok(FullAccess)),
+        (
+            ClaudeCode,
+            FullAccess,
+            Codex,
+            WorkspaceWrite,
+            Ok(WorkspaceWrite),
+        ),
+        (ClaudeCode, FullAccess, Pi, FullAccess, Ok(FullAccess)),
+        (ClaudeCode, FullAccess, Nano, FullAccess, Ok(FullAccess)),
+        (Codex, FullAccess, ClaudeCode, FullAccess, Ok(FullAccess)),
+        (
+            Codex,
+            FullAccess,
+            ClaudeCode,
+            WorkspaceWrite,
+            Ok(WorkspaceWrite),
+        ),
+        (Codex, FullAccess, Pi, FullAccess, Ok(FullAccess)),
+        (
+            Codex,
+            FullAccess,
+            Nano,
+            PermissionMode::Native,
+            Ok(PermissionMode::Native),
+        ),
+        // A workspace-write lead narrows the sidekick.
+        (
+            ClaudeCode,
+            WorkspaceWrite,
+            ClaudeCode,
+            FullAccess,
+            Ok(WorkspaceWrite),
+        ),
+        (Codex, WorkspaceWrite, Codex, FullAccess, Ok(WorkspaceWrite)),
+        (
+            Codex,
+            WorkspaceWrite,
+            ClaudeCode,
+            FullAccess,
+            Ok(WorkspaceWrite),
+        ),
+        (Codex, WorkspaceWrite, Nano, FullAccess, Ok(ReadOnly)),
+        // Reads outside the folder are allowed by the person's decision
+        // (ADR-076); a sandboxed command is covered by the lead's writes.
+        (
+            ClaudeCode,
+            WorkspaceWrite,
+            Codex,
+            FullAccess,
+            Ok(WorkspaceWrite),
+        ),
+        (ClaudeCode, WorkspaceWrite, Codex, ReadOnly, Ok(ReadOnly)),
+        (ClaudeCode, WorkspaceWrite, Nano, FullAccess, Ok(ReadOnly)),
+        (
+            ClaudeCode,
+            WorkspaceWrite,
+            Pi,
+            FullAccess,
+            exceeds_in(Dimension::Writes),
+        ),
+        (
+            Codex,
+            WorkspaceWrite,
+            Pi,
+            FullAccess,
+            exceeds_in(Dimension::Writes),
+        ),
+        // A read-only lead gets a read-only sidekick.
+        (ClaudeCode, ReadOnly, ClaudeCode, FullAccess, Ok(ReadOnly)),
+        (ClaudeCode, ReadOnly, ClaudeCode, ReadOnly, Ok(ReadOnly)),
+        (Codex, ReadOnly, Codex, WorkspaceWrite, Ok(ReadOnly)),
+        (Codex, ReadOnly, ClaudeCode, FullAccess, Ok(ReadOnly)),
+        (Codex, ReadOnly, Nano, FullAccess, Ok(ReadOnly)),
+        (ClaudeCode, ReadOnly, Codex, ReadOnly, Ok(ReadOnly)),
+        (ClaudeCode, ReadOnly, Codex, FullAccess, Ok(ReadOnly)),
+        (ClaudeCode, ReadOnly, Nano, FullAccess, Ok(ReadOnly)),
+        (
+            ClaudeCode,
+            ReadOnly,
+            Pi,
+            FullAccess,
+            exceeds_in(Dimension::Writes),
+        ),
+        (
+            Codex,
+            ReadOnly,
+            Pi,
+            FullAccess,
+            exceeds_in(Dimension::Writes),
+        ),
+    ];
+    for (lead, lead_mode, sidekick, mode, expected) in cases {
         assert_eq!(
-            refusal(role(lead, FullAccess), role(Nano, FullAccess)),
-            None
-        );
-        assert_eq!(
-            refusal(role(lead, FullAccess), role(Nano, Native)),
-            Some((
-                FusionRefusal::ExplicitModesRequired,
-                FusionRoleName::Sidekick
-            ))
-        );
-        assert_eq!(
-            refusal(role(lead, WorkspaceWrite), role(Nano, WorkspaceWrite)),
-            Some((
-                FusionRefusal::SidekickNeedsFullAccess,
-                FusionRoleName::Sidekick
-            ))
-        );
-        assert_eq!(
-            refusal(role(lead, WorkspaceWrite), role(Nano, FullAccess)),
-            Some((FusionRefusal::SidekickExceedsLead, FusionRoleName::Sidekick))
-        );
-        assert_eq!(
-            refusal(role(lead, ReadOnly), role(Nano, ReadOnly)),
-            Some((FusionRefusal::ReadOnlyLead, FusionRoleName::Lead))
+            &admission(role(*lead, *lead_mode), role(*sidekick, *mode), true),
+            expected,
+            "{lead:?} {lead_mode:?} -> {sidekick:?} {mode:?}"
         );
     }
-    // The Pi rule itself is unchanged.
-    assert_eq!(refusal(role(Codex, FullAccess), role(Pi, FullAccess)), None);
+}
+
+#[test]
+fn admission_reports_the_effective_capabilities_it_launches_with() {
+    use HarnessKind::{ClaudeCode, Codex};
+    use PermissionMode::{FullAccess, Native, WorkspaceWrite};
+    let admitted = admit(
+        &pair(role(Codex, WorkspaceWrite), role(ClaudeCode, FullAccess)),
+        true,
+    )
+    .expect("admitted");
+    assert_eq!(admitted.sidekick_mode, WorkspaceWrite);
+    let caps = admitted.capabilities.expect("capabilities");
+    assert_eq!(
+        serde_json::to_value(caps).expect("caps"),
+        json!({"writes":"workspace","reads":"workspace","shell":"none","network":"none","mcp":"none"})
+    );
+    // A same-harness native pair is the person's own configuration.
+    let native = admit(
+        &pair(role(ClaudeCode, Native), role(ClaudeCode, Native)),
+        true,
+    )
+    .expect("admitted");
+    assert_eq!(native.capabilities, None);
+}
+
+#[test]
+fn admission_refuses_what_no_preset_can_narrow_and_names_the_role() {
+    use HarnessKind::{ClaudeCode, Codex, Hermes, Nano, Pi, PrimeAgent};
+    use PermissionMode::{FullAccess, Native, ReadOnly, WorkspaceWrite};
+    let refusal = |lead, sidekick, sandbox| admission(lead, sidekick, sandbox).err();
+    // Only Claude Code and Codex take the sidekick host tool.
+    for lead in [Pi, Nano, PrimeAgent] {
+        assert_eq!(
+            refusal(role(lead, FullAccess), role(Codex, FullAccess), true),
+            Some((
+                FusionRefusal::LeadHarnessUnsupported,
+                FusionRoleName::Lead,
+                None
+            ))
+        );
+    }
+    for sidekick in [PrimeAgent, Hermes] {
+        assert_eq!(
+            refusal(role(Codex, FullAccess), role(sidekick, FullAccess), true),
+            Some((
+                FusionRefusal::SidekickHarnessUnsupported,
+                FusionRoleName::Sidekick,
+                None
+            ))
+        );
+    }
+    // Native modes of different harnesses are the person's own settings.
+    assert_eq!(
+        refusal(role(ClaudeCode, Native), role(Codex, Native), true),
+        Some((
+            FusionRefusal::ExplicitModesRequired,
+            FusionRoleName::Lead,
+            None
+        ))
+    );
+    assert_eq!(
+        refusal(role(Codex, Native), role(Codex, FullAccess), true),
+        Some((
+            FusionRefusal::ExplicitModesRequired,
+            FusionRoleName::Lead,
+            None
+        ))
+    );
+    // Pi has full access only; Nano has no edit-only preset.
+    assert_eq!(
+        refusal(role(Codex, FullAccess), role(Pi, ReadOnly), true),
+        Some((
+            FusionRefusal::SidekickNeedsFullAccess,
+            FusionRoleName::Sidekick,
+            None
+        ))
+    );
+    assert_eq!(
+        refusal(role(Codex, FullAccess), role(Nano, WorkspaceWrite), true),
+        Some((
+            FusionRefusal::SidekickNeedsFullAccess,
+            FusionRoleName::Sidekick,
+            None
+        ))
+    );
+    // An unverified Codex sandbox refuses a requested workspace-write and is
+    // skipped while narrowing.
+    assert_eq!(
+        refusal(role(Codex, FullAccess), role(Codex, WorkspaceWrite), false),
+        Some((
+            FusionRefusal::CodexSandboxUnverified,
+            FusionRoleName::Sidekick,
+            None
+        ))
+    );
+    assert_eq!(
+        admission(role(Codex, WorkspaceWrite), role(Codex, FullAccess), false),
+        Ok(ReadOnly)
+    );
+    assert_eq!(
+        admission(role(ClaudeCode, ReadOnly), role(Pi, FullAccess), true),
+        Err((
+            FusionRefusal::SidekickExceedsLead,
+            FusionRoleName::Sidekick,
+            Some(Dimension::Writes)
+        ))
+    );
+}
+
+#[test]
+fn mcp_of_another_harness_is_covered_only_by_an_unrestricted_lead() {
+    use super::capability::{Capabilities, Mcp, Network, Reads, Shell, Writes, exceeds};
+    use HarnessKind::{ClaudeCode, Codex};
+    let sandboxed = Capabilities {
+        writes: Writes::Workspace,
+        reads: Reads::Anywhere,
+        shell: Shell::WorkspaceSandbox,
+        network: Network::None,
+        mcp: Mcp::Configured,
+    };
+    assert_eq!(exceeds(sandboxed, Codex, sandboxed, Codex), None);
+    assert_eq!(
+        exceeds(sandboxed, Codex, sandboxed, ClaudeCode),
+        Some(Dimension::Mcp)
+    );
+    let approved = Capabilities {
+        shell: Shell::Approved,
+        mcp: Mcp::None,
+        ..sandboxed
+    };
+    // Sandboxed and person-approved commands are incomparable.
+    assert_eq!(
+        exceeds(approved, Codex, sandboxed, Codex),
+        Some(Dimension::Shell)
+    );
 }
 
 #[test]
@@ -307,7 +464,11 @@ fn briefs_need_a_goal_and_criteria_and_warn_on_weak_ones() {
     assert_eq!(warnings.len(), 1, "no verify command");
     fields.verify = vec!["cargo test".into()];
     fields.scope = vec!["../elsewhere".into()];
-    assert_eq!(check_brief(&fields).unwrap().len(), 1, "outside path");
+    assert!(check_brief(&fields).is_err(), "outside path is refused");
+    fields.scope = vec!["D:/Other/repo".into()];
+    assert!(check_brief(&fields).is_err(), "absolute path is refused");
+    fields.scope = vec!["src/parser".into()];
+    assert!(check_brief(&fields).unwrap().is_empty());
     fields.done_when = vec!["  ".into()];
     assert!(check_brief(&fields).is_err());
     fields.done_when = vec!["ok".into()];
@@ -954,9 +1115,12 @@ struct FakeHost {
     sessions: Mutex<HashMap<String, FakeSession>>,
     sent: Mutex<Vec<(String, String, PromptMode)>>,
     launches: Mutex<Vec<SidekickLaunch>>,
+    models: Mutex<HashMap<String, FusionRole>>,
     interrupts: Mutex<Vec<String>>,
     fail_launch: AtomicBool,
     fail_send: AtomicBool,
+    /// `send` writes the prompt but never confirms it (ADR-076).
+    unknown_send: AtomicBool,
     /// An interrupt ends the running turn (the stop proof).
     interrupt_completes: AtomicBool,
     approvals: Mutex<Vec<String>>,
@@ -1044,6 +1208,10 @@ impl FakeHost {
         if self.fail_send.load(Ordering::Acquire) {
             return Err(HostFailure::Unavailable);
         }
+        if self.unknown_send.load(Ordering::Acquire) {
+            self.sent.lock().unwrap().push((session_id, text, mode));
+            return Err(HostFailure::AcceptanceUnknown);
+        }
         if mode == PromptMode::Prompt
             && let Some(sender) = self
                 .sessions
@@ -1076,6 +1244,10 @@ impl FusionHost for Arc<FakeHost> {
             return ready(Err(HostFailure::SignInRequired));
         }
         self.live(&launch.session_id, SessionStatus::Idle);
+        self.models
+            .lock()
+            .unwrap()
+            .insert(launch.session_id.clone(), launch.role.clone());
         self.launches.lock().unwrap().push(launch);
         ready(Ok(()))
     }
@@ -1092,6 +1264,36 @@ impl FusionHost for Arc<FakeHost> {
         } else {
             Err(HostFailure::Unavailable)
         })
+    }
+
+    fn sidekick_model(&self, session_id: &str) -> Option<WorkspaceModel> {
+        self.models.lock().unwrap().get(session_id)?.model.clone()
+    }
+
+    fn validate_sidekick_role(
+        &self,
+        _: String,
+        role: FusionRole,
+    ) -> HostFuture<Result<FusionRole, WorkspaceError>> {
+        ready(Ok(role))
+    }
+
+    fn set_sidekick_model(
+        &self,
+        session_id: String,
+        role: FusionRole,
+    ) -> HostFuture<Result<FusionRole, WorkspaceError>> {
+        ready(
+            self.models
+                .lock()
+                .unwrap()
+                .insert(session_id, role)
+                .ok_or_else(WorkspaceError::not_found),
+        )
+    }
+
+    fn discard_sidekick_draft(&self, session_id: String) -> HostFuture<()> {
+        self.close(session_id)
     }
 
     fn turns(&self, session_id: &str) -> Result<watch::Receiver<TurnState>, HostFailure> {
@@ -1185,6 +1387,17 @@ impl FusionHost for Arc<FakeHost> {
             approval_ids: self.approvals.lock().unwrap().clone(),
             latest: None,
         })
+    }
+
+    fn history_contains(
+        &self,
+        session_id: String,
+        needle: String,
+    ) -> HostFuture<Result<bool, HostFailure>> {
+        ready(Ok(self
+            .sent_to(&session_id)
+            .iter()
+            .any(|(text, _)| text.contains(&needle))))
     }
 
     fn changes(&self, _lead: String) -> HostFuture<Option<(Vec<ReviewFileV1>, bool)>> {
@@ -1407,7 +1620,7 @@ async fn a_brief_that_finishes_inside_the_wait_hands_its_report_to_the_tool_once
         text.contains("[/PiUI sidekick report b1 r1]\nThe sidekick is idle now."),
         "{text}"
     );
-    assert!(text.contains("briefing policy: This sidekick needs prescriptive briefs"));
+    assert!(text.contains("briefing policy: This sidekick needs concrete briefs"));
     let round = &fixture.document().await.briefs[0].rounds[0];
     assert_eq!(round.state, RoundState::Finished);
     assert_eq!(round.outcome, Some(RoundOutcome::Completed));
@@ -1748,7 +1961,7 @@ fn membership_names_the_lead_and_its_sidekicks() {
     let store = Arc::new(MemoryFusionStore::default());
     let broker = FusionBroker::new(Arc::new(Arc::new(FakeHost::default())), store, true);
     broker.register_lead(LEAD, "w", claude_pair()).unwrap();
-    let (role, lead, _) = broker.membership(LEAD).unwrap();
+    let (role, lead, ..) = broker.membership(LEAD).unwrap();
     assert_eq!((role, lead.as_str()), (FusionRoleName::Lead, LEAD));
     assert!(broker.membership("other").is_none());
     broker.forget_lead(LEAD);
@@ -2228,6 +2441,7 @@ fn contract_shapes_match_the_public_fixture() {
                     updated_at: "2026-10-22T10:01:02.000Z".into(),
                 }),
                 take_over: false,
+                person_steers: 0,
                 // Host-private fields never reach the WebView.
                 baseline_block_id: Some("block-0".into()),
                 baseline_known: true,
@@ -2244,6 +2458,10 @@ fn contract_shapes_match_the_public_fixture() {
             ..FusionStats::default()
         },
         revision: 4,
+        paused: false,
+        sidekick_change_block: None,
+        sidekick_replace_block: None,
+        sidekick_current_model: None,
     };
     let encode = |value: &FusionResultV1| serde_json::to_value(value).expect("result");
     assert_eq!(
@@ -2257,6 +2475,9 @@ fn contract_shapes_match_the_public_fixture() {
             ok: false,
             refusal: Some(FusionRefusal::CodexSandboxUnverified),
             role: Some(FusionRoleName::Sidekick),
+            dimension: None,
+            sidekick_mode: None,
+            capabilities: None,
         }),
         fixture["pairRefused"]
     );
@@ -2264,7 +2485,10 @@ fn contract_shapes_match_the_public_fixture() {
         encode(&FusionResultV1::PairCheck {
             ok: true,
             refusal: None,
-            role: None
+            role: None,
+            dimension: None,
+            sidekick_mode: None,
+            capabilities: None,
         }),
         fixture["pairAccepted"]
     );
@@ -3041,13 +3265,17 @@ async fn the_busy_refusal_and_the_progress_text_follow_auto_delivery() {
     assert_eq!(refused["code"], json!("brief-active"));
     let text = progress["text"].as_str().unwrap();
     assert!(
-        text.contains("end your turn: the report is delivered to you when it is ready."),
+        text.contains("Do not call wait again: end your turn now"),
+        "{text}"
+    );
+    assert!(
+        text.contains("the report is delivered to you automatically when it is ready."),
         "{text}"
     );
     let message = refused["message"].as_str().unwrap();
     assert!(
         message.ends_with(
-            "Call wait once, steer or stop it, or end your turn: its report is delivered to you when it is ready."
+            "end your turn now: its report is delivered to you automatically when it is ready. Do not call wait in a loop."
         ),
         "{message}"
     );
@@ -3139,8 +3367,535 @@ async fn the_wait_portion_counts_from_the_call_not_from_the_sidekick_start() {
 #[test]
 fn the_lead_instructions_make_the_sidekick_the_default_executor_without_naming_a_harness() {
     assert!(LEAD_INSTRUCTIONS.contains("default executor"));
-    assert!(LEAD_INSTRUCTIONS.contains("not a subagent"));
+    // Limits on delegation apply to the sidekick too (ADR-076).
+    assert!(!LEAD_INSTRUCTIONS.contains("not a subagent"));
+    assert!(LEAD_INSTRUCTIONS.contains("applies to the sidekick too"));
+    assert!(!LEAD_INSTRUCTIONS.contains("call wait again"));
     for name in ["Codex", "Claude", "Pi ", "Nano"] {
         assert!(!LEAD_INSTRUCTIONS.contains(name), "names {name}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ADR-076: the pair stop barrier, unknown sends and unknown deliveries
+// ---------------------------------------------------------------------------
+
+/// A finished report queued as a follow-up while the lead is still busy.
+async fn queued_follow_up(fixture: &Fixture) {
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    fixture
+        .host
+        .complete(&sidekick, Some("STATUS: done"), TurnOutcome::Succeeded);
+    let store = fixture.store.clone();
+    until(|| stored_delivery(&store) == Some((DeliveryVia::FollowUp, DeliveryState::Queued))).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn stop_pair_with_a_queued_follow_up_never_wakes_the_lead_until_resumed() {
+    let fixture = fixture();
+    queued_follow_up(&fixture).await;
+    // Stop pair: the pause comes before any interrupt.
+    fixture.broker.pause_pair(LEAD).await.unwrap();
+    fixture.broker.stop_sidekick(LEAD).await.unwrap();
+    // The lead's interrupted turn ends; the delivery worker sees an idle lead.
+    fixture.host.set_status(LEAD, SessionStatus::Idle);
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    assert!(fixture.host.sent_to(LEAD).is_empty(), "no new lead prompt");
+    assert_eq!(
+        stored_delivery(&fixture.store),
+        Some((DeliveryVia::FollowUp, DeliveryState::Queued))
+    );
+    assert!(fixture.broker.state(LEAD).await.unwrap().paused);
+    assert!(fixture.document().await.paused, "the pause is journaled");
+    // A brief is refused while the pair is stopped.
+    let (refused, _) = fixture.call("call-2", brief(false, 0)).await;
+    assert_eq!(refused["code"], json!("pair-stopping"));
+    // Only the person resumes it; then the report is delivered once.
+    fixture.broker.resume_pair(LEAD).await.unwrap();
+    let host = Arc::clone(&fixture.host);
+    until(|| host.sent_to(LEAD).len() == 1).await;
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert_eq!(fixture.host.sent_to(LEAD).len(), 1);
+    assert!(!fixture.broker.state(LEAD).await.unwrap().paused);
+}
+
+#[tokio::test(start_paused = true)]
+async fn only_the_person_resumes_a_stopped_pair_never_a_late_tool_call_or_a_report() {
+    let fixture = fixture();
+    queued_follow_up(&fixture).await;
+    // A message the person wrote before the stop: its epoch predates it.
+    let before = fixture.broker.person_message_epoch(LEAD).unwrap();
+    assert!(fixture.broker.pause_pair(LEAD).await.unwrap(), "journaled");
+    // The stopped turn ends and a late tool call of it arrives: still paused.
+    fixture.host.complete(LEAD, None, TurnOutcome::Interrupted);
+    let _ = fixture.call("call-late", op(json!({"op": "status"}))).await;
+    fixture.host.set_status(LEAD, SessionStatus::Running);
+    let (refused, _) = fixture.call("call-2", brief(false, 0)).await;
+    assert_eq!(refused["code"], json!("pair-stopping"), "{refused}");
+    assert!(fixture.broker.state(LEAD).await.unwrap().paused);
+    // The idle lead gets no auto-delivered report, and nothing resumes.
+    fixture.host.set_status(LEAD, SessionStatus::Idle);
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    assert!(fixture.host.sent_to(LEAD).is_empty());
+    // A person's message admitted before the stop does not lift it.
+    fixture.broker.person_message_admitted(LEAD, before).await;
+    assert!(fixture.broker.state(LEAD).await.unwrap().paused);
+    // One the person writes after the stop does, and the report goes once.
+    let after = fixture.broker.person_message_epoch(LEAD).unwrap();
+    fixture.broker.person_message_admitted(LEAD, after).await;
+    assert!(!fixture.broker.state(LEAD).await.unwrap().paused);
+    assert!(!fixture.document().await.paused, "the resume is journaled");
+    let host = Arc::clone(&fixture.host);
+    until(|| host.sent_to(LEAD).len() == 1).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pause_whose_journal_write_fails_still_holds_in_this_process() {
+    let fixture = fixture();
+    fixture.store.fail_writes.store(true, Ordering::Release);
+    assert!(
+        !fixture.broker.pause_pair(LEAD).await.unwrap(),
+        "the failure is reported"
+    );
+    assert!(fixture.broker.state(LEAD).await.unwrap().paused);
+    fixture.store.fail_writes.store(false, Ordering::Release);
+    let (refused, _) = fixture.call("call-1", brief(false, 0)).await;
+    assert_eq!(refused["code"], json!("pair-stopping"), "{refused}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_steer_never_reaches_a_turn_after_its_round_ended() {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    // The round's turn ends; the steer comes before or after the broker
+    // settles it, and is refused either way.
+    fixture
+        .host
+        .complete(&sidekick, Some("STATUS: done"), TurnOutcome::Succeeded);
+    let (refused, _) = fixture
+        .call(
+            "call-2",
+            op(json!({"op": "steer", "roundId": "r1", "text": "late"})),
+        )
+        .await;
+    assert_eq!(refused["code"], json!("round-finished"), "{refused}");
+    assert!(
+        fixture
+            .host
+            .sent_to(&sidekick)
+            .iter()
+            .all(|(_, mode)| *mode != PromptMode::Steer),
+        "no steer was sent"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unconfirmed_brief_send_is_uncertain_and_holds_the_writer_lock() {
+    let fixture = fixture();
+    fixture.host.unknown_send.store(true, Ordering::Release);
+    let (answer, _) = fixture.call("call-1", brief(false, 0)).await;
+    assert_eq!(answer["code"], json!("uncertain"), "{answer}");
+    let round = stored_round(&fixture.store, 0).unwrap();
+    assert_eq!(round.state, RoundState::Uncertain);
+    assert_ne!(round.outcome, Some(RoundOutcome::Failed));
+    let document = fixture.document().await;
+    assert!(
+        !document.sessions[0].retired,
+        "the sidekick may be running it"
+    );
+    fixture.host.unknown_send.store(false, Ordering::Release);
+    let (refused, _) = fixture.call("call-2", brief(false, 0)).await;
+    assert_eq!(refused["code"], json!("uncertain"));
+    assert_eq!(
+        fixture.host.sent_to(&fixture.host.sidekick_id()).len(),
+        1,
+        "never sent again"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unconfirmed_follow_up_is_never_resent_and_the_lead_history_settles_it() {
+    let fixture = fixture();
+    queued_follow_up(&fixture).await;
+    fixture.host.unknown_send.store(true, Ordering::Release);
+    fixture.host.set_status(LEAD, SessionStatus::Idle);
+    let store = fixture.store.clone();
+    until(|| stored_delivery(&store) == Some((DeliveryVia::FollowUp, DeliveryState::Uncertain)))
+        .await;
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    assert_eq!(fixture.host.sent_to(LEAD).len(), 1, "no blind resend");
+    let (status, _) = fixture.call("call-2", op(json!({"op": "status"}))).await;
+    assert!(
+        status["text"]
+            .as_str()
+            .unwrap()
+            .contains("report r1 of brief b1: delivery unknown"),
+        "{status}"
+    );
+    // The report's stable id is in the lead's history: it was delivered.
+    assert!(fixture.broker.check_delivery(LEAD, "r1").await.unwrap());
+    assert_eq!(
+        stored_delivery(&fixture.store),
+        Some((DeliveryVia::FollowUp, DeliveryState::Sent))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_report_missing_from_the_lead_history_is_said_unknown_then_delivered_again() {
+    let fixture = fixture();
+    queued_follow_up(&fixture).await;
+    fixture.host.unknown_send.store(true, Ordering::Release);
+    fixture.host.set_status(LEAD, SessionStatus::Idle);
+    let store = fixture.store.clone();
+    until(|| stored_delivery(&store) == Some((DeliveryVia::FollowUp, DeliveryState::Uncertain)))
+        .await;
+    fixture.host.sent.lock().unwrap().clear();
+    fixture.host.unknown_send.store(false, Ordering::Release);
+    assert!(!fixture.broker.check_delivery(LEAD, "r1").await.unwrap());
+    // `wait` never calls an unknown handoff delivered.
+    let (waited, claimed) = fixture.call("call-2", wait_op("r1", 0)).await;
+    assert!(claimed.is_none());
+    assert_eq!(waited["alreadyDelivered"], json!(false));
+    assert_eq!(waited["deliveryUnknown"], json!(true));
+    let text = waited["text"].as_str().unwrap();
+    assert!(
+        text.contains("(delivery unknown: this report may have reached you before)"),
+        "{text}"
+    );
+    assert!(!text.contains("already delivered earlier"), "{text}");
+    fixture.broker.deliver_again(LEAD, "r1").await.unwrap();
+    let host = Arc::clone(&fixture.host);
+    until(|| host.sent_to(LEAD).len() == 1).await;
+    until(|| stored_delivery(&store) == Some((DeliveryVia::FollowUp, DeliveryState::Sent))).await;
+    // A settled delivery is no longer the person's to check.
+    assert_eq!(
+        fixture.broker.dismiss_report(LEAD, "r1").await,
+        Err(SidekickErrorCode::RoundFinished)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_handoff_whose_claim_was_not_journaled_is_not_given_to_the_lead() {
+    let fixture = fixture();
+    let broker = fixture.broker.clone();
+    let task = tokio::spawn(async move {
+        broker
+            .handle(LEAD, &identity("call-1", "h1"), brief(true, 120))
+            .await
+    });
+    let host = Arc::clone(&fixture.host);
+    until(|| !host.sent.lock().unwrap().is_empty()).await;
+    fixture.store.fail_writes.store(true, Ordering::Release);
+    host.complete(
+        &host.sidekick_id(),
+        Some("STATUS: done"),
+        TurnOutcome::Succeeded,
+    );
+    let (answer, claimed) = task.await.unwrap();
+    assert!(claimed.is_none(), "{answer}");
+    assert_eq!(answer["code"], json!("sidekick-unavailable"));
+    assert!(answer.get("report").is_none());
+    // Once the journal works again the report is handed over, as a first delivery.
+    fixture.store.fail_writes.store(false, Ordering::Release);
+    let (waited, claimed) = fixture.call("call-2", wait_op("r1", 0)).await;
+    assert_eq!(claimed.as_deref(), Some("r1"), "{waited}");
+    assert_eq!(waited["alreadyDelivered"], json!(false));
+}
+
+#[tokio::test(start_paused = true)]
+async fn close_takes_reason_as_its_note_and_the_person_steers_a_running_round() {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    fixture
+        .broker
+        .person_steer(LEAD, "Use the existing tokenizer.")
+        .await
+        .unwrap();
+    let (text, mode) = fixture.host.sent_to(&sidekick).last().cloned().unwrap();
+    assert_eq!(mode, PromptMode::Steer);
+    assert!(text.starts_with("[PiUI: the person adds to round r1]\nUse the existing tokenizer."));
+    assert_eq!(stored_round(&fixture.store, 0).unwrap().person_steers, 1);
+    fixture
+        .host
+        .complete(&sidekick, Some("STATUS: done"), TurnOutcome::Succeeded);
+    let store = fixture.store.clone();
+    until(|| stored_round(&store, 0).is_some_and(|round| round.state == RoundState::Finished))
+        .await;
+    assert_eq!(
+        fixture.broker.person_steer(LEAD, "late").await,
+        Err(SidekickErrorCode::RoundFinished)
+    );
+    let (closed, _) = fixture
+        .call(
+            "call-2",
+            op(json!({"op": "close", "briefId": "b1", "outcome": "accepted", "reason": "merged"})),
+        )
+        .await;
+    assert_eq!(closed["ok"], json!(true), "{closed}");
+    assert_eq!(
+        fixture.document().await.briefs[0].note.as_deref(),
+        Some("merged")
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_sidekick_approval_reaches_the_person_for_claude_and_codex_sidekicks() {
+    for sidekick in [HarnessKind::ClaudeCode, HarnessKind::Codex] {
+        let fixture = fixture_with(pair(
+            role(HarnessKind::Codex, PermissionMode::FullAccess),
+            role(sidekick, PermissionMode::WorkspaceWrite),
+        ));
+        let _ = fixture.call("call-1", brief(false, 0)).await;
+        until(|| {
+            stored_round(&fixture.store, 0).is_some_and(|round| round.state == RoundState::Running)
+        })
+        .await;
+        fixture
+            .host
+            .approvals
+            .lock()
+            .unwrap()
+            .push("approval-1".into());
+        until(|| {
+            stored_round(&fixture.store, 0)
+                .is_some_and(|round| round.state == RoundState::WaitingApproval)
+        })
+        .await;
+        let state = fixture.broker.state(LEAD).await.unwrap();
+        assert_eq!(
+            state.sidekick,
+            super::model::SidekickState::WaitingApproval,
+            "{sidekick:?}"
+        );
+        let (status, _) = fixture.call("call-2", op(json!({"op": "status"}))).await;
+        assert!(
+            status["text"].as_str().unwrap().contains("approval"),
+            "{sidekick:?}: {status}"
+        );
+        fixture.host.approvals.lock().unwrap().clear();
+        until(|| {
+            stored_round(&fixture.store, 0).is_some_and(|round| round.state == RoundState::Running)
+        })
+        .await;
+    }
+}
+
+fn model_selection(mut role: FusionRole, id: &str, provider: &str) -> FusionRole {
+    role.model = Some(WorkspaceModel {
+        id: id.into(),
+        provider: Some(provider.into()),
+        name: id.into(),
+        thinking_levels: Some(vec!["high".into()]),
+    });
+    role
+}
+
+fn sidekick_change(
+    state: &super::model::FusionStateV1,
+    kind: SidekickChangeKind,
+    sidekick: FusionRole,
+    allow_context_loss: bool,
+) -> SidekickChange {
+    SidekickChange {
+        revision: state.revision,
+        kind,
+        sidekick,
+        allow_context_loss,
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn changing_sidekick_model_uses_native_session_or_confirmed_fresh_start() {
+    let mut pair = claude_pair();
+    pair.lead.permission_mode = PermissionMode::WorkspaceWrite;
+    pair.sidekick = model_selection(
+        role(HarnessKind::Codex, PermissionMode::WorkspaceWrite),
+        "first",
+        "openai",
+    );
+    let fixture = fixture_with(pair);
+    fixture
+        .broker
+        .handle(LEAD, &identity("start", "start"), brief(false, 0))
+        .await;
+    let id = fixture.host.sidekick_id();
+    fixture
+        .host
+        .interrupt_completes
+        .store(true, Ordering::Release);
+    fixture.broker.stop_sidekick(LEAD).await.unwrap();
+    let state = fixture.broker.state(LEAD).await.unwrap();
+    let mut second = model_selection(state.pair.sidekick.clone(), "second", "openai");
+    second.thinking_level = Some("high".into());
+    second.service_tier = Some(FusionServiceTier::Fast);
+    fixture
+        .broker
+        .change_sidekick(
+            LEAD,
+            sidekick_change(&state, SidekickChangeKind::Model, second.clone(), false),
+            false,
+        )
+        .await
+        .unwrap();
+    let state = fixture.broker.state(LEAD).await.unwrap();
+    assert_eq!(state.pair.sidekick, second);
+    assert_eq!(fixture.host.models.lock().unwrap()[&id], second);
+    assert_eq!(state.sessions.len(), 1);
+    assert_eq!(fixture.host.launches.lock().unwrap().len(), 1);
+    let third = model_selection(second, "third", "another-source");
+    let err = fixture
+        .broker
+        .change_sidekick(
+            LEAD,
+            sidekick_change(&state, SidekickChangeKind::Model, third.clone(), false),
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "FUSION_CONTEXT_LOSS");
+    fixture
+        .broker
+        .change_sidekick(
+            LEAD,
+            sidekick_change(&state, SidekickChangeKind::Model, third.clone(), true),
+            false,
+        )
+        .await
+        .unwrap();
+    let state = fixture.broker.state(LEAD).await.unwrap();
+    assert_eq!(state.pair.sidekick, third);
+    assert_eq!(state.sessions.len(), 2);
+    assert!(state.sessions[0].retired);
+    assert_eq!(fixture.host.closed.lock().unwrap().as_slice(), &[id]);
+    assert_eq!(state.lead_session_id, LEAD);
+}
+
+#[tokio::test(start_paused = true)]
+async fn sidekick_replacement_is_narrowed_and_revision_checked() {
+    let mut pair = claude_pair();
+    pair.lead.permission_mode = PermissionMode::WorkspaceWrite;
+    pair.sidekick.permission_mode = PermissionMode::WorkspaceWrite;
+    let fixture = fixture_with(pair);
+    let state = fixture.broker.state(LEAD).await.unwrap();
+    let next = role(HarnessKind::Codex, PermissionMode::FullAccess);
+    let err = fixture
+        .broker
+        .change_sidekick(
+            LEAD,
+            sidekick_change(&state, SidekickChangeKind::Replace, next.clone(), true),
+            true,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "SAFE_MODE");
+    fixture
+        .broker
+        .change_sidekick(
+            LEAD,
+            sidekick_change(&state, SidekickChangeKind::Replace, next.clone(), true),
+            false,
+        )
+        .await
+        .unwrap();
+    let err = fixture
+        .broker
+        .change_sidekick(
+            LEAD,
+            sidekick_change(&state, SidekickChangeKind::Replace, next, true),
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "CONFLICT");
+    let state = fixture.broker.state(LEAD).await.unwrap();
+    assert_eq!(
+        state.sidekick_replace_block,
+        Some(SidekickChangeBlock::SidekickAttached)
+    );
+    assert_eq!(
+        state.pair.sidekick.permission_mode,
+        PermissionMode::WorkspaceWrite
+    );
+    {
+        let launched = fixture.host.launches.lock().unwrap();
+        assert_eq!(launched.len(), 1);
+        assert_eq!(launched[0].role, state.pair.sidekick);
+    }
+    assert_eq!(fixture.store.load_all()[0].pair, state.pair);
+    fixture.broker.person_stop_sidekick(LEAD).await.unwrap();
+    let detached = fixture.broker.state(LEAD).await.unwrap();
+    assert_eq!(detached.sidekick_replace_block, None);
+    assert!(detached.revision > state.revision);
+    assert!(
+        fixture
+            .broker
+            .is_current_sidekick(&detached.sessions[0].session_id)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn sidekick_change_is_blocked_by_open_uncertain_or_unsettled_report() {
+    let fixture = fixture();
+    let next = role(HarnessKind::Codex, PermissionMode::FullAccess);
+    fixture
+        .broker
+        .handle(LEAD, &identity("start", "start"), brief(false, 0))
+        .await;
+    let state = fixture.broker.state(LEAD).await.unwrap();
+    let err = fixture
+        .broker
+        .change_sidekick(
+            LEAD,
+            sidekick_change(&state, SidekickChangeKind::Replace, next.clone(), true),
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "FUSION_ROUND_OPEN");
+    let reopened = FusionBroker::new(
+        Arc::new(Arc::clone(&fixture.host)),
+        fixture.store.clone(),
+        true,
+    );
+    let state = reopened.state(LEAD).await.unwrap();
+    let err = reopened
+        .change_sidekick(
+            LEAD,
+            sidekick_change(&state, SidekickChangeKind::Replace, next.clone(), true),
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "FUSION_ROUND_UNCERTAIN");
+
+    fixture.broker.pause_pair(LEAD).await.unwrap();
+    fixture.host.complete(
+        &fixture.host.sidekick_id(),
+        Some("STATUS: done"),
+        TurnOutcome::Succeeded,
+    );
+    loop {
+        let state = fixture.broker.state(LEAD).await.unwrap();
+        if state.sidekick_change_block == Some(SidekickChangeBlock::ReportPending) {
+            let err = fixture
+                .broker
+                .change_sidekick(
+                    LEAD,
+                    sidekick_change(&state, SidekickChangeKind::Replace, next, true),
+                    false,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(err.code, "FUSION_REPORT_PENDING");
+            break;
+        }
+        assert_eq!(
+            state.sidekick_change_block,
+            Some(SidekickChangeBlock::RoundOpen)
+        );
+        tokio::task::yield_now().await;
     }
 }

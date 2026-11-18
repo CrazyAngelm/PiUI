@@ -264,7 +264,7 @@ export const russianUi: Readonly<Record<string, string>> = {
   "Assign roles to saved agents and choose a coordinator.": "Назначьте роли сохранённым агентам и выберите координатора.", "Add tasks, choose who does them, and set what runs next.": "Добавьте задачи, назначьте исполнителей и задайте порядок работы.",
   "Connect agents and their tasks in one workspace.": "Объедините агентов и их задачи в одном рабочем пространстве.", "Choose a saved team and process to begin.": "Выберите сохранённые команду и процесс.", "Create agent": "Создать агента",
   "Message queue": "Очередь сообщений", "Queue paused": "Очередь приостановлена", "Resume queue": "Продолжить очередь",
-  "Queued": "В очереди", "Edit queued message": "Изменить сообщение в очереди", "Send now as Steer": "Отправить сразу",
+  "Queued": "В очереди", "Edit queued message": "Изменить сообщение в очереди",
   "Dismiss after checking history": "Убрать после проверки истории",
   "Queue a follow-up…": "Добавить сообщение в очередь…",
   "Available commands": "Доступные команды", "Compact conversation context": "Сжать контекст беседы", "Stop the current turn": "Остановить текущий ход",

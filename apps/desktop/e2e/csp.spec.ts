@@ -41,6 +41,27 @@ test('the server applies the app CSP from tauri.conf.json', async ({ request }) 
   expect(APP_CSP).not.toMatch(/'unsafe-inline'|'unsafe-eval'/);
 });
 
+test('chat file previews load from blob: URLs under the app CSP', async ({ lab, page }) => {
+  // Only images and media may come from blob: URLs; scripts and styles may not.
+  expect(APP_CSP).toContain("img-src 'self' asset: blob:;");
+  expect(APP_CSP).toContain("media-src 'self' blob:;");
+  expect(APP_CSP).not.toMatch(/(?:script|style|connect|frame)-src[^;]*blob:/);
+  await lab.open();
+  await lab.chat(/Route host calls through one transport/).click();
+  const image = page.locator('[data-file-name="transport-diagram.png"] img');
+  await expect(image).toHaveAttribute('src', /^blob:/);
+  await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true);
+  const sound = page.locator('[data-file-name="narration.wav"] audio');
+  await expect(sound).toHaveAttribute('src', /^blob:/);
+  // The player waits for a press; ask for its metadata so the media-src check runs.
+  await sound.evaluate((element: HTMLAudioElement) => {
+    element.preload = 'metadata';
+    element.load();
+  });
+  await expect.poll(() => sound.evaluate((element: HTMLAudioElement) => element.readyState)).toBeGreaterThanOrEqual(1);
+  expect(await violations(page), 'CSP violations after chat file previews').toEqual([]);
+});
+
 test('main screens run under the app CSP without violations', async ({ lab, page }) => {
   test.slow();
   const consoleCsp: string[] = [];

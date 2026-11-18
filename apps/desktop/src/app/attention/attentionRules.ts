@@ -109,8 +109,10 @@ export function evaluateAttention(previous: AttentionSnapshot | undefined, curre
   const raised = new Map<string, AttentionKind>();
   const raise = (id: string, kind: AttentionKind): void => {
     const session = byId.get(id);
-    if (session === undefined || session.runId !== undefined || context.isSidekick(id) || watching(id)) return;
-    if (kind === 'finished' && context.isAgentChild?.(id) === true) return;
+    if (session === undefined || session.runId !== undefined || watching(id)) return;
+    // A Fusion sidekick's normal finish is the lead's business; its approval requests and
+    // failures need the person, and the raised chat is where that request is (ADR-076).
+    if (kind === 'finished' && (context.isSidekick(id) || context.isAgentChild?.(id) === true)) return;
     const known = raised.get(id);
     raised.set(id, known === undefined ? kind : strongerKind(known, kind));
   };

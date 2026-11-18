@@ -11,7 +11,7 @@
   import type { ComposerImage } from '../../host-api/composerInputsClient';
   import type { SessionSnapshot } from '../../host-api/workspaceClient';
   import { composerSupport, imageSupport } from '../../harness-adapters/composer';
-  import { Button, IconButton, Segmented, Spinner, Textarea } from '../../lib/ui';
+  import { Button, IconButton, Spinner, Textarea } from '../../lib/ui';
   import ComposerTextarea from '../../lib/ui/ComposerTextarea.svelte';
   import { harnessMeta } from '../harnessMeta';
   import { errorMessage } from '../workspaceStore.svelte';
@@ -74,12 +74,24 @@
   }
 
   let composer = $state.raw<ComposerSnapshot | undefined>();
-  /** The person's choice for the running turn; without one a message goes to the agent at once. */
-  let chosenMode = $state<'follow-up' | 'steer' | undefined>(undefined);
   let busy = $state(false);
   let error = $state('');
   let editing = $state('');
   let editText = $state('');
+  let queueEditor = $state<HTMLTextAreaElement | null>(null);
+  let root = $state<HTMLElement | null>(null);
+  /** Closes the queue editor and gives the focus back to that message's Edit button. */
+  function closeEditor(id: string): void {
+    editing = '';
+    void tick().then(() => root?.querySelector<HTMLElement>(`[data-queue-edit="${CSS.escape(id)}"]`)?.focus());
+  }
+  // "Edit" puts the caret at the end of the queued text, ready to type.
+  $effect(() => {
+    const field = queueEditor;
+    if (!field) return;
+    field.focus();
+    field.setSelectionRange(field.value.length, field.value.length);
+  });
   let menuIndex = $state(0);
   let menuDismissed = $state(false);
   /** The macro space Escape turned into an ordinary space: it stays closed while the text before it is unchanged. */
@@ -108,8 +120,13 @@
   const running = $derived(snapshot.session.status === 'running');
   const stopping = $derived(snapshot.session.status === 'stopping');
   const canSteer = $derived(Boolean(composer?.capabilities.steer));
-  // Steer is the default while a turn runs; a harness that cannot steer queues the message.
-  const mode = $derived<'follow-up' | 'steer'>(canSteer ? (chosenMode ?? 'steer') : 'follow-up');
+  // While dictating, Send (button or Enter) stops the recording and sends what was said.
+  let dictate = $state<{ stopAndSend: () => void } | null | undefined>();
+  let dictationActive = $state(false);
+  const dictating = $derived(dictationActive && Boolean(dictate));
+  const submit = (): void => (dictating ? dictate?.stopAndSend() : void send());
+  // A running turn shows Stop in the send button's place until there is something to send.
+  const showStop = $derived((running || stopping) && !dictating && !text.trim());
   const commands = $derived([
     ...(composer?.capabilities.compact
       ? [{ name: 'compact', description: 'Compact conversation context', enabled: snapshot.session.status === 'idle' && !composer.queue.items.length }]
@@ -289,11 +306,6 @@
     }
   }
 
-  // Each turn starts from the default again.
-  $effect(() => {
-    if (!running) chosenMode = undefined;
-  });
-
   // Loads the project file names for `@` as it is typed.
   $effect(() => {
     if (mention?.trigger === '@') fileMentions.update(workspaceId, mention.query);
@@ -402,9 +414,9 @@
   }
 
   /** Dictated words go in at the caret. */
-  function dictated(words: string): void {
+  function dictated(words: string): Promise<void> {
     const next = insertAtCaret(text, input?.selectionStart ?? caret, words);
-    void place(next.text, next.caret);
+    return place(next.text, next.caret);
   }
 
   /** `/btw`: a branch of this chat at its end, opened beside it; the question is the branch's first message. */
@@ -513,7 +525,8 @@
     const handed = await chatPipelines.withResults(sessionId, expandMacros(typed, macros.list, skillSyntax));
     const message = handed.text;
     const imageIds = attachments.ids;
-    const effectiveMode = running ? mode : 'prompt';
+    // A message written during a turn waits in the queue; its "Send now" steers it into the turn.
+    const effectiveMode = running ? 'follow-up' : 'prompt';
     // A durable request id prevents duplicate delivery if the reply is lost.
     let identity = loadIdentity();
     if (!identity || identity.text !== message || (identity.attachments ?? []).join() !== imageIds.join()) {
@@ -617,68 +630,80 @@
   }
 
   function statusText(status: string): string {
-    if (status === 'queued') return $t('Queued');
     if (status === 'sending') return $t('Sending…');
     return $t('Delivery uncertain — check the chat before dismissing. It will not be resent automatically.');
   }
 </script>
 
-<div class="composer-wrap" data-nano-composer="root">
-  {#if queue.length}
+<div class="composer-wrap" data-nano-composer="root" bind:this={root}>
+  {#if queue.length || composer?.queue.paused}
     <section class="queue" aria-label={$t('Message queue')}>
-      <header>
-        <span>{$t('Queued messages')}</span>
-        {#if composer?.queue.paused}
-          <span class="queue__paused">{$t('Queue paused')}</span>
+      {#if composer?.queue.paused}
+        <p class="queue__paused">
+          <span>{$t('Queue paused')}</span>
           <Button
             size="sm"
             variant="ghost"
             disabled={busy || queue.some((item) => item.status === 'uncertain' || item.status === 'sending')}
             onclick={() => void action({ type: 'resume', sessionId })}>{$t('Resume queue')}</Button
           >
-        {/if}
-      </header>
+        </p>
+      {/if}
       {#each queue as item (item.id)}
-        <article class="queue__item" class:queue__item--warn={item.status === 'uncertain'}>
-          {#if editing === item.id && item.status === 'queued'}
-            <Textarea bind:value={editText} minRows={2} maxRows={6} aria-label={$t('Edit queued message')} />
+        {@const editingThis = editing === item.id && item.status === 'queued'}
+        <article class="queue__item" class:queue__item--warn={item.status === 'uncertain'} class:queue__item--editing={editingThis}>
+          {#if editingThis}
+            <Textarea bind:ref={queueEditor} bind:value={editText} minRows={2} maxRows={6} aria-label={$t('Edit queued message')}
+              onkeydown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  closeEditor(item.id);
+                }
+              }} />
             <div class="queue__actions">
-              <Button size="sm" variant="ghost" onclick={() => (editing = '')}>{$t('Cancel')}</Button>
+              <Button size="sm" variant="ghost" onclick={() => closeEditor(item.id)}>{$t('Cancel')}</Button>
               <Button
                 size="sm"
                 variant="primary"
                 disabled={busy || !editText.trim()}
                 onclick={async () => {
-                  if (await action({ type: 'edit', sessionId, requestId: item.id, text: editText })) editing = '';
+                  if (await action({ type: 'edit', sessionId, requestId: item.id, text: editText })) closeEditor(item.id);
                 }}>{$t('Save')}</Button
               >
             </div>
           {:else}
-            <p class="queue__text">{item.text}</p>
-            {#if item.attachments?.length}
-              <p class="queue__images" aria-label={$t('Attached images')}>
-                <ImageIcon size={12} />
-                {item.attachments.map((image) => image.name).join(', ')}
-              </p>
-            {/if}
+            <span class="queue__mark" aria-hidden="true"><CornerDownRight size={14} /></span>
+            <div class="queue__body">
+              <!-- A message whose delivery is unknown is shown whole, to compare it with the chat before removing it. -->
+              <p class="queue__text" class:queue__text--whole={item.status === 'uncertain'} title={item.text}>{item.text}</p>
+              {#if item.attachments?.length}
+                <p class="queue__images" aria-label={$t('Attached images')}>
+                  <ImageIcon size={12} />
+                  {item.attachments.map((image) => image.name).join(', ')}
+                </p>
+              {/if}
+              {#if item.status !== 'queued'}
+                <p class="queue__status">
+                  {#if item.status === 'sending'}<Spinner size={10} />{/if}
+                  {statusText(item.status)}
+                </p>
+              {/if}
+              {#if item.error}<p class="queue__error">{$t(item.error)}</p>{/if}
+            </div>
             <div class="queue__actions">
-              <span class="queue__status">
-                {#if item.status === 'sending'}<Spinner size={10} />{/if}
-                {statusText(item.status)}
-              </span>
-              {#if item.error}<span class="queue__error">{$t(item.error)}</span>{/if}
               {#if item.status === 'queued'}
+                {#if running && canSteer}
+                  <IconButton size="sm" label={$t('Send now')} onclick={() => void promote(item)}><ArrowUp /></IconButton>
+                {/if}
                 <IconButton
                   size="sm"
+                  data-queue-edit={item.id}
                   label={$t('Edit')}
                   onclick={() => {
                     editing = item.id;
                     editText = item.text;
                   }}><Pencil /></IconButton
                 >
-                {#if running && canSteer}
-                  <IconButton size="sm" label={$t('Send now as Steer')} onclick={() => void promote(item)}><CornerDownRight /></IconButton>
-                {/if}
               {/if}
               {#if item.status !== 'sending'}
                 <IconButton
@@ -743,7 +768,7 @@
           menuIndex = 0;
         }}
         beforeKeyDown={keydown}
-        onSubmit={() => void send()}
+        onSubmit={submit}
         onkeyup={(event) => {
           if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) syncCaret();
         }}
@@ -756,7 +781,7 @@
         aria-autocomplete="list"
         aria-controls={menu ? menuId : undefined}
         aria-activedescendant={menu && menu.items.length ? `${menuId}-${activeIndex}` : undefined}
-        placeholder={pipelineId ? $t('Describe the task for the pipeline…') : remoteMode ? $t('Message') : running ? (mode === 'steer' && canSteer ? $t('Send to the agent now…') : $t('Queue a follow-up…')) : $t('Reply, type / for commands or @ to mention a file…')}
+        placeholder={pipelineId ? $t('Describe the task for the pipeline…') : remoteMode ? $t('Message') : running ? $t('Queue a follow-up…') : $t('Reply, type / for commands or @ to mention a file…')}
       />
       {#if macroTokens.length}
         <MacroLayer {input} {text} tokens={macroTokens} syntax={skillSyntax} quiet={Boolean(menu)} onEdit={onEditMacro ? (macro) => onEditMacro(macro.id) : undefined} />
@@ -786,36 +811,33 @@
             onchange={refresh}
           />
         {/if}
-        {#if running && canSteer}
-          <Segmented
-            size="sm"
-            label={$t('Send mode')}
-            bind:value={() => mode, (value) => { chosenMode = value === 'follow-up' ? 'follow-up' : 'steer'; }}
-            options={[
-              { value: 'steer', label: $t('Right away'), title: $t('Right away: the agent reads this message at its next step, while it is still working') },
-              { value: 'follow-up', label: $t('After this turn'), title: $t('After this turn: the message waits in the queue and is sent when the agent finishes') },
-            ]}
-          />
-        {/if}
       </div>
       <div class="composer__right">
-        {#if running || stopping}
-          <IconButton data-nano-composer="action" label={interruptBusy || stopping ? $t('Stopping…') : $t('Stop turn')} shortcut="Mod+." variant="subtle" disabled={interruptBusy || stopping} onclick={() => void interrupt()}>
-            <Square />
-          </IconButton>
-        {/if}
         {#if !remoteMode}
-          <DictateButton onText={dictated} onSend={() => void send()} scope={`chat:${sessionId}`} disabled={busy || safeMode} />
+          <DictateButton bind:this={dictate} bind:active={dictationActive} onText={dictated} onSend={() => void send()} scope={`chat:${sessionId}`} disabled={busy || safeMode} />
         {/if}
-        <button
-          type="button"
-          data-nano-composer="send"
-          onclick={() => void send()}
-          disabled={busy || !composer || !text.trim()}
-          aria-label={running ? (mode === 'steer' ? $t('Steer') : $t('Follow up')) : $t('Send')}
-        >
-          {#if busy}<Spinner size={14} />{:else}<ArrowUp size={16} />{/if}
-        </button>
+        {#if showStop}
+          <button
+            type="button"
+            data-nano-composer="send"
+            onclick={() => void interrupt()}
+            disabled={interruptBusy || stopping}
+            aria-label={interruptBusy || stopping ? $t('Stopping…') : $t('Stop turn')}
+            aria-keyshortcuts="Control+."
+          >
+            {#if interruptBusy || stopping}<Spinner size={14} />{:else}<Square size={12} fill="currentColor" />{/if}
+          </button>
+        {:else}
+          <button
+            type="button"
+            data-nano-composer="send"
+            onclick={submit}
+            disabled={dictating ? busy : busy || !composer || !text.trim()}
+            aria-label={dictating ? $t('Stop dictation and send') : running ? $t('Add to queue') : $t('Send')}
+          >
+            {#if busy}<Spinner size={14} />{:else}<ArrowUp size={16} />{/if}
+          </button>
+        {/if}
       </div>
     </div>
     {#if htmlDragging || (active && composerDropTargets.dragging)}
@@ -842,58 +864,68 @@
   }
   .queue {
     display: grid;
-    gap: 6px;
     max-height: 30vh;
-    padding: var(--piui-space-2) var(--piui-space-3);
+    padding: 2px var(--piui-space-1);
     overflow-y: auto;
     border: 1px solid var(--piui-border-subtle);
     border-radius: var(--piui-radius-md);
     background: var(--piui-bg-raised);
   }
-  .queue header {
+  .queue__paused {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: var(--piui-space-2);
-    color: var(--piui-text-muted);
-    font-size: var(--piui-text-xs);
-    font-weight: var(--piui-weight-semibold);
-    letter-spacing: 0.03em;
-    text-transform: uppercase;
-  }
-  .queue__paused {
-    margin-left: auto;
-    color: var(--piui-warning);
-    letter-spacing: 0;
-    text-transform: none;
+    margin: 0;
+    padding: 2px 6px;
+    color: var(--piui-warning-text);
+    font-size: var(--piui-text-sm);
   }
   .queue__item {
     display: grid;
-    gap: 4px;
-    padding: 6px 0;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--piui-space-2);
+    min-height: var(--piui-control-md);
+    padding: 2px 2px 2px 8px;
+  }
+  .queue__item--editing {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 6px;
   }
   .queue__item + .queue__item {
     border-top: 1px solid var(--piui-border-subtle);
   }
-  .queue__item--warn .queue__status {
-    color: var(--piui-warning);
+  .queue__mark {
+    display: inline-flex;
+    color: var(--piui-text-muted);
+  }
+  .queue__body {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
   }
   .queue__text {
-    display: -webkit-box;
     margin: 0;
     overflow: hidden;
-    white-space: pre-wrap;
-    word-break: break-word;
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
-    -webkit-box-orient: vertical;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .queue__images {
+  .queue__text--whole {
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+  .queue__images,
+  .queue__status {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     margin: 0;
     color: var(--piui-text-muted);
     font-size: var(--piui-text-sm);
+  }
+  .queue__item--warn .queue__status {
+    color: var(--piui-warning-text);
   }
   .queue__actions {
     display: flex;
@@ -901,15 +933,8 @@
     justify-content: flex-end;
     gap: 2px;
   }
-  .queue__status {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    margin-right: auto;
-    color: var(--piui-text-muted);
-    font-size: var(--piui-text-sm);
-  }
   .queue__error {
+    margin: 0;
     color: var(--piui-danger);
     font-size: var(--piui-text-sm);
   }

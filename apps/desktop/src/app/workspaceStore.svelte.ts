@@ -185,7 +185,14 @@ export class WorkspaceStore {
   catalogError = $state<string>();
   snapshots = $state.raw<Record<string, SessionSnapshot>>({});
   route = $state<Route>({ name: 'home' });
-  selectedWorkspaceId = $state('');
+  /**
+   * The project chosen outside a chat (home, pipelines, a board, a newly added
+   * project). While a chat is open its own project is the selected one, so the
+   * sidebar and the chat header can never name different projects.
+   */
+  private chosenWorkspaceId = $state('');
+  /** The last "New chat in <project>" request; the open new-chat composer switches to it. */
+  newChatRequest = $state<{ workspaceId: string; seq: number } | undefined>(undefined);
   sessionLoading = $state(false);
   sessionError = $state<string>();
   /** Chats shown beside the selected one (split panes); set by the workbench. */
@@ -248,6 +255,14 @@ export class WorkspaceStore {
   get selectedSnapshot(): SessionSnapshot | undefined {
     const id = this.selectedSessionId;
     return id ? this.snapshots[id] : undefined;
+  }
+
+  get selectedWorkspaceId(): string {
+    return this.selectedSession?.workspaceId ?? this.chosenWorkspaceId;
+  }
+
+  set selectedWorkspaceId(id: string) {
+    this.chosenWorkspaceId = id;
   }
 
   get selectedWorkspace(): WorkspaceSummary | undefined {
@@ -410,7 +425,10 @@ export class WorkspaceStore {
 
   goHome(workspaceId?: string): void {
     this.guard(() => {
-      if (workspaceId) this.selectWorkspace(workspaceId);
+      if (workspaceId) {
+        this.selectWorkspace(workspaceId);
+        this.newChatRequest = { workspaceId, seq: (this.newChatRequest?.seq ?? 0) + 1 };
+      }
       this.route = { name: 'home' };
       writeJson(ROUTE_KEY, this.route);
     });
@@ -563,7 +581,8 @@ export class WorkspaceStore {
       this.catalog = next;
       // Chats whose lead is gone (deleted from another window or a restart) lose their cached Fusion role.
       fusionMembership.prune(new Set(next.sessions.map((session) => session.id)));
-      const candidate = preferredWorkspaceId ?? this.selectedWorkspaceId;
+      // The project chosen for Home, not the open chat's, which only shadows it while the chat is open.
+      const candidate = preferredWorkspaceId ?? this.chosenWorkspaceId;
       const workspaceId = next.workspaces.some((workspace) => workspace.id === candidate)
         ? candidate
         : (next.workspaces.find((workspace) => !workspace.missing && !workspace.personal)?.id ??
@@ -1059,7 +1078,12 @@ export class WorkspaceStore {
     this.catalogError = undefined;
     try {
       const project = await host.pickAndAddProject();
-      if (project) await Promise.all([this.loadCatalog(project.id), this.loadProjects()]);
+      if (project) {
+        await Promise.all([this.loadCatalog(project.id), this.loadProjects()]);
+        // A project just added is where the next chat starts: open its new-chat screen,
+        // so the selection is never a project other than the one on screen.
+        if (this.catalog.workspaces.some((workspace) => workspace.id === project.id)) this.goHome(project.id);
+      }
     } catch (error) {
       this.catalogError = errorMessage(error);
     } finally {

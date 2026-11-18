@@ -3,9 +3,10 @@ import { expect, test } from './fixtures';
 
 /**
  * Composer inputs in the production build under the desktop app's CSP
- * (`img-src 'self' asset:`; the `prod-csp` project serves it). Image
- * previews are decoded in memory and drawn on a canvas, so no `blob:` or
- * `data:` URL may appear and no violation may be reported.
+ * (`img-src 'self' asset: blob:` since chat files, ADR-074; the `prod-csp`
+ * project serves it). Composer image previews are still decoded in memory and
+ * drawn on a canvas, so no `blob:` or `data:` URL may appear and no violation
+ * may be reported.
  */
 declare global {
   interface Window {

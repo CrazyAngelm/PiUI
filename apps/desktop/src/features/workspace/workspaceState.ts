@@ -67,6 +67,14 @@ export function applyWorkspaceEvent(snapshot: SessionSnapshot, incoming: Workspa
     case 'approvalResolved':
       next = { ...next, approvals: next.approvals.filter((request) => request.id !== event.requestId) };
       break;
+    // Additive v15 event (ADR-075): older blocks go before everything shown. A
+    // block that is already shown (live or from the newest page) is never replaced.
+    case 'historyPage': {
+      const known = new Set(next.blocks.map((block) => block.id));
+      const older = event.blocks.filter((block) => !known.has(block.id));
+      if (older.length > 0) next = { ...next, blocks: [...older, ...next.blocks] };
+      break;
+    }
     // Additive v15 event (ADR-072): the whole new task list replaces the old one.
     case 'tasks':
       next = { ...next, tasks: event.tasks };

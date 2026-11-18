@@ -178,8 +178,8 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
 
   // Control-plane notifications that describe account, project, queue, hook or
   // UI-state changes, not conversation content. They are dropped instead of
-  // becoming "Unsupported Codex event" blocks. Anything not listed (`warning`,
-  // `guardianWarning`, `model/rerouted`) still shows the generic fallback.
+  // becoming "Unsupported Codex event" blocks. Other unhandled methods
+  // (including `guardianWarning` and `model/rerouted`) keep the generic fallback.
   const QUIET_NOTIFICATIONS = new Set([
     "remoteControl/status/changed", "thread/goal/cleared", "thread/goal/updated",
     "account/updated", "account/login/completed", "thread/queue/changed",
@@ -206,9 +206,27 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   let requestSerial = 0;
   let blockSerial = 0;
   let approvalSerial = 0;
+  // Thread notifications that arrive while the thread opens are held until its
+  // history is applied, then replayed: a live item or turn outcome always
+  // wins over the (older) history snapshot it raced with.
+  let startupHold = true;
   const deferredNativeMessages = [];
   let startingTurn = false;
   let interruptStartingTurn = false;
+  // Settles when a turn/start in flight is answered (or Codex exits): an
+  // interrupt during the start waits for it, so a stop is confirmed only
+  // once the started turn is interrupted or proven never to run (ADR-076).
+  let startSettled = Promise.resolve();
+  let startOutcome = "refused";
+  // A sidekick's turn ends only once its background terminals (unified_exec,
+  // still on in Codex 0.169) exited or were terminated (ADR-076).
+  let backgroundHold = false;
+  let backgroundRelease = false;
+  let backgroundWake;
+  const heldTurns = new Set();
+  const BACKGROUND_POLL_MS = process.env.NODE_TEST_CONTEXT && Number(process.env.PIUI_TEST_BACKGROUND_POLL_MS) > 0
+    ? Number(process.env.PIUI_TEST_BACKGROUND_POLL_MS) : 2000;
+  const BACKGROUND_HOLD_MS = 10 * 60 * 1000;
   let stdoutBuffer = Buffer.alloc(0);
   let status = "starting";
   let disposed = false;
@@ -271,7 +289,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   const callNative = (method, params = {}) => {
     const id = `piui-${++requestSerial}`;
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      pending.set(id, { resolve, reject, method });
       writeNative({ method, id, params }).catch((error) => {
         pending.delete(id);
         reject(error);
@@ -285,6 +303,37 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     "native-operation-failed",
     "The Codex app server could not complete the request.",
   );
+  // The request reached Codex but its outcome is unknown (CONTRACT.md):
+  // never a refusal, so the host does not send it again blindly.
+  const outcomeUnknown = () => fail(
+    "native-outcome-unknown",
+    "Codex did not confirm the request; it may have been accepted.",
+  );
+  // Background terminals of a sidekick thread (`thread/backgroundTerminals/*`,
+  // experimental in 0.169). Terminating is best effort: on a Codex without the
+  // method there is nothing PiUI can end, and the turn ends as before.
+  const cleanBackgroundTerminals = async () => {
+    if (disposed || !nativeId) return;
+    try { await callNative("thread/backgroundTerminals/clean", { threadId: nativeId }); } catch { /* unsupported or closed */ }
+  };
+  const drainBackgroundTerminals = async () => {
+    const deadline = Date.now() + BACKGROUND_HOLD_MS;
+    for (;;) {
+      if (disposed) return;
+      if (backgroundRelease) return cleanBackgroundTerminals();
+      let page;
+      try { page = await callNative("thread/backgroundTerminals/list", { threadId: nativeId }); } catch { page = undefined; }
+      // Not listable: whatever runs is terminated with the turn.
+      if (!Array.isArray(page?.data)) return cleanBackgroundTerminals();
+      if (page.data.length === 0) return;
+      if (backgroundRelease || Date.now() >= deadline) return cleanBackgroundTerminals();
+      await new Promise((resolve) => {
+        backgroundWake = resolve;
+        setTimeout(resolve, BACKGROUND_POLL_MS).unref?.();
+      });
+      backgroundWake = undefined;
+    }
+  };
   // A required startup request (initialize, thread/start, thread/resume,
   // model/list) that the app server rejects with a JSON-RPC error, or answers
   // without the fields PiUI reads, means this Codex does not speak the protocol
@@ -442,8 +491,45 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       if (typeof item.path === "string" && item.path.trim()) title = oneLine(item.path, 160);
       addLine("Path", item.path);
       status = "complete";
+    } else if (item.type === "imageGeneration") {
+      // Fields (app-server 0.165): status, revisedPrompt, savedPath, failure and
+      // either an inline `result` or a `fileId`. The saved path and the image
+      // bytes leave only as a file event, never as block text.
+      toolName = "image-generation";
+      title = "Image generation";
+      if (typeof item.revisedPrompt === "string" && item.revisedPrompt.trim()) title += `: ${oneLine(item.revisedPrompt, 100)}`;
+      addLine("Prompt", item.revisedPrompt);
+      status = item.failure || item.status === "failed" ? "failed" : ["inProgress", "in_progress", "generating", "pending"].includes(item.status) ? "streaming" : "complete";
     } else return {};
     return { ...boundText(lines.join("\n")), toolName, ...(title ? { title } : {}), status };
+  };
+  // A reasoning item has summary parts (`summary`, streamed with a
+  // `summaryIndex`) and raw parts (`content`, `contentIndex`). Streaming and
+  // the completed item produce the same text: the non-empty parts, summary
+  // first, each part its own paragraph.
+  const reasoningText = (summary, content) => [...(Array.isArray(summary) ? summary : []), ...(Array.isArray(content) ? content : [])]
+    .filter((part) => typeof part === "string" && part.trim()).join("\n\n");
+  const reasoningParts = new Map();
+  const MAX_REASONING_PARTS = 200;
+  const reasoningPartIndex = (value) => (Number.isSafeInteger(value) && value >= 0 && value < MAX_REASONING_PARTS ? value : 0);
+  const reasoningState = (blockId) => {
+    if (!blocks.has(blockId)) putItem({ id: blockId, type: "reasoning", text: "" }, "streaming");
+    let parts = reasoningParts.get(blockId);
+    if (!parts) {
+      parts = { summary: [], content: [] };
+      reasoningParts.set(blockId, parts);
+    }
+    return parts;
+  };
+  const appendReasoning = (blockId, channel, index, delta) => {
+    const parts = reasoningState(blockId);
+    const block = blocks.get(blockId);
+    const opens = !parts[channel][index];
+    parts[channel][index] = `${parts[channel][index] ?? ""}${delta}`;
+    // The first text of a later part opens a new paragraph after the earlier ones.
+    const text = `${opens && delta.trim() && (block.text ?? "") !== "" ? "\n\n" : ""}${delta}`;
+    block.text = `${block.text ?? ""}${text}`;
+    emit({ type: "textDelta", blockId, text });
   };
   const itemText = (item) => {
     if (item?.type === "userMessage") {
@@ -457,7 +543,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       return text ? `${text}\n\n${markers}` : markers;
     }
     if (item?.type === "agentMessage" || item?.type === "plan") return item.text || "";
-    if (item?.type === "reasoning") return [...(item.summary || []), ...(item.content || [])].join("\n");
+    if (item?.type === "reasoning") return reasoningText(item.summary, item.content);
     if (item?.type === "webSearch") return webSearchText(item);
     if (item?.type === "commandExecution") {
       return [
@@ -474,7 +560,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     if (type === "agentMessage") return "assistant";
     if (type === "reasoning" || type === "plan") return "thinking";
     if (type === "contextCompaction") return "compaction";
-    if (["commandExecution", "fileChange", "webSearch", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "subAgentActivity", "imageView"].includes(type)) return "tool";
+    if (["commandExecution", "fileChange", "webSearch", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "subAgentActivity", "imageView", "imageGeneration"].includes(type)) return "tool";
     return "unknown";
   };
   const itemLabel = (type) => ({
@@ -490,14 +576,80 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     collabAgentToolCall: "Agent",
     subAgentActivity: "Agent",
     imageView: "Image",
+    imageGeneration: "Image generation",
     contextCompaction: "Compaction",
   })[type] || "Codex item";
-  const putItem = (item, overrideStatus) => {
-    if (!item || typeof item.id !== "string") return;
+  // Chat files (CONTRACT.md, "File events"): where a tool wrote or showed a
+  // file, and images a tool returned or generated. Only the location or the
+  // bytes are forwarded as a `file` event, never added to block text.
+  const FILE_EVENT_LIMIT = 200;
+  const INLINE_FILE_LIMIT = 20 * 1024 * 1024;
+  const INLINE_BASE64_LIMIT = Math.ceil(INLINE_FILE_LIMIT / 3) * 4;
+  const IMAGE_EXTENSION_TYPES = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+  const INLINE_MEDIA_TYPES = new Set([
+    "image/png", "image/jpeg", "image/gif", "image/webp",
+    "audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3", "audio/ogg", "audio/webm", "audio/mp4", "audio/aac", "audio/flac",
+  ]);
+  const notedFiles = new Set();
+  const imageTypeOfPath = (value) => {
+    const extension = String(value).split(".").pop().toLowerCase();
+    return Object.hasOwn(IMAGE_EXTENSION_TYPES, extension) ? IMAGE_EXTENSION_TYPES[extension] : undefined;
+  };
+  const noteFile = (blockId, rawPath, origin) => {
+    if (typeof rawPath !== "string" || notedFiles.size >= FILE_EVENT_LIMIT) return;
+    const trimmed = rawPath.trim();
+    if (!trimmed || trimmed.length > 4096 || trimmed.includes(String.fromCharCode(0))) return;
+    const absolute = path.isAbsolute(trimmed) ? trimmed : path.resolve(config.cwd, trimmed);
+    const key = JSON.stringify([blockId, absolute]);
+    if (notedFiles.has(key)) return;
+    notedFiles.add(key);
+    const mimeType = imageTypeOfPath(absolute);
+    emit({ type: "file", blockId, path: absolute, origin, ...(mimeType ? { mimeType } : {}) });
+  };
+  const noteInlineFile = (blockId, mimeType, data, origin) => {
+    const type = typeof mimeType === "string" ? mimeType.toLowerCase() : "";
+    if (!INLINE_MEDIA_TYPES.has(type) || typeof data !== "string" || !data || data.length > INLINE_BASE64_LIMIT
+      || notedFiles.size >= FILE_EVENT_LIMIT || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return;
+    const key = JSON.stringify([blockId, data.length, data.slice(0, 48), data.slice(-48)]);
+    if (notedFiles.has(key)) return;
+    notedFiles.add(key);
+    emit({ type: "file", blockId, origin, inline: { mimeType: type, base64: data } });
+  };
+  // `data:<type>;base64,<data>` (dynamic tool image items and generated images).
+  const noteDataUrlFile = (blockId, url, origin) => {
+    const match = typeof url === "string" ? /^data:([^;,]+);base64,(.+)$/s.exec(url) : null;
+    if (match) noteInlineFile(blockId, match[1], match[2], origin);
+  };
+  const sniffImageType = (base64) => base64.startsWith("iVBORw0KGgo") ? "image/png" : base64.startsWith("/9j/") ? "image/jpeg"
+    : base64.startsWith("R0lGOD") ? "image/gif" : base64.startsWith("UklGR") ? "image/webp" : undefined;
+  const noteItemFiles = (blockId, item) => {
+    if (item.type === "fileChange") {
+      if (item.status !== "completed") return;
+      for (const change of Array.isArray(item.changes) ? item.changes : []) {
+        if (!change || typeof change !== "object" || change.kind?.type === "delete") continue;
+        const moved = change.kind?.type === "update" && typeof change.kind.move_path === "string" && change.kind.move_path ? change.kind.move_path : undefined;
+        noteFile(blockId, moved ?? change.path, "written");
+      }
+    } else if (item.type === "imageView") noteFile(blockId, item.path, "read");
+    else if (item.type === "imageGeneration") {
+      if (item.failure || ["inProgress", "in_progress", "generating", "pending", "failed"].includes(item.status)) return;
+      if (typeof item.savedPath === "string" && item.savedPath) noteFile(blockId, item.savedPath, "generated");
+      else if (typeof item.result === "string" && item.result) {
+        if (item.result.startsWith("data:")) noteDataUrlFile(blockId, item.result, "generated");
+        else noteInlineFile(blockId, sniffImageType(item.result), item.result, "generated");
+      }
+    } else if (isToolCall(item) && item.status !== "inProgress") {
+      for (const part of Array.isArray(item.type === "mcpToolCall" ? item.result?.content : item.contentItems) ? (item.type === "mcpToolCall" ? item.result.content : item.contentItems) : []) {
+        if (["image", "audio"].includes(part?.type)) noteInlineFile(blockId, part.mimeType, part.data, "returned");
+        else if (part?.type === "inputImage") noteDataUrlFile(blockId, part.imageUrl, "returned");
+      }
+    }
+  };
+  const buildBlock = (item, overrideStatus) => {
     const kind = itemKind(item.type);
     const existing = blocks.get(item.id);
     const { status: projectedStatus, ...projectedFields } = projectedToolFields(item);
-    const block = {
+    return {
       id: item.id,
       kind,
       label: itemLabel(item.type),
@@ -512,8 +664,98 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       } : {}),
       ...(existing?.createdAt ? { createdAt: existing.createdAt } : {}),
     };
+  };
+  const putItem = (item, overrideStatus) => {
+    if (!item || typeof item.id !== "string") return;
+    const block = buildBlock(item, overrideStatus);
     blocks.set(item.id, block);
     emit({ type: "block", block });
+    try { noteItemFiles(item.id, item); } catch { /* a malformed item shows its block without files */ }
+  };
+  // History pages and the snapshot reach the host in frames of at most 32 MiB
+  // (`MAX_FRAME_BYTES`). A block is bounded, a page is split into frames of at
+  // most HISTORY_FRAME_BYTES and the snapshot keeps its newest blocks within
+  // SNAPSHOT_BLOCK_BYTES: no history size can make a frame the host refuses.
+  const MAX_HISTORY_PAGES = 50;
+  const HISTORY_PAGE_TIMEOUT_MS = 20_000;
+  const HISTORY_FRAME_BYTES = 4 * 1024 * 1024;
+  const SNAPSHOT_BLOCK_BYTES = 12 * 1024 * 1024;
+  const HISTORY_BLOCK_TEXT_CHARS = 512 * 1024;
+  const frameSafeBlock = (block) => {
+    const text = block.text;
+    if (typeof text !== "string" || text.length <= HISTORY_BLOCK_TEXT_CHARS) return block;
+    const half = HISTORY_BLOCK_TEXT_CHARS / 2;
+    const head = headEnd(text, half);
+    const tail = tailStart(text, text.length - half);
+    return { ...block, text: `${text.slice(0, head)}\n… ${tail - head} characters omitted …\n${text.slice(tail)}`, truncated: true };
+  };
+  const blockBytes = (block) => Buffer.byteLength(JSON.stringify(block));
+  // Older turns (newest first, as `thread/turns/list` returns them) go before
+  // every block already shown. An item that is already a block (shown by the
+  // newest page or updated live) is never replaced by its older copy.
+  const prependHistoryPage = (turnsNewestFirst) => {
+    const older = [];
+    const seen = new Set();
+    for (const turn of [...turnsNewestFirst].reverse()) {
+      for (const item of Array.isArray(turn?.items) ? turn.items : []) {
+        if (!item || typeof item.id !== "string" || blocks.has(item.id) || seen.has(item.id)) continue;
+        seen.add(item.id);
+        try { older.push({ item, block: frameSafeBlock(buildBlock(item)) }); } catch { /* a malformed old item is skipped */ }
+      }
+    }
+    if (!older.length) return;
+    const current = [...blocks];
+    blocks.clear();
+    for (const { item, block } of older) blocks.set(item.id, block);
+    for (const [id, block] of current) blocks.set(id, block);
+    // Frames go newest first, because each one lands before everything shown.
+    const frames = [];
+    let frame = [];
+    let bytes = 0;
+    for (const { block } of older) {
+      const size = blockBytes(block);
+      if (frame.length && bytes + size > HISTORY_FRAME_BYTES) { frames.push(frame); frame = []; bytes = 0; }
+      frame.push(block);
+      bytes += size;
+    }
+    if (frame.length) frames.push(frame);
+    for (const blocksOfFrame of frames.reverse()) emit({ type: "historyPage", blocks: blocksOfFrame });
+    for (const { item } of older) {
+      try { noteItemFiles(item.id, item); } catch { /* a malformed item shows its block without files */ }
+    }
+  };
+  // The newest blocks that fit one frame. Older ones are left out behind one
+  // marker block; a chat that was fully paged in still opens in one frame.
+  const snapshotBlocks = () => {
+    const all = [...blocks.values()].map(frameSafeBlock);
+    let total = 0;
+    let start = all.length;
+    while (start > 0) {
+      const size = blockBytes(all[start - 1]);
+      if (total + size > SNAPSHOT_BLOCK_BYTES) break;
+      total += size;
+      start -= 1;
+    }
+    if (start === 0) return all;
+    return [{ id: "codex-history-omitted", kind: "custom", label: "Codex", status: "complete", safeSummary: "Earlier Codex history is not shown." }, ...all.slice(start)];
+  };
+  const loadOlderHistory = async (threadId, firstCursor) => {
+    let cursor = firstCursor;
+    for (let page = 1; typeof cursor === "string" && cursor && page < MAX_HISTORY_PAGES && !disposed; page += 1) {
+      let older;
+      try {
+        let timer;
+        const request = callNative("thread/turns/list", { threadId, sortDirection: "desc", itemsView: "full", cursor });
+        request.catch(() => {});
+        older = await Promise.race([
+          request,
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), HISTORY_PAGE_TIMEOUT_MS); timer.unref?.(); }),
+        ]).finally(() => clearTimeout(timer));
+      } catch { return; }
+      if (disposed || !Array.isArray(older?.data)) return;
+      try { prependHistoryPage(older.data); } catch { return; }
+      cursor = older.nextCursor;
+    }
   };
   // One fallback block per method name: a stream of some new event must not
   // flood the transcript, and a handler that keeps failing on one method is
@@ -1147,7 +1389,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   const handleNotification = (message) => {
     const method = message.method;
     const params = message.params || {};
-    if (!nativeId && method !== "thread/started" && (typeof params.threadId === "string" || typeof params.conversationId === "string")) {
+    if ((!nativeId || startupHold) && method !== "thread/started" && (typeof params.threadId === "string" || typeof params.conversationId === "string")) {
       deferredNativeMessages.push(message);
       return;
     }
@@ -1208,6 +1450,21 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     // Moderation metadata of a turn is service data, not a conversation item;
     // a turn the provider actually refuses still fails through `turn/completed`.
     if (method === "turn/moderationMetadata") return;
+    if (method === "warning") {
+      // WarningNotification.message is user-facing; never stringify other fields.
+      if ((params.threadId != null && typeof params.threadId !== "string")
+        || typeof params.message !== "string" || !params.message.trim()) {
+        emitUnknown(method);
+        return;
+      }
+      const block = {
+        id: `warning-${++blockSerial}`, kind: "custom", label: "Codex warning", status: "complete",
+        safeSummary: oneLine(params.message, TOOL_TEXT_LIMIT),
+      };
+      blocks.set(block.id, block);
+      emit({ type: "block", block });
+      return;
+    }
     // Configuration and deprecation warnings describe the user's native Codex
     // configuration (0.157.1 sends startup warnings right after initialize).
     // They become fixed resource warnings; native text and config paths are
@@ -1264,31 +1521,49 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       abortCoordinatorCalls(params.turn?.id);
       // An elicitation of a finished turn can no longer be answered usefully.
       if (typeof params.turn?.id === "string") cancelElicitations(params.turn.id);
-      const completedTurnId = params.turn?.id;
-      lastCompletedTurnId = completedTurnId;
-      if (!activeTurnId || activeTurnId === completedTurnId) activeTurnId = undefined;
-      const finalStatus = params.turn?.status;
-      if (typeof completedTurnId === "string" && !completedTurnOutcomes.has(completedTurnId)) {
-        completedTurnOutcomes.add(completedTurnId);
-        // 0.163 can interrupt a turn with an error (`tooManyDenials`).
-        if ((finalStatus === "failed" || (finalStatus === "interrupted" && params.turn?.error)) && !reportedTurnErrors.has(completedTurnId)) {
-          reportedTurnErrors.add(completedTurnId);
-          emit({ type: "error", message: safeCodexErrorMessage(params.turn?.error) });
+      if (typeof params.turn?.id === "string" && heldTurns.has(params.turn.id)) return;
+      const completeTurn = () => {
+        const completedTurnId = params.turn?.id;
+        lastCompletedTurnId = completedTurnId;
+        if (!activeTurnId || activeTurnId === completedTurnId) activeTurnId = undefined;
+        const finalStatus = params.turn?.status;
+        if (typeof completedTurnId === "string" && !completedTurnOutcomes.has(completedTurnId)) {
+          completedTurnOutcomes.add(completedTurnId);
+          // 0.163 can interrupt a turn with an error (`tooManyDenials`).
+          if ((finalStatus === "failed" || (finalStatus === "interrupted" && params.turn?.error)) && !reportedTurnErrors.has(completedTurnId)) {
+            reportedTurnErrors.add(completedTurnId);
+            emit({ type: "error", message: safeCodexErrorMessage(params.turn?.error) });
+          }
+          emit({
+            type: "turnCompleted",
+            outcome: finalStatus === "completed" ? "succeeded" : finalStatus === "interrupted" ? "interrupted" : "failed",
+          });
         }
-        emit({
-          type: "turnCompleted",
-          outcome: finalStatus === "completed" ? "succeeded" : finalStatus === "interrupted" ? "interrupted" : "failed",
+        for (const blockId of [`plan-${params.turn?.id}`, `diff-${params.turn?.id}`]) {
+          const turnBlock = blocks.get(blockId);
+          if (turnBlock) {
+            turnBlock.status = mapStatus(finalStatus);
+            emit({ type: "block", block: turnBlock });
+          }
+        }
+        if (finalStatus === "failed") emit({ type: "error", message: "The Codex turn failed." });
+        if (!activeTurnId) setStatus("idle");
+      };
+      // A sidekick's turn ends only after its background terminals exited or
+      // were terminated: the round stays working meanwhile (ADR-076).
+      if (config.backgroundTasks === false && nativeId && typeof params.turn?.id === "string"
+        && !completedTurnOutcomes.has(params.turn.id) && !backgroundHold) {
+        const heldTurnId = params.turn.id;
+        heldTurns.add(heldTurnId);
+        backgroundHold = true;
+        void drainBackgroundTerminals().finally(() => {
+          backgroundHold = false;
+          heldTurns.delete(heldTurnId);
+          completeTurn();
         });
+        return;
       }
-      for (const blockId of [`plan-${params.turn?.id}`, `diff-${params.turn?.id}`]) {
-        const turnBlock = blocks.get(blockId);
-        if (turnBlock) {
-          turnBlock.status = mapStatus(finalStatus);
-          emit({ type: "block", block: turnBlock });
-        }
-      }
-      if (finalStatus === "failed") emit({ type: "error", message: "The Codex turn failed." });
-      if (!activeTurnId) setStatus("idle");
+      completeTurn();
       return;
     }
     if (method === "item/started") {
@@ -1296,6 +1571,8 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       return;
     }
     if (method === "item/completed") {
+      // The completed reasoning item carries every part: it replaces the streamed text.
+      if (params.item?.type === "reasoning" && typeof params.item.id === "string") reasoningParts.delete(params.item.id);
       putItem(params.item);
       return;
     }
@@ -1309,10 +1586,28 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       }
       return;
     }
-    if (["item/reasoning/summaryTextDelta", "item/reasoning/textDelta", "item/plan/delta"].includes(method)) {
+    if (method === "item/reasoning/summaryTextDelta" || method === "item/reasoning/textDelta") {
       const blockId = params.itemId;
       if (typeof blockId === "string" && typeof params.delta === "string") {
-        if (!blocks.has(blockId)) putItem({ id: blockId, type: method.includes("plan") ? "plan" : "reasoning", text: "" }, "streaming");
+        const summary = method === "item/reasoning/summaryTextDelta";
+        appendReasoning(blockId, summary ? "summary" : "content", reasoningPartIndex(summary ? params.summaryIndex : params.contentIndex), params.delta);
+      }
+      return;
+    }
+    if (method === "item/reasoning/summaryPartAdded") {
+      // A new summary part: the block exists and the part is known before its first text.
+      const blockId = params.itemId;
+      if (typeof blockId === "string") {
+        const parts = reasoningState(blockId);
+        const index = reasoningPartIndex(params.summaryIndex);
+        parts.summary[index] ??= "";
+      }
+      return;
+    }
+    if (method === "item/plan/delta") {
+      const blockId = params.itemId;
+      if (typeof blockId === "string" && typeof params.delta === "string") {
+        if (!blocks.has(blockId)) putItem({ id: blockId, type: "plan", text: "" }, "streaming");
         const block = blocks.get(blockId);
         block.text = `${block.text || ""}${params.delta}`;
         emit({ type: "textDelta", blockId, text: params.delta });
@@ -1356,7 +1651,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       emit({ type: "block", block });
       return;
     }
-    if (method === "item/commandExecution/terminalInteraction" || method === "item/reasoning/summaryPartAdded") return;
+    if (method === "item/commandExecution/terminalInteraction") return;
     if (method === "serverRequest/resolved") {
       resolveApproval(params.requestId);
       return;
@@ -1428,6 +1723,10 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       if (!waiter) return;
       pending.delete(key);
       if ("result" in message) waiter.resolve(message.result);
+      else if (waiter.method === "thread/resume" && nativeId && message.error?.code === -32600
+        && message.error.message === `thread ${nativeId} already has an active writer`) {
+        waiter.reject(fail("native-thread-busy", "Another Codex process is using this chat."));
+      }
       // `nativeRejected` marks a JSON-RPC error answer, unlike a transport
       // loss, so required startup requests can be reported as a mismatch.
       else waiter.reject(Object.assign(safeNativeError(), {
@@ -1469,24 +1768,31 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   // shape makes the whole listing unrecognized, because a name misread as
   // absent would silently drop a restriction.
   const FEATURE_ROW = /^([A-Za-z][A-Za-z0-9_.-]*)\s+([A-Za-z][A-Za-z _-]*?)\s+(true|false)$/;
+  // The `<enabled>` column of each parsed listing (read only by the Fusion
+  // sidekick's background-terminal check below).
   const parseFeatureListing = (text) => {
     const rows = text.split(/\r?\n/).map((row) => row.trimEnd()).filter((row) => row.trim() !== "");
     const features = new Map();
+    const enabled = new Map();
     for (const row of rows) {
       const match = FEATURE_ROW.exec(row);
       if (!match) return undefined;
       features.set(match[1], match[2]);
+      enabled.set(match[1], match[3] === "true");
     }
     // A real listing names the features PiUI already restricts.
     const known = [...DISABLED_FEATURES, ...SUBAGENT_FEATURES].some((name) => features.has(name));
-    return rows.length >= 5 && known ? features : undefined;
+    return rows.length >= 5 && known ? { stages: features, enabled } : undefined;
   };
   // Successful listings are shared by every adapter of this bridge process
   // (a pooled workspace opens many sessions through one process).
   const featureCache = (globalThis.__piuiCodexFeatureListings ??= new Map());
   const PROBE_NOT_ENDED = Symbol("probe-not-ended");
-  const probeFeatures = async () => {
-    const key = JSON.stringify([config.runtimeProgram, config.runtimeArgs]);
+  // `extraArgs`: global options placed before `features list`, to read what
+  // they actually switch (Codex 0.169.0 keeps `unified_exec` on after
+  // `--disable unified_exec`).
+  const probeFeatures = async (extraArgs = []) => {
+    const key = JSON.stringify([config.runtimeProgram, config.runtimeArgs, extraArgs]);
     if (featureCache.has(key)) return featureCache.get(key);
     const probePlatform = probeHooks.platform ?? process.platform;
     const probeSpawn = probeHooks.spawn ?? spawn;
@@ -1502,7 +1808,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       };
       let probe;
       try {
-        probe = probeSpawn(config.runtimeProgram, [...config.runtimeArgs, "features", "list"], {
+        probe = probeSpawn(config.runtimeProgram, [...config.runtimeArgs, ...extraArgs, "features", "list"], {
           cwd: config.cwd,
           env: nativeEnvironment,
           windowsHide: true,
@@ -1595,16 +1901,36 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     return features;
   };
   const subagentsOff = Boolean(nanoSource) || coordinationEnabled || config.nativeSubagents === false;
-  const listedFeatures = await probeFeatures();
+  const listedFeatures = (await probeFeatures())?.stages;
   if (nanoSource && (!listedFeatures || ["hooks", "apps", "plugins"].some(name => !listedFeatures.has(name) || listedFeatures.get(name) === "removed"))) {
     throw fail("invalid-config", "Codex cannot verify the isolated Nano source configuration.");
   }
   if (listedFeatures && subagentsOff && SUBAGENT_FEATURES.some((name) => !listedFeatures.has(name) || listedFeatures.get(name) === "removed")) {
     throw fail("unsupported-native-subagent-policy", "Codex cannot prove that native subagents are disabled for this session.");
   }
+  // A Fusion sidekick (`backgroundTasks: false`, ADR-076) must prove from the
+  // installed CLI's own listing that it cannot delegate: the subagent switches
+  // read `false` once disabled (verified on 0.165.0 and 0.169.0, where
+  // `multi_agent` is `deprecated`). Background terminals (`unified_exec`) are
+  // switched off where that takes effect; a CLI that keeps them on (0.169.0)
+  // still starts, and the sidekick's instructions plus the broker's turn end
+  // bound the work. An absent `unified_exec` has no background terminals.
+  const noBackground = config.backgroundTasks === false;
+  if (noBackground && (!listedFeatures || SUBAGENT_FEATURES.some((name) => !listedFeatures.has(name) || listedFeatures.get(name) === "removed"))) {
+    throw fail("unsupported-native-subagent-policy", "Codex cannot prove that native subagents are disabled for this session.");
+  }
+  if (noBackground) {
+    const switched = await probeFeatures(SUBAGENT_FEATURES.flatMap((name) => ["--disable", name]));
+    const enabled = switched?.enabled;
+    if (!enabled || SUBAGENT_FEATURES.some((name) => enabled.get(name) !== false)) {
+      throw fail("unsupported-native-subagent-policy", "Codex cannot prove that native subagents are disabled for this session.");
+    }
+  }
+  const unifiedExecListed = Boolean(listedFeatures?.has("unified_exec")) && listedFeatures.get("unified_exec") !== "removed";
   const disabledFeatures = [
     ...DISABLED_FEATURES.filter((name) => !listedFeatures || listedFeatures.has(name)),
     ...(subagentsOff ? SUBAGENT_FEATURES : []),
+    ...(noBackground && unifiedExecListed ? ["unified_exec"] : []),
     ...(nanoSource ? ["hooks"] : []),
   ];
   const args = [
@@ -1661,10 +1987,14 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     const wasDisposed = disposed;
     disposed = true;
     abortCoordinatorCalls();
+    // A turn request already written when Codex stops may have been carried
+    // out: its outcome is unknown, never a refusal (ADR-076).
     for (const waiter of pending.values()) waiter.reject(
       spawnFailed
         ? fail("native-unavailable", "The Codex executable could not be started.")
-        : safeNativeError(),
+        : !wasDisposed && (waiter.method === "turn/start" || waiter.method === "turn/steer")
+          ? outcomeUnknown()
+          : safeNativeError(),
     );
     pending.clear();
     for (const approvalId of [...pendingApprovals.keys()]) retireApproval(approvalId);
@@ -1701,7 +2031,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   };
 
   const initialize = await callDuringStartup("initialize", {
-    clientInfo: { name: "piui", title: "PiUI", version: "0.3.4" },
+    clientInfo: { name: "piui", title: "PiUI", version: "0.3.6" },
     capabilities: { experimentalApi: true, requestAttestation: false },
   });
   if (!isRecord(initialize) || typeof initialize.codexHome !== "string") {
@@ -1724,7 +2054,22 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     throw cleanupStartupFailure(error);
   }
 
-  const turnSandboxPolicy = config.networkAccess === true
+  // A Fusion sidekick (`backgroundTasks: false`) in workspace-write writes
+  // only its folder: no extra roots, no temporary-directory exceptions, no
+  // network. The policy is requested on the thread and on every turn, and
+  // the thread's effective sandbox must show it before the sidekick is
+  // admitted (ADR-076).
+  const sidekickSandbox = config.backgroundTasks === false;
+  const sidekickWorkspacePolicy = {
+    type: "workspaceWrite",
+    writableRoots: [],
+    networkAccess: false,
+    excludeTmpdirEnvVar: true,
+    excludeSlashTmp: true,
+  };
+  const turnSandboxPolicy = sidekickSandbox && config.permissionMode === "workspace-write"
+    ? sidekickWorkspacePolicy
+    : config.networkAccess === true
     ? config.permissionMode === "read-only"
       ? { type: "readOnly", networkAccess: true }
       : {
@@ -1821,9 +2166,10 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
         materialized,
         ...(bindingPublished && nativePath ? { nativePath } : {}),
         title,
-        status,
+        // A turn/start in flight is a turn starting, not an idle thread.
+        status: startingTurn && status === "idle" ? "starting" : status,
         ...(currentModel ? { model: currentModel } : {}),
-        blocks: [...blocks.values()],
+        blocks: snapshotBlocks(),
         approvals: [...pendingApprovals.values()].map((entry) => entry.approval),
         capabilities: {
           prompt: { supported: true, enforcement: "native" },
@@ -1892,36 +2238,70 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       if (startingTurn) throw fail("turn-active", "Codex is already starting a turn.");
       if (mode === "steer") throw fail("no-active-turn", "There is no active turn to steer.");
       startingTurn = true;
+      backgroundRelease = false;
+      let settleStart;
+      startSettled = new Promise((resolve) => { settleStart = resolve; });
+      startOutcome = "refused";
       try {
         const input = await nativeInput();
-        const response = await callNative("turn/start", {
-          threadId: nativeId,
-          input,
-          ...(serviceTier ? { serviceTier: serviceTier === "fast" ? "fast" : "default" } : {}),
-          ...(currentModel ? { model: currentModel.id } : {}),
-          ...(thinkingLevel ? { effort: thinkingLevel } : {}),
-          ...(turnSandboxPolicy ? { sandboxPolicy: turnSandboxPolicy } : {}),
-        });
+        let response;
+        try {
+          response = await callNative("turn/start", {
+            threadId: nativeId,
+            input,
+            ...(serviceTier ? { serviceTier: serviceTier === "fast" ? "fast" : "default" } : {}),
+            ...(currentModel ? { model: currentModel.id } : {}),
+            ...(thinkingLevel ? { effort: thinkingLevel } : {}),
+            ...(turnSandboxPolicy ? { sandboxPolicy: turnSandboxPolicy } : {}),
+          });
+        } catch (error) {
+          // A JSON-RPC error answer is Codex refusing the turn, a closed pipe
+          // before the write is a refusal too; anything else (Codex exited
+          // after the write, a lost answer) may follow an accepted start.
+          if (error?.nativeRejected === true || error?.bridgeCode === "native-closed") throw error;
+          startOutcome = "unknown";
+          throw outcomeUnknown();
+        }
         const acceptedTurnId = response?.turn?.id;
-        if (!acceptedTurnId) throw safeNativeError();
+        // Answered, but without the started turn: Codex may be running it.
+        if (typeof acceptedTurnId !== "string" || !acceptedTurnId) {
+          startOutcome = "unknown";
+          throw outcomeUnknown();
+        }
         activeTurnId = acceptedTurnId === lastCompletedTurnId ? undefined : acceptedTurnId;
+        startOutcome = "turn";
         materialized = true;
         publishBinding();
         if (activeTurnId) setStatus("running");
         if (interruptStartingTurn && activeTurnId) {
           interruptStartingTurn = false;
-          await callNative("turn/interrupt", { threadId: nativeId, turnId: activeTurnId });
+          // The prompt was accepted whatever the interrupt answers; a failed
+          // interrupt leaves the stop unconfirmed, never the prompt refused.
+          try { await callNative("turn/interrupt", { threadId: nativeId, turnId: activeTurnId }); }
+          catch { startOutcome = "interrupt-failed"; }
         }
         return { accepted: true };
       } finally {
         startingTurn = false;
         interruptStartingTurn = false;
+        settleStart();
       }
     },
     async interrupt() {
+      if (config.backgroundTasks === false) backgroundRelease = true;
+      if (backgroundHold) {
+        backgroundWake?.();
+        await cleanBackgroundTerminals();
+        return { interrupted: true };
+      }
       if (startingTurn && !activeTurnId) {
+        // The start is in flight: it is stopped as soon as Codex answers, and
+        // the interrupt is confirmed only then, or when Codex exits.
         interruptStartingTurn = true;
         cancelElicitations();
+        await Promise.race([startSettled, exited]);
+        if (nativeStopSettled) return { interrupted: true };
+        if (startOutcome === "unknown" || startOutcome === "interrupt-failed") throw outcomeUnknown();
         return { interrupted: true };
       }
       if (!activeTurnId) throw fail("no-active-turn", "Codex has no active turn to interrupt.");
@@ -2078,10 +2458,15 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     return { resources, models, catalogModels, dispose };
   }
 
+  const folderOnlySandbox = sidekickSandbox && config.permissionMode === "workspace-write";
   const permissionParams = config.permissionMode === "read-only"
     ? { permissions: ":read-only", approvalPolicy: "never" }
     : config.permissionMode === "workspace-write"
-      ? { permissions: ":workspace", approvalPolicy: "never" }
+      ? {
+          // The built-in :workspace profile ignores sandbox_workspace_write on 0.169.
+          ...(folderOnlySandbox ? { sandbox: "workspace-write" } : { permissions: ":workspace" }),
+          approvalPolicy: "never",
+        }
       : config.permissionMode === "full-access"
         ? { permissions: ":danger-full-access", approvalPolicy: "never" }
         : {};
@@ -2177,12 +2562,36 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       resourceConfig[`mcp_servers.${rule.id}.enabled`] = rule.enabled;
     } else throw cleanupStartupFailure(fail("unsupported-resource-policy", "The resource policy is invalid."));
   }
+  // A Fusion sidekick in a sandboxed preset runs without the person's MCP
+  // servers (ADR-076): their processes run outside the sandbox, so a lead that
+  // has none must not get them through its sidekick. Every configured server
+  // is switched off for this thread; an unreadable configuration refuses.
+  if (config.backgroundTasks === false && (config.permissionMode === "read-only" || config.permissionMode === "workspace-write")) {
+    const refuse = () => cleanupStartupFailure(fail("unsupported-resource-policy", "Codex cannot prove that MCP servers are off for this sidekick."));
+    const read = await readConfig().catch(() => undefined);
+    if (!read?.config || typeof read.config !== "object") throw refuse();
+    const servers = read.config.mcp_servers ?? {};
+    if (typeof servers !== "object" || Array.isArray(servers)) throw refuse();
+    for (const id of Object.keys(servers)) {
+      if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw refuse();
+      resourceConfig[`mcp_servers.${id}.enabled`] = false;
+    }
+  }
   const threadParams = {
     cwd: config.cwd,
     ...(serviceTier ? { serviceTier: serviceTier === "fast" ? "fast" : "default" } : {}),
     ...(currentModel ? { model: currentModel.id, ...(currentModel.provider ? { modelProvider: nativeProvider(currentModel.provider) } : {}) } : {}),
     ...(typeof config.baseInstructions === "string" ? { baseInstructions: config.baseInstructions, developerInstructions: config.instructions ?? "" } : typeof config.instructions === "string" ? { developerInstructions: config.instructions } : {}),
-    config: { ...resourceConfig, ...(coordinationEnabled || config.nativeSubagents === false ? { "features.multi_agent": false, "features.multi_agent_v2": false } : {}) },
+    config: {
+      ...resourceConfig,
+      ...(coordinationEnabled || config.nativeSubagents === false ? { "features.multi_agent": false, "features.multi_agent_v2": false } : {}),
+      ...(sidekickSandbox && config.permissionMode === "workspace-write" ? {
+        "sandbox_workspace_write.writable_roots": [],
+        "sandbox_workspace_write.network_access": false,
+        "sandbox_workspace_write.exclude_tmpdir_env_var": true,
+        "sandbox_workspace_write.exclude_slash_tmp": true,
+      } : {}),
+    },
     ...permissionParams,
   };
   const { cwd: _startCwd, ...startThreadParams } = threadParams;
@@ -2202,7 +2611,14 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
         if (!Array.isArray(turns?.data)) throw cleanupStartupFailure(protocolMismatch());
         for (const turn of turns.data) {
           if (typeof turn?.id !== "string" || !Array.isArray(turn.items)) throw cleanupStartupFailure(protocolMismatch());
-          if (turn.items.some(item => item?.type === "userMessage" && item.id === fork.beforeBlockId)) {
+          const at = turn.items.findIndex(item => item?.type === "userMessage" && item.id === fork.beforeBlockId);
+          if (at >= 0) {
+            // `lastTurnId` cuts between turns. A message inside a turn (a steer
+            // sent while it ran) has earlier items of that turn before it, and
+            // cutting at the previous turn would silently drop them: refuse.
+            if (turn.items.slice(0, at).some(item => !["hookPrompt", "contextCompaction"].includes(item?.type))) {
+              throw cleanupStartupFailure(fail("branch-unsupported", "This chat cannot be branched natively."));
+            }
             found = true;
             empty = previousTurnId === undefined;
             break;
@@ -2269,7 +2685,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       && opened.sandbox?.type === "readOnly"
       && opened.approvalPolicy === "never")
     || (config.permissionMode === "workspace-write"
-      && opened.activePermissionProfile?.id === ":workspace"
+      && (folderOnlySandbox ? opened.activePermissionProfile === null : opened.activePermissionProfile?.id === ":workspace")
       && opened.sandbox?.type === "workspaceWrite"
       && opened.approvalPolicy === "never")
     || (config.permissionMode === "full-access"
@@ -2278,6 +2694,19 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       && opened.approvalPolicy === "never");
   if (!effectivePermissionMatches) {
     throw cleanupStartupFailure(fail("unsupported-permission-mode", "Codex did not apply the requested permission mode."));
+  }
+  // A sidekick's effective sandbox must be exactly what Fusion's capability
+  // matrix claims: writes only in its folder (no other root, no temporary
+  // directory) and no network. Anything else refuses the sidekick.
+  if (sidekickSandbox && (config.permissionMode === "read-only" || config.permissionMode === "workspace-write")) {
+    const box = opened.sandbox;
+    const roots = box?.writableRoots;
+    const verified = box?.networkAccess === false && (config.permissionMode === "read-only"
+      || (box.excludeTmpdirEnvVar === true && box.excludeSlashTmp === true && Array.isArray(roots)
+        && roots.every((root) => typeof root === "string" && path.isAbsolute(root) && normalizeCwd(root) === normalizeCwd(config.cwd))));
+    if (!verified) {
+      throw cleanupStartupFailure(fail("unsupported-permission-mode", "Codex did not confirm the sidekick's sandbox (only its folder writable, no temporary directories, no network)."));
+    }
   }
   nativeId = thread.id;
   nativePath = typeof thread.path === "string" ? thread.path : nativePath;
@@ -2292,27 +2721,39 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     if (!sessionsRegistered) emit({ type: "notice", code: "unsupported-sessions-tool-resume" });
   }
   sessionsRegistrationKnown = true;
-  for (const message of deferredNativeMessages.splice(0)) guardedNotification(message);
   if (typeof opened.modelProvider === "string") currentProvider = publicProvider(opened.modelProvider);
   if (typeof opened.model === "string") {
     const effectiveName = currentModel?.id === opened.model ? currentModel.name : opened.model;
     currentModel = { id: opened.model, ...(currentProvider ? { provider: currentProvider } : {}), name: effectiveName };
   }
-  const initialTurns = Array.isArray(opened.initialTurnsPage?.data)
-    ? [...opened.initialTurnsPage.data].reverse()
-    : thread.turns || [];
+  // `initialTurnsPage` is only the newest page of the thread (newest turn
+  // first). Only that page is part of opening the chat: older pages are read
+  // afterwards, one bounded `historyPage` event each, and a page that cannot be
+  // read only ends that walk. The page is applied before the thread
+  // notifications held during startup, which then replay on top of it: a live
+  // item or turn outcome wins over the history snapshot it raced with.
+  const firstPage = Array.isArray(opened.initialTurnsPage?.data) ? opened.initialTurnsPage : undefined;
+  const initialTurns = firstPage ? [...firstPage.data].reverse() : thread.turns || [];
   for (const turn of initialTurns) for (const item of turn.items || []) putItem(item);
   const resumedActiveTurn = [...initialTurns].reverse().find((turn) => turn?.status === "inProgress");
   if (resumedActiveTurn?.id) activeTurnId = resumedActiveTurn.id;
-  if (thread.status?.type === "active" && !activeTurnId) {
+  startupHold = false;
+  for (const message of deferredNativeMessages.splice(0)) guardedNotification(message);
+  // A turn that completed while the thread opened resolves a stale `active` status.
+  if (thread.status?.type === "active" && !activeTurnId && lastCompletedTurnId === undefined) {
     throw cleanupStartupFailure(fail("native-active-turn-unresolved", "Codex resumed an active thread without an interruptible turn reference."));
   }
   materialized = resumingNativeThread || forkedNativeThread;
   publishBinding();
-  if (activeTurnId || thread.status?.type === "active") setStatus("running");
+  if (activeTurnId || (thread.status?.type === "active" && lastCompletedTurnId === undefined)) setStatus("running");
   else if (thread.status?.type === "systemError") {
     setStatus("failed");
     emit({ type: "error", message: "Codex resumed a thread in a system error state." });
   } else setStatus("idle");
+  const olderCursor = firstPage?.nextCursor;
+  if (typeof olderCursor === "string" && olderCursor) {
+    const timer = setTimeout(() => { void loadOlderHistory(thread.id, olderCursor); }, 0);
+    timer.unref?.();
+  }
   return adapter;
 }

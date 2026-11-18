@@ -11,6 +11,11 @@ pub(crate) const MAX_WAIT_SECONDS: u64 = 540;
 pub(crate) const MAX_LIVE_BRIEFS: usize = 200;
 pub(crate) const CORRECTION_HINT_ROUNDS: usize = 2;
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum FusionRoleName {
@@ -81,6 +86,8 @@ pub(crate) enum FusionRefusal {
     SidekickExceedsLead,
     SidekickNeedsFullAccess,
     CodexSandboxUnverified,
+    /// No longer produced (ADR-076 admits a read-only lead with a read-only
+    /// sidekick); kept for older answers.
     ReadOnlyLead,
 }
 
@@ -197,6 +204,9 @@ pub(crate) enum SidekickOperation {
         outcome: BriefOutcome,
         #[serde(default)]
         note: Option<String>,
+        /// Accepted as the note (the tool schema shares `reason` with reset).
+        #[serde(default)]
+        reason: Option<String>,
     },
     Reset {
         #[serde(default)]
@@ -476,6 +486,9 @@ pub(crate) struct FusionRound {
     pub delivery: Option<FusionDelivery>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub take_over: bool,
+    /// Corrections the person sent into this round (ADR-076).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub person_steers: u32,
     /// Host-private: the sidekick's last assistant block before this round
     /// (an answer equal to it is "no answer"). Never sent to the WebView; the
     /// journal keeps it in [`FusionDocument::round_hosts`].
@@ -589,6 +602,10 @@ pub(crate) struct FusionDocument {
     /// rounds when it is read ([`Self::restore_round_hosts`]); empty in memory.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub round_hosts: Vec<RoundHostRecord>,
+    /// The person stopped the pair: no round is admitted and no follow-up
+    /// is sent until they resume it (ADR-076).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paused: bool,
 }
 
 /// Host-private facts of one round that a restart needs; never part of
@@ -672,6 +689,87 @@ pub(crate) struct FusionStateV1 {
     pub briefs: Vec<FusionBrief>,
     pub stats: FusionStats,
     pub revision: u64,
+    /// Additive (ADR-076): the person stopped the pair (absent when not).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub paused: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidekick_change_block: Option<SidekickChangeBlock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidekick_replace_block: Option<SidekickChangeBlock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidekick_current_model: Option<WorkspaceModel>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum SidekickChangeKind {
+    Model,
+    Replace,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub(crate) enum SidekickChangeBlock {
+    #[serde(rename = "FUSION_ROUND_OPEN")]
+    RoundOpen,
+    #[serde(rename = "FUSION_ROUND_UNCERTAIN")]
+    RoundUncertain,
+    #[serde(rename = "FUSION_REPORT_PENDING")]
+    ReportPending,
+    #[serde(rename = "FUSION_REPORT_UNCERTAIN")]
+    ReportUncertain,
+    #[serde(rename = "FUSION_SIDEKICK_ATTACHED")]
+    SidekickAttached,
+    #[serde(rename = "FUSION_SIDEKICK_BUSY")]
+    SidekickBusy,
+}
+
+impl SidekickChangeBlock {
+    pub(crate) fn error(self) -> crate::workspace_api::WorkspaceError {
+        let (code, message) = match self {
+            Self::RoundOpen => ("FUSION_ROUND_OPEN", "A sidekick round is still open."),
+            Self::RoundUncertain => (
+                "FUSION_ROUND_UNCERTAIN",
+                "An uncertain sidekick round needs to be resolved.",
+            ),
+            Self::ReportPending => (
+                "FUSION_REPORT_PENDING",
+                "A sidekick report is still undelivered.",
+            ),
+            Self::ReportUncertain => (
+                "FUSION_REPORT_UNCERTAIN",
+                "An uncertain report delivery needs to be resolved.",
+            ),
+            Self::SidekickAttached => (
+                "FUSION_SIDEKICK_ATTACHED",
+                "Stop or detach the existing sidekick before replacing it.",
+            ),
+            Self::SidekickBusy => (
+                "FUSION_SIDEKICK_BUSY",
+                "A sidekick operation is still in progress.",
+            ),
+        };
+        sidekick_change_error(code, message)
+    }
+}
+
+pub(crate) const fn sidekick_change_error(
+    code: &'static str,
+    message: &'static str,
+) -> crate::workspace_api::WorkspaceError {
+    crate::workspace_api::WorkspaceError {
+        code,
+        message,
+        recoverable: true,
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SidekickChange {
+    pub revision: u64,
+    pub kind: SidekickChangeKind,
+    pub sidekick: FusionRole,
+    pub allow_context_loss: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -707,6 +805,10 @@ pub(crate) enum FusionCommandV1 {
     ResetSidekick {
         lead_session_id: String,
     },
+    ChangeSidekick {
+        lead_session_id: String,
+        change: SidekickChange,
+    },
     ReconcileRound {
         lead_session_id: String,
         round_id: String,
@@ -714,6 +816,26 @@ pub(crate) enum FusionCommandV1 {
     AbandonRound {
         lead_session_id: String,
         round_id: String,
+    },
+    /// Additive commands (ADR-076).
+    ResumePair {
+        lead_session_id: String,
+    },
+    CheckDelivery {
+        lead_session_id: String,
+        round_id: String,
+    },
+    DeliverAgain {
+        lead_session_id: String,
+        round_id: String,
+    },
+    DismissReport {
+        lead_session_id: String,
+        round_id: String,
+    },
+    SteerSidekick {
+        lead_session_id: String,
+        text: String,
     },
 }
 
@@ -734,6 +856,17 @@ pub(crate) enum FusionResultV1 {
         refusal: Option<FusionRefusal>,
         #[serde(skip_serializing_if = "Option::is_none")]
         role: Option<FusionRoleName>,
+        /// Additive (ADR-076): the dimension a refused sidekick exceeds.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dimension: Option<super::capability::Dimension>,
+        /// Additive (ADR-076): the sidekick's launch preset once admitted
+        /// (lower than requested when it was narrowed).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sidekick_mode: Option<PermissionMode>,
+        /// Additive (ADR-076): what the sidekick is effectively allowed
+        /// (absent for a same-harness native pair).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        capabilities: Option<super::capability::Capabilities>,
     },
     State {
         state: Box<FusionStateV1>,

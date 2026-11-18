@@ -1,10 +1,13 @@
 <script lang="ts">
-  import { isServiceJson } from './serviceJson';
+  import { isServiceData } from './serviceJson';
+  import { answerText, setAnswerSource } from './answerSource';
+  import { stripServiceMarkup } from './serviceMarkup';
+  import CompactionNote from './CompactionNote.svelte';
+  import FullAnswerNotice from './FullAnswerNotice.svelte';
   import { onDestroy, tick, untrack, type Snippet } from 'svelte';
   import Route from '@lucide/svelte/icons/route';
   import ArrowDown from '@lucide/svelte/icons/arrow-down';
   import Copy from '@lucide/svelte/icons/copy';
-  import Expand from '@lucide/svelte/icons/expand';
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import Search from '@lucide/svelte/icons/search';
@@ -20,6 +23,7 @@
   const t = useTranslation();
   const presentation = useConversationPresentation();
   import { splitImageMarkers } from '../../app/chat/composer/mentions';
+  import { summarizeInteractiveBlocks } from '../../app/interactive/summaries';
   import MarkdownContent from '../../components/MarkdownContent.svelte';
   import { createTimelineGrouper, type TimelineViewItem } from '../../features/sessions/timelineView';
   import type { TimelineBlock } from '../../host-api/types';
@@ -31,6 +35,13 @@
   import { interleave, timeOf, type TimedInsert } from '../../app/chatPipelines/interleave';
   import { splitPipelineContext } from '../../app/chatPipelines/chatPipeline';
 
+  /** Where the reader stopped: the block at the top of the view and how far into it, so a shorter or longer page still lands there. */
+  interface ReadingView {
+    top: number;
+    following: boolean;
+    anchor?: { id: string; offset: number };
+  }
+
   interface Props {
     blocks: TimelineBlock[];
     loading: boolean;
@@ -41,8 +52,8 @@
     nativeMarkers?: boolean;
     /** Optional native-owner metadata store; browser projections stay ephemeral. */
     positionStore?: {
-      read(key: string): { top: number; following: boolean } | undefined;
-      write(key: string, value: { top: number; following: boolean }): void;
+      read(key: string): ReadingView | undefined;
+      write(key: string, value: ReadingView): void;
     };
     language?: 'en' | 'ru';
     /** Whether the conversation's agent is working. Omitted when the owner cannot tell: the last turn then stays open. */
@@ -50,6 +61,7 @@
     attachments?: readonly ConversationAttachment[];
     onOpenAttachment?: (id: string) => Promise<void>;
     onDownloadAttachment?: (id: string) => Promise<void>;
+    onRevealAttachment?: (id: string) => Promise<void>;
     resolveAttachment?: (id: string) => Promise<ConversationMedia>;
     messagePresentation?: readonly ConversationMessagePresentation[];
     decorateMessage?: ConversationOwner['decorateMessage'];
@@ -57,6 +69,8 @@
     decorateMessageHeader?: ConversationOwner['decorateMessageHeader'];
     printMode?: boolean;
     announceMessages?: boolean;
+    /** The harness of the chat; only a Codex answer has its service markup removed. */
+    answerHarness?: string | undefined;
     messageControls?: readonly ConversationMessageControls[];
     onMessageAction?: (id: string, action: ConversationMessageAction) => Promise<void>;
     busyMessageActions?: Readonly<Record<string, boolean>>;
@@ -84,6 +98,7 @@
     attachments = [],
     onOpenAttachment,
     onDownloadAttachment,
+    onRevealAttachment,
     resolveAttachment,
     messagePresentation = [],
     decorateMessage,
@@ -91,6 +106,7 @@
     decorateMessageHeader,
     printMode = false,
     announceMessages = false,
+    answerHarness = undefined,
     messageControls,
     onMessageAction,
     busyMessageActions = {},
@@ -172,7 +188,7 @@
   });
   const matches = $derived(
     query.trim()
-      ? searchSource.filter((block) => `${block.text ?? ''} ${block.safeSummary ?? ''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+      ? searchSource.filter((block) => `${summarizeInteractiveBlocks(block.text ?? '')} ${block.safeSummary ?? ''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
       : [],
   );
   const currentMatch = $derived(Math.min(match, Math.max(0, matches.length - 1)));
@@ -272,6 +288,8 @@
       match = 0;
       searchOrigin = null;
     }
+    // Jumping to the latest message is an explicit choice: a selection no longer holds the view back.
+    if (force) selectionHold = false;
     following = true;
     await tick();
     if (disposed || !scroller) return false;
@@ -283,17 +301,40 @@
   // position per chat so switching chats returns to the same place. Only a
   // reader's own gesture stops following: layout shifts from streaming text,
   // lazily rendered rows or images must never strand the view mid-chat.
+  // A text selection in the transcript also holds the view: a growing reply
+  // must not scroll away the words being selected. Following resumes when the
+  // reader scrolls back to the bottom or jumps to the latest message.
   const NEAR_BOTTOM = 32;
   const viewReady = $derived(blocks.length > 0 || !loading);
+  let selectionHold = false;
+  const rowKey = (item: TimelineViewItem): string => (item.type === 'block' ? item.block.id : item.id);
 
   function follow(node: HTMLDivElement, params: { key: string; ready: boolean }) {
     if (printMode) return;
     let current = params.key;
-    let pendingView: { top: number; following: boolean } | undefined;
+    let pendingView: ReadingView | undefined;
     let gestureAt = 0;
+    let pointerDown = false;
     const distance = () => node.scrollHeight - node.clientHeight - node.scrollTop;
     const pin = () => {
-      node.scrollTop = node.scrollHeight;
+      if (!selectionHold) node.scrollTop = node.scrollHeight;
+    };
+    const selectionInside = () => {
+      const selection = document.getSelection();
+      return !!selection && !selection.isCollapsed && selection.rangeCount > 0 && node.contains(selection.getRangeAt(0).commonAncestorContainer);
+    };
+    const contentTop = (row: HTMLElement) => row.getBoundingClientRect().top - node.getBoundingClientRect().top + node.scrollTop;
+    // The row at the top of the view and how far into it the view starts.
+    const anchorOf = (): ReadingView['anchor'] => {
+      for (const row of node.querySelectorAll<HTMLElement>('[data-row-id]')) {
+        const top = contentTop(row);
+        if (top + row.getBoundingClientRect().height > node.scrollTop + 1) return { id: row.dataset.rowId ?? '', offset: Math.max(0, Math.round(node.scrollTop - top)) };
+      }
+      return undefined;
+    };
+    const restore = (view: ReadingView) => {
+      const row = view.anchor ? Array.from(node.querySelectorAll<HTMLElement>('[data-row-id]')).find((candidate) => candidate.dataset.rowId === view.anchor!.id) : undefined;
+      node.scrollTop = row && view.anchor ? contentTop(row) + view.anchor.offset : view.top;
     };
     let saved = '';
     let persistTimer: ReturnType<typeof setTimeout> | undefined;
@@ -301,7 +342,8 @@
       if (persistTimer !== undefined) clearTimeout(persistTimer);
       persistTimer = undefined;
       if (!positionStore || pendingView || searchOpen) return;
-      const value = { top: Math.round(node.scrollTop), following };
+      const anchor = following ? undefined : anchorOf();
+      const value: ReadingView = { top: Math.round(node.scrollTop), following, ...(anchor ? { anchor } : {}) };
       const fingerprint = `${current}:${JSON.stringify(value)}`;
       if (saved === fingerprint) return;
       try {
@@ -320,27 +362,52 @@
       pendingView = { top: 0, following: true };
       try {
         const saved = positionStore?.read(current);
-        if (saved && Number.isFinite(saved.top) && typeof saved.following === 'boolean') pendingView = saved;
+        if (saved && Number.isFinite(saved.top) && typeof saved.following === 'boolean') {
+          const anchor = saved.anchor;
+          pendingView = { top: saved.top, following: saved.following, ...(anchor && typeof anchor.id === 'string' && Number.isFinite(anchor.offset) ? { anchor } : {}) };
+        }
       } catch {
         // Ignore damaged metadata.
       }
       following = pendingView?.following ?? true;
+      selectionHold = false;
     };
     const apply = async (ready: boolean) => {
       if (!pendingView || !ready) return;
       const view = pendingView;
+      // The place may be in an earlier part of the chat that is not shown yet: show the page that holds it.
+      const anchored = view.anchor?.id;
+      if (!view.following && anchored !== undefined) {
+        const index = items.findIndex((item) => rowKey(item) === anchored);
+        if (index >= 0) limit = Math.max(limit, items.length - index);
+      }
       await tick();
       following = view.following;
       if (following) pin();
-      else node.scrollTop = view.top;
+      else restore(view);
       // Rows render lazily; settle once more after their real sizes land.
       requestAnimationFrame(() => {
         if (following) pin();
+        else restore(view);
         pendingView = undefined;
       });
     };
     const gesture = () => {
       gestureAt = performance.now();
+    };
+    const onPointerDown = () => {
+      gesture();
+      pointerDown = true;
+    };
+    const onPointerUp = () => {
+      pointerDown = false;
+    };
+    const onSelection = () => {
+      if (selectionInside()) selectionHold = true;
+      else if (selectionHold) {
+        selectionHold = false;
+        if (distance() <= NEAR_BOTTOM) following = true;
+      }
     };
     const onKey = (event: KeyboardEvent) => {
       if (['ArrowUp', 'PageUp', 'Home', ' '].includes(event.key)) gesture();
@@ -354,20 +421,30 @@
     };
     const onScroll = () => {
       if (pendingView || searchOpen) return;
-      if (distance() <= NEAR_BOTTOM) following = true;
-      else if (performance.now() - gestureAt < 1_000) following = false;
+      if (distance() <= NEAR_BOTTOM) {
+        following = true;
+        // Back at the bottom by the reader's own scrolling: follow again, selection or not.
+        // A drag that selects text and scrolls the view by itself does not count.
+        if (!pointerDown) selectionHold = false;
+      } else if (performance.now() - gestureAt < 1_000) following = false;
       else if (following) pin();
       persistSoon();
     };
     const observer = new ResizeObserver(() => {
-      if (!searchOpen && following) pin();
+      if (searchOpen || !following) return;
+      // New content under a selection: stay where the reader is and offer "Latest".
+      if (selectionHold) following = false;
+      else pin();
     });
     observer.observe(node);
     if (node.firstElementChild) observer.observe(node.firstElementChild);
     node.addEventListener('scroll', onScroll, { passive: true });
     node.addEventListener('wheel', onWheel, { passive: true });
     node.addEventListener('touchmove', gesture, { passive: true });
-    node.addEventListener('pointerdown', gesture, { passive: true });
+    node.addEventListener('pointerdown', onPointerDown, { passive: true });
+    document.addEventListener('pointerup', onPointerUp);
+    document.addEventListener('pointercancel', onPointerUp);
+    document.addEventListener('selectionchange', onSelection);
     node.addEventListener('keydown', onKey);
     node.addEventListener('focusin', onFocus);
     load();
@@ -387,7 +464,10 @@
         node.removeEventListener('scroll', onScroll);
         node.removeEventListener('wheel', onWheel);
         node.removeEventListener('touchmove', gesture);
-        node.removeEventListener('pointerdown', gesture);
+        node.removeEventListener('pointerdown', onPointerDown);
+        document.removeEventListener('pointerup', onPointerUp);
+        document.removeEventListener('pointercancel', onPointerUp);
+        document.removeEventListener('selectionchange', onSelection);
         node.removeEventListener('keydown', onKey);
         node.removeEventListener('focusin', onFocus);
       },
@@ -415,7 +495,7 @@
       const text = await loadFull(block);
       if (disposed) return;
       if (copy) {
-        await navigator.clipboard.writeText(text);
+        await navigator.clipboard.writeText(summarizeInteractiveBlocks(stripServiceMarkup(text, false, answerHarness)));
         if (!disposed) presentation.notify('success', $t('Answer copied'));
       }
     } catch {
@@ -426,6 +506,15 @@
     }
   }
 
+  // A reply folded into a turn's process shows the same shortened-answer notice and button.
+  setAnswerSource({
+    full: (id) => fullAnswers[id],
+    busy: (id) => busyAnswers[id] === true,
+    canLoad: () => !!readHistory,
+    load: (block) => answerAction(block, false),
+    get harness() { return answerHarness; },
+  });
+
   function time(value: string | undefined): string {
     return value ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
   }
@@ -435,7 +524,7 @@
   {#if files.length}
     <ul class="attachments" aria-label={$t('Attachments')}>
       {#each files as attachment (attachment.id)}
-        <li><AttachmentCard {attachment} {printMode} open={onOpenAttachment} download={onDownloadAttachment} resolve={resolveAttachment} /></li>
+        <li><AttachmentCard {attachment} {printMode} open={onOpenAttachment} download={onDownloadAttachment} reveal={onRevealAttachment} resolve={resolveAttachment} /></li>
       {/each}
     </ul>
   {/if}
@@ -502,17 +591,17 @@
 
       {#each rows as row (row.type === 'insert' ? `insert:${row.id}` : row.item.type === 'block' ? row.item.block.id : row.item.id)}
         {#if row.type === 'insert'}
-          <div class="item item--insert">{@render insert?.(row.id)}</div>
+          <div class="item item--insert" data-row-id={`insert:${row.id}`}>{@render insert?.(row.id)}</div>
         {:else}
         {@const item = row.item}
         {#if item.type === 'turn-process'}
-          <div class="item item--turn">
+          <div class="item item--turn" data-row-id={item.id}>
             <TurnProcessView {item} {language} open={openState[item.id] ?? item.attention === true} onToggle={(open) => setOpen(item.id, open)} {openState} onOpenChange={setOpen} />
           </div>
         {:else}
           {@const block = item.block}
           {@const appearance = appearanceByBlock.get(block.id)}
-          <div class="item" class:item--controls={controlsByBlock.has(block.id)} data-timeline-block={block.id}>
+          <div class="item" class:item--controls={controlsByBlock.has(block.id)} data-timeline-block={block.id} data-row-id={block.id}>
             {#if headerDecorator}<div class="message-header-host" use:decorateHeader={block}></div>{/if}
             {#if appearance?.author}<div class="message-author">{appearance.author}</div>{/if}
             {#if appearance?.note}<p class="message-note">{appearance.note}</p>{/if}
@@ -545,32 +634,30 @@
               {#if block.status === 'streaming'}<p class="user-pending">{$t('The agent reads this at its next step')}</p>{/if}
             {:else if block.kind === 'assistant'}
               <article class="assistant" class:assistant--end={turnEnds.has(block.id)} class:assistant--failed={block.status === 'failed'} class:assistant--stopped={block.status === 'interrupted'}>
-                {#if block.text && !printMode && isServiceJson(block.text, block.status === 'streaming')}
+                {#if block.text && !printMode && isServiceData(block)}
                   <details class="service-data">
                     <summary>{$t('Service data')}</summary>
                     <pre>{block.text}</pre>
                   </details>
                 {:else if block.text}
-                  <div class="message-markdown" use:decorate={block}>
-                    {#if appearance?.literal}<p class="literal">{block.text}</p>{:else}<MarkdownContent source={fullAnswers[block.id] ?? block.text} rich={richMarkdown ?? !!decorator} widgets={!!decorator} {printMode} />{/if}
-                  </div>
+                  {@const shown = answerText(block, fullAnswers[block.id], answerHarness)}
+                  {#if shown !== ''}
+                    <div class="message-markdown" use:decorate={block}>
+                      {#if appearance?.literal}<p class="literal">{shown}</p>{:else}<MarkdownContent source={shown} streaming={block.status === 'streaming'} rich={richMarkdown ?? !!decorator} widgets={!!decorator} {printMode} />{/if}
+                    </div>
+                  {/if}
                 {:else if block.safeSummary}
                   <p class="muted">{block.safeSummary}</p>
                 {/if}
                 {#if block.status === 'streaming' && !printMode}<span class="caret" aria-hidden="true"></span>{/if}
-                {#if block.status === 'failed' || block.status === 'interrupted' || (turnEnds.has(block.id) && block.status !== 'streaming' && block.text && (messageControls === undefined || (block.truncated && !fullAnswers[block.id] && readHistory)))}
+                <FullAnswerNotice {block} {printMode} />
+                {#if block.status === 'failed' || block.status === 'interrupted' || (turnEnds.has(block.id) && block.status !== 'streaming' && block.text && messageControls === undefined)}
                 <div class="assistant__meta">
                   {#if block.status === 'failed'}<span class="warn">{$t('The turn failed')}</span>{/if}
                   {#if block.status === 'interrupted'}<span class="warn">{$t('Stopped')}</span>{/if}
                   {#if block.text && !printMode}
                     <span class="assistant__actions">
                       {#if messageControls === undefined}<IconButton size="sm" label={$t('Copy answer')} onclick={() => void answerAction(block, true)} disabled={busyAnswers[block.id]}><Copy /></IconButton>{/if}
-                      {#if block.truncated && !fullAnswers[block.id] && readHistory}
-                        <Button size="sm" variant="ghost" onclick={() => void answerAction(block, false)} loading={busyAnswers[block.id]}>
-                          {#snippet leading()}<Expand />{/snippet}
-                          {$t('Show full answer')}
-                        </Button>
-                      {/if}
                       {#if block.createdAt && messageControls === undefined}<time datetime={block.createdAt}>{time(block.createdAt)}</time>{/if}
                     </span>
                   {/if}
@@ -585,12 +672,12 @@
                 <div><strong>{block.label || $t('Runtime notice')}</strong>{#if block.text || block.safeSummary}<p>{block.text ?? block.safeSummary}</p>{/if}</div>
               </div>
             {:else if block.kind === 'compaction'}
-              <div class="divider"><span>{block.status === 'streaming' ? $t('Compacting context…') : $t('Context compacted')}</span></div>
+              <CompactionNote {block} />
             {:else}
               <!-- Generic fallback: unknown or extension content stays readable. -->
               <details class="fallback" open={printMode || undefined}>
                 <summary class="fallback__head">
-                  <span class="fallback__label">{block.label || (printMode ? block.toolName : '') || $t('Extension message')}</span>
+                  <span class="fallback__label">{block.kind === 'custom' && !block.fallback && block.label === 'Codex warning' ? $t('Codex warning') : block.label || (printMode ? block.toolName : '') || $t('Extension message')}</span>
                   {#if block.fallback}<span class="fallback__tag">· {$t('Compatibility view')}</span>{/if}
                   <span class="fallback__chevron"><ChevronRight size={12} /></span>
                 </summary>
@@ -859,21 +946,6 @@
     border-color: var(--piui-danger-border);
     background: var(--piui-danger-surface);
     color: var(--piui-danger-text);
-  }
-  .divider {
-    display: flex;
-    align-items: center;
-    gap: var(--piui-space-3);
-    margin: var(--piui-space-4) 0 var(--piui-space-6);
-    color: var(--piui-text-disabled);
-    font-size: var(--piui-text-xs);
-  }
-  .divider::before,
-  .divider::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: var(--piui-border-subtle);
   }
   .fallback {
     margin: 0 0 var(--piui-space-3);

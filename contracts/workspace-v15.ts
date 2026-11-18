@@ -145,6 +145,8 @@ export type WorkspaceEventPayload =
   | { type: 'error'; message: string }
   /** Additive v15 event (ADR-041): a notice also listed in `SessionSnapshot.notices`. */
   | { type: 'notice'; code: WorkspaceNoticeCode }
+  /** Additive v15 event (ADR-075): older blocks, oldest first, that go before every block already shown; one already shown is kept. */
+  | { type: 'historyPage'; blocks: DesktopTimelineBlock[] }
   /** Additive v15 event (ADR-072): the whole new `SessionSnapshot.tasks` list. */
   | { type: 'tasks'; tasks: import('./workspace-session-tasks-v1').SessionTaskV1[] };
 export interface WorkspaceEvent {

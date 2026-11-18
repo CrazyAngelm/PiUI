@@ -2,7 +2,7 @@ export async function createPiAdapter(config, emit) {
   const { spawn } = await import("node:child_process");
   const { createHash } = await import("node:crypto");
   const { stat, mkdtemp, writeFile, rm } = await import("node:fs/promises");
-  const { join, isAbsolute: isAbsolutePath } = await import("node:path");
+  const { join, resolve: resolvePath, isAbsolute: isAbsolutePath } = await import("node:path");
 
   const fail = (code, safeMessage) => Object.assign(new Error(code), { bridgeCode: code, safeMessage });
   const isMaterialized = async (nativePath) => {
@@ -275,6 +275,54 @@ export async function createPiAdapter(config, emit) {
   };
   const safeToolName = (name) => typeof name === "string" && name.length <= 160 ? name : "tool";
 
+  // Chat files (CONTRACT.md, "File events"): files a tool wrote or read and
+  // images a tool returned. Only the location or the bytes are forwarded as a
+  // `file` event, never added to block text; the host validates and opens them.
+  const FILE_EVENT_LIMIT = 200;
+  const INLINE_FILE_LIMIT = 20 * 1024 * 1024;
+  const INLINE_BASE64_LIMIT = Math.ceil(INLINE_FILE_LIMIT / 3) * 4;
+  const IMAGE_EXTENSION_TYPES = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+  const INLINE_MEDIA_TYPES = new Set([
+    "image/png", "image/jpeg", "image/gif", "image/webp",
+    "audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3", "audio/ogg", "audio/webm", "audio/mp4", "audio/aac", "audio/flac",
+  ]);
+  const notedFiles = new Set();
+  const imageTypeOfPath = (value) => {
+    const extension = String(value).split(".").pop().toLowerCase();
+    return Object.hasOwn(IMAGE_EXTENSION_TYPES, extension) ? IMAGE_EXTENSION_TYPES[extension] : undefined;
+  };
+  const noteFile = (blockId, rawPath, origin) => {
+    if (typeof rawPath !== "string" || notedFiles.size >= FILE_EVENT_LIMIT) return;
+    const trimmed = rawPath.replace(/^@/, "").trim();
+    if (!trimmed || trimmed.length > 4096 || trimmed.includes("\0")) return;
+    const absolute = isAbsolutePath(trimmed) ? trimmed : resolvePath(config.cwd, trimmed);
+    const key = `${blockId}\0${absolute}`;
+    if (notedFiles.has(key)) return;
+    notedFiles.add(key);
+    const mimeType = imageTypeOfPath(absolute);
+    emit({ type: "file", blockId, path: absolute, origin, ...(mimeType ? { mimeType } : {}) });
+  };
+  const noteInlineFile = (blockId, mimeType, data, origin) => {
+    const type = typeof mimeType === "string" ? mimeType.toLowerCase() : "";
+    if (!INLINE_MEDIA_TYPES.has(type) || typeof data !== "string" || !data || data.length > INLINE_BASE64_LIMIT
+      || notedFiles.size >= FILE_EVENT_LIMIT || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return;
+    const key = `${blockId}\0inline:${data.length}:${data.slice(0, 48)}:${data.slice(-48)}`;
+    if (notedFiles.has(key)) return;
+    notedFiles.add(key);
+    emit({ type: "file", blockId, origin, inline: { mimeType: type, base64: data } });
+  };
+  // A finished tool call: the file `write`/`edit` changed, the image file
+  // `read` showed, or an image any other tool returned.
+  const noteToolFiles = (blockId, toolName, path, result, isError) => {
+    if (isError) return;
+    if (toolName === "write" || toolName === "edit") { noteFile(blockId, path, "written"); return; }
+    if (toolName === "read" && typeof path === "string" && imageTypeOfPath(path)) { noteFile(blockId, path, "read"); return; }
+    for (const part of Array.isArray(result?.content) ? result.content : []) {
+      if (part?.type === "image") noteInlineFile(blockId, part.mimeType, part.data, toolName === "read" ? "read" : "returned");
+    }
+  };
+  const toolPaths = new Map();
+
   // Tool arguments and results are arbitrary native values. Blocks carry only a
   // one-line title and bounded output text, never the raw objects.
   const TOOL_TEXT_LIMIT = 16 * 1024;
@@ -380,25 +428,96 @@ export async function createPiAdapter(config, emit) {
   } : undefined;
   // A Nano session lists only Nano models, never another provider's.
   const mapModels = (list) => (Array.isArray(list) ? list : []).map(mapModel).filter((entry) => entry && (!nano || entry.provider === nanoProvider));
-  const historyBlock = (entry, useEntryId) => {
-    if (entry?.type !== "message" || !entry.message) return undefined;
-    const role = entry.message.role;
-    if (role !== "user" && role !== "assistant") return undefined;
-    // Pi allocates the entry id after `message_end`, so live RPC events never
-    // carry it. An assistant message's `timestamp` is fixed when streaming
-    // starts and persisted unchanged, so it names the same answer live and in
-    // history. `useEntryId` is the fallback for a repeated timestamp.
-    const stamped = role === "assistant" && !useEntryId ? assistantBlockId("assistant", entry.message.timestamp, 0) : undefined;
-    const id = stamped ?? opaque("pi-entry", entry.id ?? `${role}-${++blockSequence}`);
-    const isError = role === "assistant" && ["error", "aborted"].includes(entry.message.stopReason);
-    return {
-      id,
-      kind: role,
-      label: role === "user" ? "You" : "Pi",
-      status: isError ? (entry.message.stopReason === "aborted" ? "interrupted" : "failed") : "complete",
-      text: role === "user" ? userText(entry.message) : textOf(entry.message),
-      ...(typeof entry.timestamp === "string" ? { createdAt: entry.timestamp } : {}),
+  // The messages of the branch Pi is on: `leafId` names the tip and every
+  // entry names its parent, so an abandoned branch never shows up linearly.
+  // An older Pi that reports no leaf (or an unknown one) keeps the file order.
+  const activeBranch = (entries, leafId) => {
+    if (leafId === undefined) return entries;
+    if (leafId === null) return [];
+    const byId = new Map();
+    for (const entry of entries) if (typeof entry?.id === "string") byId.set(entry.id, entry);
+    let cursor = byId.get(leafId);
+    if (!cursor) return entries;
+    const path = [];
+    const seen = new Set();
+    while (cursor && !seen.has(cursor.id)) {
+      seen.add(cursor.id);
+      path.push(cursor);
+      cursor = typeof cursor.parentId === "string" ? byId.get(cursor.parentId) : undefined;
+    }
+    return path.reverse();
+  };
+  // Projects the session entries of the active branch to the blocks the stream
+  // produces: user messages, one block per text and thinking content block (the
+  // same ids as live), one tool block per call with its result linked by
+  // `toolCallId`, and compactions. `running` is a turn still in flight.
+  const historyBlocks = (entries, leafId, running) => {
+    const branch = activeBranch(Array.isArray(entries) ? entries : [], leafId);
+    const result = [];
+    const taken = new Set();
+    const toolAt = new Map();
+    const unique = (preferred, fallback) => {
+      const id = preferred && !taken.has(preferred) ? preferred : fallback;
+      taken.add(id);
+      return id;
     };
+    const lastAssistant = branch.findLastIndex((entry) => entry?.type === "message" && entry.message?.role === "assistant");
+    branch.forEach((entry, position) => {
+      const createdAt = typeof entry?.timestamp === "string" ? { createdAt: entry.timestamp } : {};
+      const entryKey = entry?.id ?? `entry-${++blockSequence}`;
+      if (entry?.type === "compaction") {
+        result.push({ id: unique(undefined, opaque("pi-entry", entryKey)), kind: "compaction", label: "Compaction", status: "complete", safeSummary: "Context was compacted.", ...createdAt });
+        return;
+      }
+      if (entry?.type !== "message" || !entry.message) return;
+      const message = entry.message;
+      if (message.role === "user") {
+        result.push({ id: unique(undefined, opaque("pi-entry", entryKey)), kind: "user", label: "You", status: "complete", text: userText(message), ...createdAt });
+      } else if (message.role === "toolResult" && typeof message.toolCallId === "string") {
+        const at = toolAt.get(message.toolCallId);
+        if (at === undefined) return;
+        const output = boundToolText(toolResultText(message));
+        const call = result[at.index];
+        result[at.index] = {
+          ...call, status: message.isError === true ? "failed" : "complete", text: output.text, truncated: output.truncated,
+          safeSummary: message.isError === true ? "The tool failed." : "The tool completed.",
+        };
+        noteToolFiles(call.id, call.toolName, at.path, message, message.isError === true);
+      } else if (message.role === "assistant" && Array.isArray(message.content)) {
+        // Pi allocates the entry id after `message_end`, so live events never
+        // carry it; the message `timestamp` names the same answer in both.
+        const stopped = message.stopReason === "aborted" ? "interrupted" : message.stopReason === "error" ? "failed" : "complete";
+        let textRank = 0;
+        let thinkingRank = 0;
+        // Tools run after the message ends, so live their blocks follow all of its text.
+        const calls = [];
+        for (const part of message.content) {
+          if (part?.type === "text" || part?.type === "thinking") {
+            const kind = part.type === "text" ? "assistant" : "thinking";
+            // Every part takes a rank, shown or not, as the stream's content blocks do.
+            const rank = kind === "assistant" ? textRank++ : thinkingRank++;
+            const text = kind === "assistant" ? part.text : part.thinking;
+            if (typeof text !== "string" || !text.trim()) continue;
+            const id = unique(assistantBlockId(kind, message.timestamp, rank), opaque("pi-entry", `${entryKey}:${kind}:${rank}`));
+            result.push({ id, kind, label: kind === "thinking" ? "Thinking" : "Pi", status: stopped, text, ...createdAt });
+          } else if (part?.type === "toolCall" && typeof part.id === "string") {
+            const name = safeToolName(part.name);
+            const args = part.arguments && typeof part.arguments === "object" && !Array.isArray(part.arguments) ? part.arguments : {};
+            // A call without a recorded result never finished, unless its turn is still running.
+            const status = running && position === lastAssistant ? "streaming" : "interrupted";
+            calls.push({
+              path: typeof args.path === "string" ? args.path : undefined, callId: part.id,
+              block: { id: unique(opaque("pi-tool", part.id), opaque("pi-entry", `${entryKey}:tool:${part.id}`)), kind: "tool", label: name, toolName: name, collapsible: true, status, title: toolTitle(name, args), ...createdAt },
+            });
+          }
+        }
+        for (const call of calls) {
+          toolAt.set(call.callId, { index: result.length, path: call.path });
+          result.push(call.block);
+        }
+      }
+    });
+    return result;
   };
 
   // Select values stay adapter-private. The host sees opaque option ids with
@@ -643,8 +762,27 @@ export async function createPiAdapter(config, emit) {
       case "message_update": {
         const event = frame.assistantMessageEvent;
         if (!event || typeof event.type !== "string") break;
+        // Pi's AssistantMessageEvent: `start`, `text_*`, `thinking_*`,
+        // `toolcall_*`, `done`, `error`. Each family is routed explicitly, so a
+        // tool call's streamed JSON arguments never become assistant prose.
+        const phase = /^(text|thinking|toolcall)_(start|delta|end)$/.exec(event.type);
+        if (!phase) {
+          // `start` and `done` carry no content; message_end settles the blocks.
+          if (event.type === "start" || event.type === "done") break;
+          if (event.type === "error") {
+            for (const id of contentBlocks.values()) {
+              if (blocks.get(id)?.status === "streaming") updateBlock(id, { status: "failed", safeSummary: "The assistant turn ended with an error." });
+            }
+            break;
+          }
+          reportUnknownEvent(`message_update.${event.type}`);
+          break;
+        }
+        // The tool block itself comes from tool_execution_*; the call's
+        // arguments stream here as JSON and are only a summary on that block.
+        if (phase[1] === "toolcall") break;
         const index = Number.isInteger(event.contentIndex) ? event.contentIndex : 0;
-        const kind = event.type.startsWith("thinking") ? "thinking" : "assistant";
+        const kind = phase[1] === "thinking" ? "thinking" : "assistant";
         const key = `${kind}:${index}`;
         let id = contentBlocks.get(key);
         if (!id) {
@@ -655,12 +793,16 @@ export async function createPiAdapter(config, emit) {
           contentBlocks.set(key, id);
           putBlock({ id, kind, label: kind === "thinking" ? "Thinking" : "Pi", status: "streaming", text: "" });
         }
-        if (event.type.endsWith("_delta") && typeof event.delta === "string") {
+        if (phase[2] === "delta" && typeof event.delta === "string") {
           const current = blocks.get(id);
           if (current) current.text = `${current.text ?? ""}${event.delta}`;
           emit({ type: "textDelta", blockId: id, text: event.delta });
-        } else if (event.type.endsWith("_end") || event.type === "done") updateBlock(id, { status: "complete" });
-        else if (event.type === "error") updateBlock(id, { status: "failed", safeSummary: "The assistant turn ended with an error." });
+        } else if (phase[2] === "end") {
+          // `*_end` carries the authoritative content; a dropped delta heals here.
+          const current = blocks.get(id);
+          const authoritative = typeof event.content === "string" && current && (current.text ?? "") !== event.content;
+          updateBlock(id, { status: "complete", ...(authoritative ? { text: event.content } : {}) });
+        }
         break;
       }
       case "message_end": {
@@ -701,6 +843,11 @@ export async function createPiAdapter(config, emit) {
           ...(output ? { text: output.text, truncated: output.truncated } : {}),
           ...(ended ? { safeSummary: frame.isError ? "The tool failed." : "The tool completed." } : {}),
         });
+        if (typeof frame.args?.path === "string" && toolPaths.size < 256) toolPaths.set(frame.toolCallId, frame.args.path);
+        if (ended) {
+          noteToolFiles(id, toolName, toolPaths.get(frame.toolCallId), frame.result, frame.isError === true);
+          toolPaths.delete(frame.toolCallId);
+        }
         break;
       }
       // Older Pi builds report automatic compaction with the auto_ prefix.
@@ -792,12 +939,7 @@ export async function createPiAdapter(config, emit) {
     const modelResult = await request("get_available_models");
     availableModels = mapModels(modelResult?.models);
     const entriesResult = await request("get_entries").catch(() => ({ entries: [] }));
-    for (const entry of entriesResult?.entries ?? []) {
-      let block = historyBlock(entry);
-      // Two entries must never share an id: fall back to the entry id.
-      if (block && blocks.has(block.id)) block = historyBlock(entry, true);
-      if (block) blocks.set(block.id, block);
-    }
+    for (const block of historyBlocks(entriesResult?.entries, entriesResult?.leafId, state.isStreaming === true)) blocks.set(block.id, block);
     setStatus(state.isStreaming ? "running" : "idle");
     emit({ type: "binding", nativeId: state.sessionId, ...(state.sessionFile ? { nativePath: state.sessionFile } : {}) });
   }

@@ -61,7 +61,8 @@ describe('WorkspaceStore start', () => {
     expect(send).not.toHaveBeenCalled();
     expect(store.drafts[session.id]).toBe(message);
     store.dispose();
-  });
+    // The first test of the file loads the whole Lab host; under a full parallel run that alone nears 5 s.
+  }, 15_000);
 
   it('names a new chat as asked and leaves the name to the host otherwise', async () => {
     const store = new WorkspaceStore();
@@ -125,6 +126,18 @@ describe('WorkspaceStore start', () => {
       await pending;
       store.dispose();
     }
+  });
+
+  it('records every "New chat in <project>" request, also for the already selected project', () => {
+    const store = new WorkspaceStore();
+    store.goHome('ws-a');
+    expect(store.selectedWorkspaceId).toBe('ws-a');
+    expect(store.newChatRequest).toEqual({ workspaceId: 'ws-a', seq: 1 });
+    store.goHome('ws-a');
+    expect(store.newChatRequest).toEqual({ workspaceId: 'ws-a', seq: 2 });
+    store.goHome();
+    expect(store.newChatRequest?.seq).toBe(2);
+    expect(store.route).toEqual({ name: 'home' });
   });
 
   it('retains text edited away and back across Home navigation while acknowledging unchanged images', () => {
@@ -272,6 +285,25 @@ describe('WorkspaceStore split panes', () => {
     if (!first || !second) throw new Error('The Lab needs two open chats.');
     return { store, first, second };
   }
+
+  it('keeps the selected project on the project of the open chat when another one is chosen', async () => {
+    const { store, first } = await twoChats();
+    await store.openSession(first, { navigate: false });
+    const own = store.catalog.sessions.find((session) => session.id === first)?.workspaceId ?? '';
+    const other = store.catalog.workspaces.find((workspace) => workspace.id !== own)?.id;
+    if (!other) throw new Error('The Lab needs two projects.');
+    // A catalog reload that prefers another project (a project was added or trusted) moves only the
+    // choice made outside the chat: the sidebar and the chat header still name one project.
+    await store.loadCatalog(other);
+    expect(store.selectedWorkspaceId).toBe(own);
+    expect(store.selectedWorkspace?.id).toBe(own);
+    // A later reload without a preference keeps that choice instead of taking the open chat's project.
+    await store.loadCatalog();
+    expect(store.selectedWorkspaceId).toBe(own);
+    store.goHome();
+    expect(store.selectedWorkspaceId).toBe(other);
+    store.dispose();
+  });
 
   it('loads a chat for a pane without selecting it, with its own loading state', async () => {
     const { store, first, second } = await twoChats();

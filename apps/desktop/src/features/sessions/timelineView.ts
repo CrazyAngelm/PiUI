@@ -171,11 +171,24 @@ function isTransparent(block: TimelineBlock): boolean {
   );
 }
 
-/** A turn starts at each user block; blocks before the first one form a leading turn. */
-function splitTurns(blocks: readonly TimelineBlock[]): TimelineBlock[][] {
+/**
+ * A message steered into a running turn that the runtime has not reported yet
+ * (the chat shows it as a user block that is still `streaming`). It is not a
+ * new turn: the agent is still working on the old one.
+ */
+function isPendingSteer(block: TimelineBlock): boolean {
+  return block.kind === 'user' && block.status === 'streaming';
+}
+
+/**
+ * A turn starts at each user block; blocks before the first one form a leading
+ * turn. While the agent works (`running` is not known to be false), a pending
+ * steer joins the turn in progress instead of ending it.
+ */
+export function splitTurns(blocks: readonly TimelineBlock[], running: boolean | 'unknown'): TimelineBlock[][] {
   const turns: TimelineBlock[][] = [];
   for (const block of blocks) {
-    if (block.kind === 'user' || turns.length === 0) turns.push([]);
+    if ((block.kind === 'user' && !(running !== false && isPendingSteer(block))) || turns.length === 0) turns.push([]);
     turns[turns.length - 1]!.push(block);
   }
   return turns;
@@ -277,11 +290,13 @@ function foldTurn(
   turn: readonly TimelineBlock[],
   working: boolean,
   keepOwner: (block: TimelineBlock) => boolean,
+  /** The turn's blocks with the silent reasoning that was left out of `turn`: the time spent includes it. */
+  timing: readonly TimelineBlock[] = turn,
 ): TimelineViewItem[] {
   const answer = working ? undefined : lastReply(turn);
   const keep = (block: TimelineBlock): boolean => block === answer || keepOwner(block);
-  const startedAt = turn[0]!.kind === 'user' ? turn[0]!.createdAt : undefined;
-  const endedAt = turn[turn.length - 1]!.createdAt;
+  const startedAt = timing[0]!.kind === 'user' ? timing[0]!.createdAt : undefined;
+  const endedAt = timing[timing.length - 1]!.createdAt;
   const span = { ...(startedAt !== undefined ? { startedAt } : {}), ...(endedAt !== undefined ? { endedAt } : {}) };
   const result: TimelineViewItem[] = [];
   let pending: TimelineCatalogItem[] = [];
@@ -319,7 +334,9 @@ function foldTurn(
  * The chat transcript's grouping. On every turn, the tool and reasoning groups
  * and the replies the agent wrote between them become one `turn-process`
  * control; the answer after the last group stays in the chat. While the turn
- * works, the control is live. No block is dropped, reordered or changed.
+ * works, the control is live. No block is reordered or changed; the only blocks
+ * left out are completed reasoning blocks with nothing to show (`isSilentReasoning`).
+ * A steer the runtime has not reported yet stays inside the turn that is working.
  * `keep` names replies that must stay in the chat (a reply that carries a file).
  */
 export function groupTranscriptBlocks(
@@ -327,11 +344,20 @@ export function groupTranscriptBlocks(
   running: boolean | 'unknown' = false,
   keep: (block: TimelineBlock) => boolean = () => false,
 ): TimelineViewItem[] {
-  const turns = splitTurns(blocks);
+  const turns = splitTurns(blocks, running);
   return turns.flatMap((turn, index) => {
     // 'unknown': the owner cannot tell whether the agent still works; only a streaming block says so.
     const working = index === turns.length - 1 && (running === true || turn.some((block) => block.status === 'streaming'));
-    return foldTurn(groupTurn(turn, working), turn, working, keep);
+    // Steers the runtime has not reported yet close the turn's blocks: they are shown after them and never take part
+    // in their grouping, so the turn keeps working (live process, no intermediate note taken for the answer).
+    let end = turn.length;
+    while (end > 1 && isPendingSteer(turn[end - 1]!)) end -= 1;
+    const core = turn.slice(0, end);
+    // A completed reasoning block with nothing to say is not shown, grouped or counted. A failed or stopped one is kept: it says where the turn went wrong.
+    const shown = core.filter((block) => !(block.status === 'complete' && isSilentReasoning(block)));
+    const items: TimelineViewItem[] = shown.length === 0 ? [] : foldTurn(groupTurn(shown, working), shown, working, keep, core);
+    for (const block of turn.slice(end)) items.push({ type: 'block', block });
+    return items;
   });
 }
 

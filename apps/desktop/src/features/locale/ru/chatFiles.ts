@@ -1,0 +1,22 @@
+export const chatFilesRu: Readonly<Record<string, string>> = {
+  'Save as…': 'Сохранить как…',
+  'Open containing folder': 'Открыть папку с файлом',
+  'File saved': 'Файл сохранён',
+  'Written': 'Записан',
+  'Read': 'Прочитан',
+  'Generated': 'Создан',
+  'Returned': 'Получен',
+  '{0} B': '{0} Б',
+  '{0} KB': '{0} КБ',
+  '{0} MB': '{0} МБ',
+  '{0} GB': '{0} ГБ',
+  'This file is no longer available.': 'Этот файл больше недоступен.',
+  'This file cannot be previewed. Open it or save a copy.': 'Этот файл нельзя просмотреть. Откройте его или сохраните копию.',
+  'Nano Desktop does not open this kind of file. Save a copy or show it in its folder.':
+    'Nano Desktop не открывает файлы такого типа. Сохраните копию или покажите файл в папке.',
+  'The file action could not be completed.': 'Не удалось выполнить действие с файлом.',
+  'Attachments': 'Вложения',
+  'Attachment unavailable': 'Вложение недоступно',
+  'Download attachment': 'Скачать вложение',
+  'Preview unavailable. Open the attachment to continue.': 'Предпросмотр недоступен. Откройте вложение, чтобы продолжить.',
+};

@@ -24,6 +24,7 @@ pub mod acp;
 pub mod acp_nano;
 #[cfg(all(windows, any(test, bundled_nano_runtime)))]
 mod bundled_nano;
+pub mod chat_file;
 pub mod codec;
 pub mod codex_nano;
 mod extension_manager;

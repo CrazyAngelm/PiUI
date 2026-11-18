@@ -610,6 +610,7 @@ mod tests {
             network_access: false,
             allowed_tools: None,
             native_subagents: None,
+            background_tasks: None,
             daemon_socket: None,
             package_root: None,
             agent_dir: None,

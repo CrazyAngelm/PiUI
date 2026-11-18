@@ -37,6 +37,11 @@ const SAFE_ERRORS: Record<string, string> = {
   FILES_UNAVAILABLE: 'The project files could not be listed.',
   DROP_EXPIRED: 'The dropped files are no longer available. Drop them again.',
   PROJECT_UNAVAILABLE: 'The project folder is unavailable.',
+  // Chat files v1 (ADR-074).
+  CHAT_FILE_UNAVAILABLE: 'This file is no longer available.',
+  CHAT_FILE_NOT_PREVIEWABLE: 'This file cannot be previewed. Open it or save a copy.',
+  CHAT_FILE_OPEN_REFUSED: 'Nano Desktop does not open this kind of file. Save a copy or show it in its folder.',
+  CHAT_FILE_FAILED: 'The file action could not be completed.',
   // Worktree chats (workspace placement v1) refused by the ordinary open.
   WORKTREE_REMOVED: "This chat's worktree was removed. Its history stays readable; start a new chat to keep working.",
   WORKTREE_UNAVAILABLE: "This chat's worktree folder is missing or no longer belongs to the project's repository.",

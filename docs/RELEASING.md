@@ -63,19 +63,44 @@ without the key never checks for updates, and its users update manually once.
 2. Add the secrets:
    - `TAURI_SIGNING_PRIVATE_KEY`: the contents of `piui-updater.key`;
    - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: its password.
-3. Add the variables:
-   - `PIUI_UPDATER_PUBKEY`: the contents of `piui-updater.key.pub` (one base64 line);
-   - `PIUI_UPDATER_ENDPOINT`:
+3. Add the variable `PIUI_UPDATER_PUBKEY`: the contents of
+   `piui-updater.key.pub` (one base64 line). Optional variables:
+   - `PIUI_UPDATER_ENDPOINT`, only to read the feed from somewhere else. The
+     default is
      `https://github.com/CrazyAngelm/PiUI/releases/download/updater/latest.json`
-     (GitHub's `releases/latest/download/…` skips pre-releases, so the workflow
-     keeps `latest.json` on a rolling release instead);
-   - optional `PIUI_UPDATER_CHANNEL_TAG` if that rolling release should use a
-     tag other than `updater` (keep the endpoint in sync).
+     (GitHub's `releases/latest/download/…` skips pre-releases, so releases
+     keep `latest.json` on a rolling release instead);
+   - `PIUI_UPDATER_CHANNEL_TAG` if that rolling release should use a tag other
+     than `updater` (then set the endpoint to match).
 
-When all three values exist, the release builds contain the updater
+When the key pair exists, the release builds contain the updater
 (`plugins.updater` with the public key and endpoint) and the bundler signs the
-update artifacts. If only some exist, the build log says which are missing and
-the release is built without updates; malformed values fail the build.
+update artifacts. If only half of it exists, the build log says what is missing
+and the release is built without updates; malformed values fail the build.
+
+#### Publishing a locally built release
+
+Releases built on your own computer (`node scripts/release-build.mjs windows`)
+update installed copies the same way once the feed is published. Set the same
+values in the shell first (PowerShell; the private key file stays where it is):
+
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -Raw "$HOME\.tauri\piui-updater.key"
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<the key's password>"
+$env:PIUI_UPDATER_PUBKEY = (Get-Content -Raw "$HOME\.tauri\piui-updater.key.pub").Trim()
+node scripts/release-build.mjs windows
+node scripts/publish-update.mjs            # checks artifacts/, writes latest.json, prints the plan
+node scripts/publish-update.mjs --publish  # uploads vX.Y.Z and refreshes the updater release (gh)
+```
+
+Push the commit first: a new release is tagged at this checkout's commit, and
+re-publishing an existing version is refused unless its tag points at the same
+commit. The feed lists only the files that run uploads, after they are checked
+against `SHA256SUMS.txt`. A feed on the channel that also serves Linux or macOS
+is not replaced by a Windows-only one unless you pass `--drop-platforms`.
+
+The first build with the key is still installed by hand once; every build after
+it is offered in Settings → About.
 
 What users get: Settings → About shows the version, **Check for updates**,
 release notes and **Download and restart** behind a confirmation. **Check for
@@ -85,6 +110,20 @@ against the built-in public key before anything runs; Nano Desktop stops running
 and pipeline steps as it does on quit, installs and restarts.
 
 ### Windows code signing (Authenticode)
+
+SmartScreen's "Unknown publisher" goes away only with an Authenticode
+signature, and its warning fades as a signed publisher gains reputation. Since
+June 2023 a new certificate's private key must live on a hardware token or a
+cloud signing service, so a `.pfx` file is available only for older
+certificates. In practice:
+
+- **Azure Artifact Signing** (method B below): the cheapest, built for CI, but
+  open only to organizations and individuals in the countries Microsoft lists.
+- **An OV certificate on a USB token or in a cloud service that installs it
+  into the Windows certificate store** (for example Certum SimplySign): sign
+  local builds with `PIUI_WINDOWS_CERTIFICATE_THUMBPRINT=<SHA-1 thumbprint>`
+  while the token or the cloud client is connected; `release-build.mjs` passes
+  it to the bundler.
 
 Pick **one** method.
 
@@ -177,6 +216,13 @@ locked Pi dependencies with npm lifecycle scripts disabled. At first Nano
 launch, the host extracts the embedded package under the application data
 directory and verifies it against the embedded manifest. Nano sessions use
 that Node.js and Pi. The ordinary Pi harness still uses the user's installation.
+
+Local release commands check the declared versions before staging. Windows
+builds reuse the archive and file manifest from a completed staging run under
+`target/nano-runtime-win32-x64-<digest>/`. The key covers the staging script
+(including pinned binary hashes), package manifest, lockfile and npm package
+metadata. Each reuse checks both file digests. The release smoke tests still
+exercise the embedded runtime before Tauri builds the application.
 
 The same environment variables as in CI turn on signing locally:
 `TAURI_SIGNING_PRIVATE_KEY` (or `TAURI_SIGNING_PRIVATE_KEY_PATH`),

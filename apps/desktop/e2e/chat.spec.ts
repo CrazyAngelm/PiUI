@@ -70,6 +70,48 @@ test.describe('new chat', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'What should we work on?' })).toBeVisible();
   });
 
+  test('a Codex chat in use shows its transcript and resumes when the writer releases it', async ({ lab, page }) => {
+    await lab.open('demo');
+    await lab.openSettings();
+    await page.getByRole('group', { name: 'Language' }).getByRole('radio', { name: 'Русский' }).click();
+    // The first open gets the host's read-only fallback. Resume reaches the
+    // ordinary Lab host, modelling a writer that released its thread.
+    await page.evaluate(async (url) => {
+      const { workspaceHost }: typeof import('../src/host-api/workspaceClient') = await import(url);
+      const request = workspaceHost.request;
+      workspaceHost.request = async (command) => {
+        if (command.type !== 'openSession') return request(command);
+        workspaceHost.request = request;
+        const snapshot = await workspaceHost.snapshot(command.sessionId);
+        return { type: 'session', snapshot: {
+          ...snapshot, session: { ...snapshot.session, status: 'closed' },
+          blocks: [...snapshot.blocks, {
+            id: 'codex-warning', kind: 'custom', status: 'complete', label: 'Codex warning',
+            text: 'Native warning text', fallback: false,
+          }],
+          capabilities: { ...snapshot.capabilities, prompt: {
+            supported: false, reason: 'This chat is open in another Codex process.', enforcement: 'unsupported',
+          } },
+        } };
+      };
+    }, '/src/host-api/workspaceClient.ts');
+    await page.getByRole('navigation', { name: 'Навигация рабочей области' })
+      .getByRole('button', { name: /^Route host calls through one transport/ }).click();
+    const messages = page.getByRole('region', { name: 'Сообщения диалога' });
+    await messages.waitFor(); // First load of the lazy chat view in an isolated run.
+    await expect(messages).toContainText('Does anything still import Tauri directly');
+    const warning = messages.locator('details').filter({ has: page.getByText('Предупреждение Codex', { exact: true }) });
+    await warning.locator('summary').click();
+    await expect(warning).toContainText('Native warning text');
+    await expect(warning).not.toContainText('Режим совместимости');
+    await expect(page.getByText(/Этот чат открыт в другом процессе Codex/)).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Сообщение', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Возобновить', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('textbox', { name: 'Сообщение', exact: true })).toBeEnabled();
+    await expect(page.getByText(/Этот чат открыт в другом процессе Codex/)).toHaveCount(0);
+  });
+
   test('safe mode keeps history readable and refuses to start agents', async ({ lab, page }) => {
     // A page-local clipboard double preserves the user's real clipboard.
     await page.addInitScript(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
@@ -111,13 +153,17 @@ test.describe('chat header', () => {
     // "Install" makes the lab pause the turn on an approval, so the turn stays active.
     await startChat(lab, 'Install the lab dependencies and run the checks');
     await expect(page.getByRole('article', { name: 'Permission request' })).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole('textbox', { name: 'Message' })).toHaveAttribute('placeholder', 'Send to the agent now…');
-    await expect(page.getByRole('group', { name: 'Send mode' }).getByRole('radio', { name: 'Right away', exact: true })).toBeChecked();
-    await expect(page.getByRole('button', { name: 'Steer', exact: true })).toBeVisible();
-    // The composer owns it; the header does not repeat it.
+    const message = page.getByRole('textbox', { name: 'Message' });
+    await expect(message).toHaveAttribute('placeholder', 'Queue a follow-up…');
+    // Stop stands where Send is, until there is something to send.
     const stops = page.getByRole('button', { name: /^Stop/ });
     await expect(stops).toHaveCount(1);
     await expect(stops).toHaveAccessibleName(/^Stop turn/);
+    await expect(page.getByRole('button', { name: 'Add to queue', exact: true })).toHaveCount(0);
+    await message.fill('One more thing');
+    await expect(page.getByRole('button', { name: 'Add to queue', exact: true })).toBeVisible();
+    await expect(stops).toHaveCount(0);
+    await expect(page.getByRole('group', { name: 'Send mode' })).toHaveCount(0);
   });
 
   test('deleting a chat is offered in the chat menu, not in the details panel', async ({ lab, page }) => {
@@ -255,7 +301,7 @@ test.describe('MCP form requests', () => {
 });
 
 test.describe('queue and steer', () => {
-  test('a follow-up waits for the turn; steer joins it at once', async ({ lab, page }) => {
+  test('a message written during a turn waits in the queue; Send now steers it in', async ({ lab, page }) => {
     test.slow(); // Several native turns are simulated with real timers.
     await lab.open();
     // "Install" makes the lab pause the turn on an approval, so the turn stays
@@ -264,35 +310,39 @@ test.describe('queue and steer', () => {
     const card = page.getByRole('article', { name: 'Permission request' });
     await expect(card).toBeVisible({ timeout: 15_000 });
     const message = page.getByRole('textbox', { name: 'Message' });
-    const sendMode = page.getByRole('group', { name: 'Send mode' });
-    await expect(message).toHaveAttribute('placeholder', 'Send to the agent now…');
-    await expect(sendMode.getByRole('radio', { name: 'Right away', exact: true })).toBeChecked();
-    await expect(page.getByRole('button', { name: 'Steer', exact: true })).toBeVisible();
-    await sendMode.getByRole('radio', { name: 'After this turn', exact: true }).click();
     await expect(message).toHaveAttribute('placeholder', 'Queue a follow-up…');
 
     await message.fill('Also cover backpressure');
-    await page.getByRole('button', { name: 'Follow up', exact: true }).click();
+    await page.getByRole('button', { name: 'Add to queue', exact: true }).click();
     const queue = page.getByRole('region', { name: 'Message queue' });
-    await expect(queue.getByRole('article').filter({ hasText: 'Also cover backpressure' })).toContainText('Queued');
+    const later = queue.getByRole('article').filter({ hasText: 'Also cover backpressure' });
+    await expect(later).toBeVisible();
+    // A compact queue: no heading and no "Queued" label on a waiting message.
+    await expect(queue).not.toContainText('Queued');
 
-    await page.getByRole('group', { name: 'Send mode' }).getByRole('radio', { name: 'Right away' }).click();
-    await expect(message).toHaveAttribute('placeholder', 'Send to the agent now…');
     await message.fill('Keep the answer short');
-    await page.getByRole('button', { name: 'Steer', exact: true }).click();
-    // The agent waits on the approval and has not read the message yet: the chat shows it at once, marked.
+    await page.getByRole('button', { name: 'Add to queue', exact: true }).click();
+    const now = queue.getByRole('article').filter({ hasText: 'Keep the answer short' });
+    await expect(now).toBeVisible();
+    // "Edit" changes a waiting message in place.
+    await now.getByRole('button', { name: 'Edit', exact: true }).click();
+    await queue.getByRole('textbox', { name: 'Edit queued message' }).fill('Keep the answer very short');
+    await queue.getByRole('button', { name: 'Save', exact: true }).click();
+    const edited = queue.getByRole('article').filter({ hasText: 'Keep the answer very short' });
+    await expect(edited).toBeVisible();
+    // "Send now" steers it into the running turn. The agent waits on the approval and
+    // has not read it yet: the chat shows it at once, marked.
+    await edited.getByRole('button', { name: 'Send now', exact: true }).click();
     const unread = transcript.getByText('The agent reads this at its next step');
-    await expect(transcript.getByText('Keep the answer short', { exact: true })).toBeVisible();
+    await expect(transcript.getByText('Keep the answer very short', { exact: true })).toBeVisible();
     await expect(unread).toBeVisible();
-    await expect(queue.getByText('Keep the answer short')).toHaveCount(0);
-    await expect(queue.getByRole('article').filter({ hasText: 'Also cover backpressure' })).toContainText('Queued');
+    await expect(queue.getByText('Keep the answer very short')).toHaveCount(0);
+    await expect(later).toBeVisible();
 
     // Once the turn continues, the agent reads the message: it stays in the chat once, unmarked.
-    // Leave an explicit Follow up choice behind: the next turn must reset it.
-    await sendMode.getByRole('radio', { name: 'After this turn', exact: true }).click();
     await card.getByRole('button', { name: 'Allow once' }).click();
     await expect(unread).toHaveCount(0);
-    await expect(transcript.getByText('Keep the answer short', { exact: true })).toHaveCount(1);
+    await expect(transcript.getByText('Keep the answer very short', { exact: true })).toHaveCount(1);
     // When the turn ends, the queued follow-up is sent as its own turn.
     // (The lab's answer quotes the prompt, so the text appears twice.)
     await expect(transcript.getByText('Also cover backpressure', { exact: true }).first()).toBeVisible({ timeout: 45_000 });
@@ -301,9 +351,7 @@ test.describe('queue and steer', () => {
     await message.fill('Install the tools for the next turn');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(card).toBeVisible({ timeout: 15_000 });
-    await expect(sendMode.getByRole('radio', { name: 'Right away', exact: true })).toBeChecked();
-    await expect(message).toHaveAttribute('placeholder', 'Send to the agent now…');
-    await expect(page.getByRole('button', { name: 'Steer', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Stop turn', exact: true })).toBeVisible();
   });
 
   test('an uncertain delivery blocks the queue until it is checked', async ({ lab, page }) => {
@@ -315,6 +363,9 @@ test.describe('queue and steer', () => {
     // Nothing is resent automatically: the queue stays paused until the person checks history.
     await expect(queue.getByRole('button', { name: 'Resume queue' })).toBeDisabled();
     await queue.getByRole('button', { name: 'Dismiss after checking history' }).click();
+    // The pause outlives the last message, so a new message is never held without a way to resume.
+    await expect(queue).not.toContainText('Delivery uncertain');
+    await queue.getByRole('button', { name: 'Resume queue' }).click();
     await expect(queue).toBeHidden();
   });
 });

@@ -20,7 +20,7 @@ test.describe('Pi extension UI in a chat', () => {
   test('surfaces appear next to the message box and every dialog kind can be answered', async ({ lab, page }) => {
     test.slow(); // The lab replays the extension with real timers.
     const chat = await startDemo(lab);
-    // Plain info notices ("loaded", "saved") are quiet: only warnings and errors take space in the chat.
+    // Info and warning notices ("loaded", "saved", "declined") are service messages: only errors take space in the chat.
     const quiet = chat.getByRole('status').filter({ hasText: /Extension demo: notices|Preview build allowed|Target chosen|Preview named|Release note saved/ });
     await expect(quiet).toHaveCount(0);
     await expect(chat.getByRole('list', { name: 'Extension status' }).getByRole('listitem')).toHaveText(['Checks: running', 'Branch: feat/classic-port']);
@@ -55,23 +55,31 @@ test.describe('Pi extension UI in a chat', () => {
     await expect(chat.getByRole('textbox', { name: 'Message' })).toHaveValue('Summarize what the extension showed.', { timeout: 20_000 });
     await expect(chat.getByRole('region', { name: 'Conversation messages' })).toContainText('Done. The statuses and panels stay', { timeout: 20_000 });
     await expect(quiet).toHaveCount(0);
+
+    // An extension error is said plainly; its own words are behind Details, and the agent can be asked.
+    const error = chat.getByRole('alert').filter({ hasText: 'extension reported an error' });
+    await expect(error).toBeVisible();
+    await expect(chat.getByText('This extension UI request is not supported.')).toHaveCount(0);
+    await expect(chat.getByText('reset to pending')).toHaveCount(0);
+    await error.getByText('Details').click();
+    await expect(error).toContainText('Agent #2 [vk-link-format] error!');
+    await chat.getByRole('textbox', { name: 'Message' }).fill('');
+    await error.getByRole('button', { name: 'Ask the agent' }).click();
+    await expect(error).toHaveCount(0);
+    await expect(chat.getByRole('textbox', { name: 'Message' })).toHaveValue(/Agent #2 \[vk-link-format\] error!/);
   });
 
-  test('declined and dismissed dialogs are reported and the replay goes on', async ({ lab, page }) => {
+  test('declined and dismissed dialogs go on quietly; an error stays until it is dismissed', async ({ lab, page }) => {
     test.slow();
     const chat = await startDemo(lab);
     await card(page, 'Build a preview?').getByRole('button', { name: 'Deny' }).click();
-    await expect(chat.getByRole('status').filter({ hasText: 'Preview build declined.' })).toBeVisible();
     await card(page, 'Where should the preview go?').getByRole('button', { name: 'Dismiss' }).click();
-    await expect(chat.getByRole('status').filter({ hasText: 'No target chosen.' })).toBeVisible();
     await card(page, 'Name the preview').getByRole('button', { name: 'Dismiss' }).click();
-    await expect(chat.getByRole('status').filter({ hasText: 'No preview name given.' })).toBeVisible();
     await card(page, 'Edit the release note').getByRole('button', { name: 'Dismiss' }).click();
-    await expect(chat.getByRole('status').filter({ hasText: 'Release note skipped.' })).toBeVisible();
     await expect(chat.getByRole('list', { name: 'Extension status' })).toContainText('Checks: passed', { timeout: 20_000 });
+    await expect(chat.getByText(/Preview build declined|No target chosen|No preview name given|Release note skipped/)).toHaveCount(0);
 
-    // A warning notice stays in the chat until it is dismissed.
-    const notice = chat.getByRole('status').filter({ hasText: 'Release note skipped.' });
+    const notice = chat.getByRole('alert').filter({ hasText: 'extension reported an error' });
     await notice.getByRole('button', { name: 'Dismiss notice' }).click();
     await expect(notice).toHaveCount(0);
   });

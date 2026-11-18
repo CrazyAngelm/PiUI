@@ -26,6 +26,10 @@
   import PluginComposerActions from '../plugins/PluginComposerActions.svelte';
   import { extensionSurfaces } from '../chat/extensions/extensionSurfaces.svelte';
   import Transcript from '../chat/transcript/Transcript.svelte';
+  import { openLinkInHost } from '../chat/openChatLink';
+  import { ChatFilesStore } from '../chat/files/chatFiles.svelte';
+  import { createChatFilePlacer } from '../chat/files/placeChatFiles';
+  import { errorMessage } from '../workspaceStore.svelte';
   import { sessionActivity } from '../chat/activity/sessionActivity';
   import SearchIcon from '@lucide/svelte/icons/search';
   import GitCompare from '@lucide/svelte/icons/git-compare';
@@ -53,6 +57,7 @@
   import { fusionMembership } from '../fusion/fusionMembership.svelte';
   import NanoPetStatus from '../nano/NanoPetStatus.svelte';
   import { remoteMode } from '../nano/remoteMode';
+  import type { InteractiveAppTarget, InteractiveReplyBlock } from '../interactive/decorate';
   import Mark from '../marks/Mark.svelte';
   import { marks } from '../marks/marks.svelte';
 
@@ -96,8 +101,36 @@
     const active = turnActive;
     untrack(() => steerEchoes.settle(sessionId, current.blocks, active));
   });
-  const workspace = $derived(store.catalog.workspaces.find((item) => item.id === session?.workspaceId));
+  // Files the agent wrote, read or returned (ADR-074). A remote browser and safe mode have none: the host refuses both.
+  const chatFiles = remoteMode ? undefined : new ChatFilesStore();
+  $effect(() => {
+    const id = sessionId;
+    chatFiles?.bind(store.safeMode ? '' : id);
+  });
+  $effect(() => {
+    const blocks = snapshot?.blocks;
+    void blocks?.length;
+    void blocks?.[blocks.length - 1]?.status;
+    void snapshot?.session.status;
+    untrack(() => chatFiles?.scheduleRefresh());
+  });
+  onDestroy(() => chatFiles?.dispose());
   const running = $derived(session ? ['starting', 'running', 'stopping'].includes(session.status) : false);
+  // Recomputed only when the turns, a block's status, the registry or the language change, not on every streamed token.
+  const placeFiles = createChatFilePlacer();
+  const fileCards = $derived(chatFiles ? placeFiles(shownBlocks, chatFiles.files, $t, running) : []);
+  async function fileAction(action: 'open' | 'reveal' | 'save', id: string): Promise<void> {
+    if (!chatFiles) return;
+    try {
+      if (action === 'save') {
+        if (await chatFiles.save(id)) toasts.success($t('File saved'));
+      } else if (action === 'reveal') await chatFiles.reveal(id);
+      else await chatFiles.open(id);
+    } catch (error) {
+      toasts.error($t(errorMessage(error)));
+    }
+  }
+  const workspace = $derived(store.catalog.workspaces.find((item) => item.id === session?.workspaceId));
   // Project chats (not pipeline members) can have an active board card (ADR-041).
   // A remote browser has no board: the card chip and activity stay out of its chats.
   const boardProject = $derived(!remoteMode && workspace !== undefined && !workspace.personal && !workspace.missing && !session?.runId ? workspace.id : undefined);
@@ -203,6 +236,25 @@
     } catch {
       return false;
     }
+  }
+
+  // Why an answer's Send button is off, read live by the widgets; mirrors `composerShown` and `reply` above.
+  const replyBlock = $derived<InteractiveReplyBlock | undefined>(
+    store.safeMode ? 'safe-mode'
+    : session?.status === 'closed' ? 'closed'
+    : isSidekick || session?.runId ? 'read-only'
+    : snapshot !== undefined && !snapshot.capabilities.prompt.supported ? 'no-prompt'
+    : running ? 'busy'
+    : undefined,
+  );
+  // The closed list of application actions an answer's button may request. A remote browser has none.
+  async function appAction(target: InteractiveAppTarget): Promise<boolean> {
+    if (remoteMode) return false;
+    if (target === 'open_settings') store.navigate({ name: 'settings', section: 'general' });
+    else if (target === 'open_schedule') store.navigate({ name: 'pipelines', section: 'schedules' });
+    else if (target === 'open_agents') store.navigate({ name: 'pipelines', section: 'agents' });
+    else store.goHome(session?.workspaceId);
+    return true;
   }
 
   // Message controls: copy everywhere; edit and branch where this chat can start another one.
@@ -382,12 +434,22 @@
             blocks={shownBlocks}
             interactive={!store.safeMode}
             onReply={reply}
+            {replyBlock}
+            onApp={remoteMode ? undefined : appAction}
+            onOpenLink={remoteMode ? undefined : openLinkInHost}
             {messageControls}
             onMessageAction={messageAction}
+            attachments={fileCards}
+            resolveAttachment={chatFiles?.resolve}
+            mediaGate={chatFiles?.gate}
+            onOpenAttachment={chatFiles ? (id) => fileAction('open', id) : undefined}
+            onDownloadAttachment={chatFiles ? (id) => fileAction('save', id) : undefined}
+            onRevealAttachment={chatFiles ? (id) => fileAction('reveal', id) : undefined}
             loading={loadingNow}
             sessionKey={snapshot.session.id}
             historySessionId={snapshot.session.id}
             agentLabel={harnessMeta(snapshot.session.harness).label}
+            answerHarness={snapshot.session.harness}
             {running}
             bind:searchOpen
             inserts={runInserts}
@@ -409,7 +471,13 @@
             {#if boardProject}
               <ChatBoardActivity workspaceId={boardProject} sessionId={snapshot.session.id} blocks={snapshot.blocks} />
             {/if}
-            <ExtensionSurface sessionId={snapshot.session.id} status={snapshot.session.status} placement="above" agentLabel={harnessMeta(snapshot.session.harness).label} />
+            <ExtensionSurface
+              sessionId={snapshot.session.id}
+              status={snapshot.session.status}
+              placement="above"
+              agentLabel={harnessMeta(snapshot.session.harness).label}
+              canMessage={!store.safeMode && fusion?.role !== 'sidekick' && snapshot.session.status !== 'closed' && !session.runId && snapshot.capabilities.prompt.supported}
+            />
             {#if store.safeMode}
               <p class="notice">{$t('Runtime actions are disabled in safe mode. Your draft is preserved.')}</p>
             {:else if fusion?.role === 'sidekick'}
@@ -425,8 +493,12 @@
               <p class="notice">{$t("This chat's worktree was removed. Its history stays readable; start a new chat to keep working.")}</p>
             {:else if snapshot.session.status === 'closed'}
               <p class="notice">
-                {$t('The agent process is stopped. The transcript stays readable.')}
-                <Button size="sm" variant="ghost" onclick={() => void store.openSession(session.id)}>{$t('Resume')}</Button>
+                {#if !snapshot.capabilities.prompt.supported && snapshot.capabilities.prompt.reason === 'This chat is open in another Codex process.'}
+                  {$t('Another Codex process is using this chat. You can read its history here. Resume after the other process releases it.')}
+                {:else}
+                  {$t('The agent process is stopped. The transcript stays readable.')}
+                {/if}
+                <Button size="sm" variant="ghost" disabled={loadingNow} onclick={() => void (active ? store.openSession(session.id) : store.showSession(session.id))}>{$t('Resume')}</Button>
               </p>
             {:else if session.runId}
               <!-- Run members follow their run's saved settings (ADR-044). -->

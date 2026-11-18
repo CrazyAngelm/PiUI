@@ -2,8 +2,8 @@ import { liveLabel } from './catalogFake';
 import type { LabEventBus } from './labBus';
 import type { LabClock } from './labClock';
 import {
-  COMPOSER_EVENT_CHANNEL, WORKSPACE_EVENT_CHANNEL, WORKSPACE_EXTENSION_UI_EVENT,
-  type ApprovalDecision, type DesktopTimelineBlock, type SessionStatus, type WorkspaceEvent, type WorkspaceEventPayload,
+  CHAT_FILES_EVENT, COMPOSER_EVENT_CHANNEL, WORKSPACE_EVENT_CHANNEL, WORKSPACE_EXTENSION_UI_EVENT,
+  type ApprovalDecision, type ChatFilesChangedEventV1, type DesktopTimelineBlock, type SessionStatus, type WorkspaceEvent, type WorkspaceEventPayload,
   type WorkspaceExtensionUiAction, type WorkspaceExtensionUiEventV1,
 } from './labContracts';
 import { NativeRejection } from './labErrors';
@@ -65,6 +65,12 @@ export class LabSessions {
   publishSurface(record: LabSessionRecord, action: WorkspaceExtensionUiAction): void {
     const event: WorkspaceExtensionUiEventV1 = { protocol: 1, sessionId: record.id, action };
     this.bus.emit(WORKSPACE_EXTENSION_UI_EVENT, event);
+  }
+
+  /** The host's "files changed" event (ADR-074): presentation only, no revision. */
+  publishChatFilesChanged(record: LabSessionRecord): void {
+    const event: ChatFilesChangedEventV1 = { protocol: 1, type: 'changed', sessionId: record.id };
+    this.bus.emit(CHAT_FILES_EVENT, event);
   }
 
   publishSession(record: LabSessionRecord): void {

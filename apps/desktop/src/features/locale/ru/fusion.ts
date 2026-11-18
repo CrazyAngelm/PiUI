@@ -40,13 +40,50 @@ export const fusionRu: Readonly<Record<string, string>> = {
   'The sidekick would be allowed more than the lead.': 'Напарнику разрешено больше, чем ведущему.',
   'Lower the sidekick permissions or raise the lead permissions.': 'Снизьте права напарника или повысьте права ведущего.',
   'This sidekick can only run with full access.': 'Этот напарник работает только с полным доступом.',
-  'Claude Code cannot answer its own command approvals in Edit project mode, and Pi has no edit-only mode. Use Full access (or Native with a Claude Code lead), or choose another sidekick.':
-    'Claude Code в режиме «Правка проекта» не может отвечать на запросы одобрения команд, а у Pi нет режима только правки. Выберите «Полный доступ» (или «Нативный» при ведущем Claude Code) либо другого напарника.',
   'The Codex sandbox could not be verified on this computer.': 'Не удалось проверить песочницу Codex на этом компьютере.',
   'Choose another harness for this role, or use Full access if you accept that.':
     'Выберите для этой роли другого агента или «Полный доступ», если вы с этим согласны.',
   'A read-only lead cannot review or take over the sidekick work.': 'Ведущий только для чтения не может проверять работу напарника или забирать её себе.',
   'Give the lead at least the Edit project permission.': 'Дайте ведущему хотя бы право «Правка проекта».',
+  'Every mode of this sidekick could change files the lead cannot.': 'В любом режиме напарник может менять файлы, которые ведущему недоступны.',
+  'Every mode of this sidekick runs commands the lead cannot.': 'В любом режиме напарник запускает команды, которые ведущему недоступны.',
+  'Every mode of this sidekick uses the network, which the lead cannot.': 'В любом режиме напарник выходит в сеть, а ведущий не может.',
+  'Every mode of this sidekick keeps MCP servers the lead cannot use.': 'В любом режиме у напарника остаются MCP-серверы, недоступные ведущему.',
+  'Raise the lead permissions or choose another sidekick.': 'Повысьте права ведущего или выберите другого напарника.',
+  'Pi runs only with full access, and Nano has no edit-only mode. Use Full access or Read only, or choose another sidekick.':
+    'Pi работает только с полным доступом, а у Nano нет режима только правки. Выберите «Полный доступ» или «Только чтение» либо другого напарника.',
+  'Sidekick allowance': 'Права напарника',
+  'The sidekick is waiting for your approval in its conversation.': 'Напарник ждёт вашего одобрения в своём разговоре.',
+  'Open the sidekick conversation': 'Открыть разговор напарника',
+  'lowered to fit the lead': 'снижено под права ведущего',
+  'your own settings for this harness': 'ваши собственные настройки этого агента',
+  'full access to this computer': 'полный доступ к компьютеру',
+  'no edits': 'без правок',
+  'edits in the project': 'правки в проекте',
+  'edits you approve': 'правки с вашего одобрения',
+  'edits anywhere': 'правки где угодно',
+  'no commands': 'без команд',
+  'commands in a read-only sandbox': 'команды в песочнице только для чтения',
+  'commands in a project sandbox': 'команды в песочнице проекта',
+  'commands you approve': 'команды с вашего одобрения',
+  'any command': 'любые команды',
+  'reads the project only': 'читает только проект',
+  'reads outside the project': 'читает и вне проекта',
+  'network you approve': 'сеть с вашего одобрения',
+  network: 'сеть',
+  'its MCP servers': 'свои MCP-серверы',
+  'The pair is stopped: no brief starts and no report reaches the lead until you resume it or write in the lead chat.':
+    'Пара остановлена: новые поручения не запускаются и отчёты не доходят до ведущего, пока вы её не возобновите или не напишете в чат ведущего.',
+  'Resume pair': 'Возобновить пару',
+  'Correct the running round': 'Поправить текущий раунд',
+  'Send to sidekick': 'Отправить напарнику',
+  'The report may or may not have reached the lead. Check the lead chat for it, deliver it again, or dismiss it.':
+    'Неизвестно, дошёл ли отчёт до ведущего. Найдите его в чате ведущего, доставьте ещё раз или отклоните.',
+  'Check lead chat': 'Проверить чат ведущего',
+  'Deliver again': 'Доставить ещё раз',
+  'Dismiss': 'Отклонить',
+  'report needs checking': 'нужно проверить отчёт',
+  'pair stopped': 'пара остановлена',
 
   // Errors
   'Safe mode is on, so Fusion cannot change anything. Restart Nano Desktop without safe mode.':
@@ -135,6 +172,31 @@ export const fusionRu: Readonly<Record<string, string>> = {
   'Open the sidekick conversation ({0})': 'Открыть беседу напарника ({0})',
   'The sidekick conversation is read-only: the lead gives it work through briefs.':
     'Беседа напарника доступна только для чтения: ведущий даёт ему работу через поручения.',
+
+  // Sidekick settings
+  'Detach sidekick': 'Отключить напарника',
+  'Stop the running round or detach the idle sidekick. Stop pair also stops the lead. Reset retires the sidekick conversation.':
+    'Остановите текущий раунд или отключите свободного напарника. Остановка пары также останавливает ведущего. Сброс закрывает беседу напарника.',
+  'Sidekick settings': 'Настройки напарника',
+  'Change sidekick model': 'Сменить модель напарника',
+  'Replace sidekick': 'Сменить напарника',
+  'Start fresh sidekick': 'Запустить нового напарника',
+  'Apply model settings': 'Применить настройки модели',
+  'This starts a fresh sidekick conversation with no earlier context. The old conversation stays readable.':
+    'Откроется новая беседа напарника без прежнего контекста. Старую беседу можно будет читать.',
+  'Finish or stop the open sidekick round first.': 'Сначала завершите или остановите текущий раунд напарника.',
+  'Reconcile or abandon the uncertain sidekick round first.': 'Сначала сверьте или закройте раунд с неизвестным результатом.',
+  'Deliver the pending sidekick report first.': 'Сначала доставьте ожидающий отчёт напарника.',
+  'Check, redeliver or dismiss the uncertain sidekick report first.': 'Сначала проверьте, отправьте повторно или отклоните отчёт с неизвестным статусом доставки.',
+  'Stop the pair or detach the current sidekick before replacing it.': 'Перед заменой остановите пару или отключите текущего напарника.',
+  'Wait for the current sidekick operation to finish.': 'Дождитесь завершения текущей операции с напарником.',
+  'This change needs a fresh sidekick conversation. Review and confirm again.': 'Для изменения нужна новая беседа напарника. Проверьте выбор и подтвердите его ещё раз.',
+  'This model is missing from the current catalog. Choose another model.': 'Этой модели нет в текущем каталоге. Выберите другую модель.',
+  'Choose a reasoning level offered by this model.': 'Выберите уровень рассуждения, доступный для этой модели.',
+  "This sidekick does not fit the lead's permissions.": 'Права этого напарника выходят за пределы прав ведущего.',
+  'The new sidekick could not start. Check the harness and try again.': 'Новый напарник не запустился. Проверьте среду агента и повторите попытку.',
+  'The harness could not apply the sidekick settings.': 'Среда агента не смогла применить настройки напарника.',
+  'Trust this project before changing the sidekick.': 'Подтвердите доверие к проекту перед изменением напарника.',
 
   // Confirmations
   'Abandon this round?': 'Отказаться от этого раунда?',

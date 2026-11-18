@@ -160,3 +160,86 @@ Codex отдал в одном ходе две накопительные кви
 - Кэш Codex после пауз длиннее 2 минут; TTL Claude ровно 1 час.
 - Повтор MCP-вызова Claude Code с тем же `toolUseId` (по строкам бинарника, не вживую).
 - Поведение под Linux.
+
+## S12. Codex: режим «чтение только проекта» для напарника (ADR-076, 2026-11-18)
+
+Реальный CLI без вызова модели: `codex-cli 0.169.0`, Windows 11, в
+`~/.codex/config.toml` стоит `[windows] sandbox = "unelevated"`. Временный проект
+`scratchpad\sbx\project\inside.txt` и файл вне проекта `scratchpad\sbx\outside\outside.txt`
+(удалены после проверки). Форма профиля взята из `PermissionProfileToml`
+(`description`, `extends`, `workspace_roots`, `filesystem`, `network`) и схемы
+app-server (`FileSystemSpecialPath`: `root`, `minimal`, `project_roots{subpath}`, ...).
+Команды запускались из папки проекта:
+
+```
+codex sandbox -c 'permissions.A.filesystem={":root"="read",":project_roots"={"."="write"}}' -P A -- cmd /c type <файл>
+codex sandbox -c 'permissions.B.filesystem={":minimal"="read",":project_roots"={"."="read"}}' -P B -- cmd /c type <файл>
+codex sandbox -c 'permissions.C.filesystem={":root"="read",":project_roots"={"."="write"},"<абс. путь outside>"="deny"}' -P C -- cmd /c type <файл>
+```
+
+| Профиль | inside.txt | outside.txt |
+|---|---|---|
+| A (чтение всего диска, контроль формы) | exit 0, `inside-ok` | exit 0, `outside-secret` |
+| B (minimal + проект на чтение) | exit 1: `Restricted read-only access requires the elevated Windows sandbox backend` | то же |
+| C (весь диск + `deny` на папку вне проекта) | то же | то же |
+
+Вывод: профиль разбирается и применяется, но на «unelevated»-песочнице Codex
+отказывается запускать любую команду с ограничением чтения (отказ закрытый, а не
+тихое чтение). Ограничение чтения на Windows требует elevated-бэкенда песочницы
+(машинные учётные записи и правила, ставятся с правами администратора). Он не
+включался и не проверялся: это решение владельца. Поэтому режим «чтение только
+проекта» для Codex-напарника не добавлен, а пара «Claude-ведущий read-only /
+workspace-write + Codex-напарник» по-прежнему отказывается с измерением `reads`.
+
+Codex 0.169.0, функции: `multi_agent` теперь `deprecated` (по-прежнему
+отключается), `multi_agent_v2` `stable`; с `--disable multi_agent --disable
+multi_agent_v2` оба читаются `false`. `--disable unified_exec` и
+`-c features.unified_exec=false` оставляют `unified_exec` `true` (модельный каталог
+задаёт `shell_type = "unified_exec"`), поэтому фоновые терминалы на 0.169.0 не
+отключаются доказуемо; мост это допускает, а инструкция напарника требует
+завершить или остановить их до конца хода.
+
+Решение владельца (2026-11-18): «Разрешить чтение вне проекта». Измерение `reads`
+больше не участвует в допуске (ADR-076); Codex-напарник в read-only /
+workspace-write запускается с отключёнными MCP-серверами пользователя.
+
+
+## S13. Codex 0.169.0: workspace-write при открытии треда Fusion
+
+Проверен установленный `codex-cli 0.169.0` на Windows. Рабочий каталог — пустой
+`%TEMP%/piui-fusion-*/project`. Использовался отдельный `CODEX_HOME` с
+`[windows] sandbox = "unelevated"`: доступ к обычному каталогу Codex из
+проверочной среды был запрещён. Временный профиль не содержал учётных данных
+или MCP-серверов. Команды запуска:
+
+```powershell
+codex --version
+codex features list
+codex --disable multi_agent --disable multi_agent_v2 features list
+codex app-server --stdio -c analytics.enabled=false --disable apps --disable plugins --disable remote_plugin --disable recommended_plugins --disable shell_snapshot --disable multi_agent --disable multi_agent_v2 --disable unified_exec
+```
+
+Оба переключателя subagents в листинге дали `false`. В app-server через stdio
+отправлены `initialize` (`clientInfo` — `piui` / `PiUI` / `0.3.2`,
+`experimentalApi: true`, `requestAttestation: false`), `initialized`,
+`config/read` с `includeLayers: false` и путём проекта, затем `thread/start`.
+Запрос запуска, кроме `ephemeral: true`, совпадает с мостом: `cwd` берётся из
+рабочего каталога процесса, `developerInstructions` — инструкции напарника,
+`approvalPolicy: "never"`, `features.multi_agent: false`,
+`features.multi_agent_v2: false`. В `config` переданы
+`sandbox_workspace_write.writable_roots: []`,
+`sandbox_workspace_write.network_access: false`,
+`sandbox_workspace_write.exclude_tmpdir_env_var: true` и
+`sandbox_workspace_write.exclude_slash_tmp: true`.
+
+| Поле запроса | `activePermissionProfile` в ответе | `sandbox.type` | `writableRoots` | `networkAccess` | `excludeTmpdirEnvVar` | `excludeSlashTmp` |
+|---|---|---|---|---|---|---|
+| `permissions: ":workspace"` | `{"id":":workspace","extends":null}` | `workspaceWrite` | `[]` | `false` | `false` | `false` |
+| `sandbox: "workspace-write"` | `null` | `workspaceWrite` | `[]` | `false` | `true` | `true` |
+
+В обоих ответах `cwd` совпал с временным проектом, `approvalPolicy` =
+`never`. Мост использует вторую строку и сверяет её ограничения перед
+допуском. В таком треде `thread/settings/update` с текущей моделью,
+`serviceTier: "default"` и `effort: "low"` вернул успешный ответ.
+`turn/start` не отправлялся, команды в песочнице не выполнялись. App-server
+завершился с кодом 0 после закрытия stdin.

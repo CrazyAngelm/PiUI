@@ -1,6 +1,8 @@
 // Ported from Nano Web wwwroot/js/hermes-intelligent-ui.js.
 // Agent JSON is untrusted: text nodes and allowlisted attributes only, with
-// the source interpreter and limits. No networking, navigation, or executable markup.
+// the source interpreter and limits. No networking, no embedded pages, no executable markup.
+// Media comes only from the host: a "file" name is resolved to a blob: URL by host.resolveFile;
+// remote addresses are never loaded, and links open through host.openLink or are copied.
 // Per-message scopes own state, streaming adoption, observers, and cleanup.
 export const intelligentUiLanguage = "hermes-ui";
 export const intelligentUiCodeSelector = `.message-markdown pre > code.language-${intelligentUiLanguage}`;
@@ -10,6 +12,7 @@ export function setIntelligentUiLocale(locale) {
 }
 const label = (host, key, args) => host?.label?.(key, args)
     ?? key.replace(/\{(\d+)\}/g, (_, i) => args?.[Number(i)] ?? "");
+/** Custom HTML and canvas stay out of this app (ADR-077): a note names it instead of running it. */
 function renderUnsupportedNode(runtime, node) {
     const name = [node.title, node.caption, node.alt, node.file, node.src, node.type]
         .find(value => typeof value === "string" && value.trim());
@@ -30,6 +33,18 @@ export function createIntelligentUiScope() {
     const scope = newScope();
     return {
         enhance: (root, host) => enhanceIntelligentUi(root, host, scope),
+        /** Re-evaluates every bound value: the host's own state (for example whether a reply can be sent) changed. */
+        refresh() {
+            for (const mounted of scope.liveBlocks) {
+                mounted.runtime?.flush();
+            }
+        },
+        /** Marks every mounted interface for a rebuild on the next enhance (the language changed). State is kept. */
+        rebuild() {
+            for (const mounted of scope.liveBlocks) {
+                mounted.stale = true;
+            }
+        },
         dispose() {
             scope.disposed = true;
             for (const block of scope.liveBlocks)
@@ -50,7 +65,7 @@ export function enhanceIntelligentUi(root, host, scope = legacyScope) {
         const pre = code.parentElement;
         const source = code.textContent ?? "";
         const current = hosts.get(pre);
-        if (current && current.source === source) {
+        if (current && current.source === source && !current.stale) {
             continue;
         }
         const slot = blockSlot(pre, code);
@@ -104,7 +119,7 @@ function mountBlock(pre, source, host, slot, previous, scope) {
     const { liveBlocks } = scope;
     pre.classList.add("hui-host");
     pre.dataset.codeBlock = "1";
-    if (previous && previous.source === source) {
+    if (previous && previous.source === source && !previous.stale) {
         attachContainer(previous, pre, slot);
         return previous;
     }
@@ -123,7 +138,7 @@ function mountBlock(pre, source, host, slot, previous, scope) {
             }
         });
     }
-    const mounted = { source, pre, slot, container, scope, host, raw: false, detachedAt: null, dispose: () => { } };
+    const mounted = { source, pre, slot, container, scope, host, runtime: null, stale: false, raw: false, detachedAt: null, dispose: () => { } };
     liveBlocks.add(mounted);
     attachContainer(mounted, pre, slot);
     if (source.length > maxSourceLength) {
@@ -150,6 +165,7 @@ function mountBlock(pre, source, host, slot, previous, scope) {
     const stale = Array.from(container.children).filter(child => !child.classList.contains("hui__progress"));
     const key = hashString(parsed.closed ? source : `stream:${spec.title ?? ""}`);
     const runtime = createRuntime(spec, key, host?.forSource?.(source, () => mounted.pre) ?? host, container, scope);
+    mounted.runtime = runtime;
     renderRoot(runtime, spec, parsed.closed);
     stale.forEach(child => child.remove());
     mounted.dispose = () => runtime.dispose();
@@ -606,6 +622,7 @@ function createScope(state, computed, extra, memo) {
     return scope;
 }
 const maxTextLength = 20000;
+const maxFormulaLength = 2000;
 function limitText(text) {
     return text.length > maxTextLength ? text.slice(0, maxTextLength) : text;
 }
@@ -1296,6 +1313,10 @@ function renderNode(runtime, node, scope, depth) {
     if (!renderer) {
         return null;
     }
+    // A half-streamed media node would print "=item.title" or a cut-off name: wait until its object closed.
+    if (!runtime.complete && node[closedMark] !== true && waitsForClose.has(renderer)) {
+        return null;
+    }
     let element;
     try {
         element = renderer(runtime, node, scope, depth);
@@ -1318,11 +1339,11 @@ function bindText(runtime, element, value, scope, format) {
     if (typeof value === "string" && (value.startsWith("=") || value.includes("{{"))) {
         runtime.effect(() => {
             const resolved = resolveValue(value, scope);
-            setRichText(element, format ? formatValue(resolved, format) : stringOf(resolved));
+            setRichText(element, format ? formatValue(resolved, format) : stringOf(resolved), runtime.host);
         });
         return;
     }
-    setRichText(element, format ? formatValue(value, format) : stringOf(value));
+    setRichText(element, format ? formatValue(value, format) : stringOf(value), runtime.host);
 }
 function stringOf(value) {
     if (value === undefined || value === null) {
@@ -1333,7 +1354,7 @@ function stringOf(value) {
     }
     return typeof value === "string" ? value : String(value);
 }
-function setRichText(element, text) {
+function setRichText(element, text, host) {
     element.replaceChildren();
     const pattern = /\*\*([^*]+)\*\*|\*([^*\s][^*]*)\*|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\)/g;
     let last = 0;
@@ -1351,15 +1372,70 @@ function setRichText(element, text) {
             element.append(el("code", null, match[3]));
         }
         else {
-            const link = el("span", "hui-link", match[4]);
-            link.title = match[5] ?? "";
-            element.append(link);
+            const href = safeUrl(match[5]);
+            element.append(href ? linkButton(host, href, match[4]) : match[4]);
         }
         last = match.index + match[0].length;
     }
     if (last < text.length) {
         element.append(text.slice(last));
     }
+}
+/** Only absolute https addresses are links: no relative paths, data, javascript, mailto, or plain http. */
+function safeUrl(value) {
+    if (typeof value !== "string") {
+        return null;
+    }
+    const text = value.trim();
+    if (text.length === 0 || text.length > 2048) {
+        return null;
+    }
+    try {
+        const parsed = new URL(text);
+        return parsed.protocol === "https:" && parsed.hostname !== "" ? parsed.href : null;
+    }
+    catch {
+        return null;
+    }
+}
+/** A link is a button: the app never navigates the page, the host opens it (or the address is copied). */
+function linkButton(host, href, text) {
+    const link = el("button", "hui-link", text);
+    link.type = "button";
+    link.setAttribute("role", "link");
+    link.title = href;
+    link.addEventListener("click", event => {
+        event.stopPropagation();
+        void openAddress(host, href);
+    });
+    return link;
+}
+async function openAddress(host, href) {
+    if (typeof host?.openLink === "function") {
+        let opened = false;
+        try {
+            opened = (await host.openLink(href)) === true;
+        }
+        catch {
+            opened = false;
+        }
+        if (!opened) {
+            host.notify?.(label(host, "Could not open the link."));
+        }
+        return;
+    }
+    await copyAddress(host, href);
+}
+/** Without a host that opens links, activating one copies its address and says so. */
+async function copyAddress(host, href) {
+    let copied = false;
+    try {
+        copied = (await host?.copy?.(href)) === true;
+    }
+    catch {
+        copied = false;
+    }
+    host?.notify?.(label(host, copied ? "Link copied" : "Could not copy the link"));
 }
 const tones = new Set(["info", "success", "warning", "danger", "neutral", "accent"]);
 const toneOf = (value, fallback = "neutral") => (tones.has(value) ? value : fallback);
@@ -1516,7 +1592,7 @@ const renderers = {
             list.replaceChildren();
             for (const item of Array.isArray(items) ? items.slice(0, 200) : []) {
                 const entry = el("li", null);
-                setRichText(entry, stringOf(typeof item === "object" && item ? item.text ?? item.label ?? "" : item));
+                setRichText(entry, stringOf(typeof item === "object" && item ? item.text ?? item.label ?? "" : item), runtime.host);
                 list.append(entry);
             }
         });
@@ -1600,20 +1676,88 @@ const renderers = {
         }
         return list;
     },
-    formula(runtime, node) {
-        const formula = el("div", "hui-formula", typeof node.tex === "string" ? node.tex : "");
-        if (typeof node.tex === "string" && runtime.host?.renderFormula) {
-            runtime.host.renderFormula(formula, node.tex, node.inline !== true);
-        }
+    formula(runtime, node, scope) {
+        const formula = el("div", "hui-formula");
+        const display = node.inline !== true;
+        let shown = null;
+        // The TeX source stays readable until the host's typesetter (loaded on demand) replaces it.
+        runtime.effect(() => {
+            // TeX is literal ("{{" is a TeX group, not a template); only a leading "=" makes it an expression.
+            const raw = typeof node.tex === "string" && node.tex.startsWith("=") ? resolveValue(node.tex, scope) : node.tex;
+            const tex = stringOf(raw ?? "").slice(0, maxFormulaLength);
+            if (tex === shown) {
+                return;
+            }
+            shown = tex;
+            formula.textContent = tex;
+            if (tex.trim() && typeof runtime.host?.renderFormula === "function") {
+                runtime.host.renderFormula(formula, tex, display);
+            }
+        });
         return formula;
     },
-    image: renderUnsupportedNode,
-    gallery: renderUnsupportedNode,
-    video: renderUnsupportedNode,
-    audio: renderUnsupportedNode,
+    image(runtime, node, scope, depth) {
+        if (node.file === undefined && node.src === undefined) {
+            return null;
+        }
+        const figure = el("figure", "hui-image");
+        const image = el("img", null);
+        image.alt = typeof node.alt === "string" ? node.alt : "";
+        image.loading = Array.isArray(node.overlay) || node.selection ? "eager" : "lazy";
+        image.decoding = "async";
+        image.referrerPolicy = "no-referrer";
+        figure.append(mountStage(runtime, node, scope, depth ?? 0, image));
+        const source = bindMediaSource(runtime, node, scope, figure, url => setMediaSource(image, url), node.alt ?? node.caption ?? node.title);
+        image.addEventListener("error", () => {
+            if (image.getAttribute("src")) {
+                source.broken();
+            }
+        });
+        image.addEventListener("load", () => source.ok());
+        appendCaption(runtime, figure, node, scope);
+        return figure;
+    },
+    gallery(runtime, node, scope) {
+        const items = Array.isArray(node.items) ? node.items.slice(0, 48) : [];
+        const gallery = el("div", "hui-gallery");
+        gallery.style.setProperty("--hui-gallery-columns", String(clampInteger(node.columns, 2, 1, 4)));
+        for (const item of items) {
+            const entry = typeof item === "string" ? (safeUrl(item) ? { src: item } : { file: item }) : item;
+            if (!entry || typeof entry !== "object") {
+                continue;
+            }
+            if (!runtime.countNode()) {
+                break;
+            }
+            const figure = renderers.image(runtime, entry, scope);
+            if (figure) {
+                gallery.append(figure);
+            }
+        }
+        return gallery.childElementCount > 0 ? gallery : null;
+    },
+    video(runtime, node, scope, depth) {
+        return renderPlayer(runtime, node, scope, "video", depth);
+    },
+    audio(runtime, node, scope, depth) {
+        return renderPlayer(runtime, node, scope, "audio", depth);
+    },
     link(runtime, node, scope) {
-        const link = el("span", "hui-link");
-        runtime.effect(() => { link.title = stringOf(resolveValue(node.href ?? "", scope)); });
+        const link = el("button", "hui-link");
+        link.type = "button";
+        link.setAttribute("role", "link");
+        runtime.effect(() => {
+            const href = safeUrl(stringOf(resolveValue(node.href ?? "", scope)));
+            link.title = href ?? "";
+            link.disabled = href === null;
+            link.classList.toggle("hui-link--inert", href === null);
+        });
+        link.addEventListener("click", () => {
+            const href = safeUrl(stringOf(resolveValue(node.href ?? "", scope)));
+            if (href) {
+                void openAddress(runtime.host, href);
+            }
+        });
         bindText(runtime, link, node.text ?? node.href ?? "", scope);
         return link;
     },
@@ -1677,11 +1821,12 @@ const renderers = {
         wrapper.append(row);
         return wrapper;
     },
-    html: renderUnsupportedNode
+    html: renderCustomHtml,
+    region: renderRegion
 };
 renderers.each = renderEach;
 renderers.repeat = renderEach;
-renderers.region = renderUnsupportedNode;
+renderers.canvas = renderers.html;
 renderers.range = renderRange;
 renderers.stack = renderers.column;
 renderers.section = renderers.card;
@@ -1697,8 +1842,9 @@ renderers.checkbox = renderers.toggle;
 renderers.switch = renderers.toggle;
 renderers.textarea = (runtime, node, scope) => renderField(runtime, node, scope, "textarea");
 renderers.suggestions = renderers.choices;
+const waitsForClose = new Set([renderers.image, renderers.html, renderers.gallery, renderers.video, renderers.audio]);
 export const nodeTypes = Object.freeze(Object.keys(renderers));
-export const unsupportedNodeTypes = Object.freeze(["image", "gallery", "video", "audio", "region", "html"]);
+export const unsupportedNodeTypes = Object.freeze(["html", "canvas"]);
 function fieldShell(runtime, node, scope, control) {
     const field = el("label", "hui-field");
     if (node.label) {
@@ -1936,7 +2082,7 @@ function renderChecklist(runtime, node, scope) {
         const input = el("input", null);
         input.type = "checkbox";
         const text = el("span", null);
-        setRichText(text, item.text);
+        setRichText(text, item.text, runtime.host);
         label.append(input, text);
         entry.append(label);
         list.append(entry);
@@ -2011,27 +2157,53 @@ function renderButton(runtime, node, scope) {
     button.type = "button";
     const caption = el("span", null);
     bindText(runtime, caption, node.label ?? label(runtime.host, "Done"), scope);
-    button.append(caption);
+    // The reason a button is off also reaches screen readers (the tooltip alone needs a pointer).
+    const why = el("span", "hui-button__why");
+    button.append(caption, why);
     const actions = (Array.isArray(node.action) ? node.action : node.action ? [node.action] : [])
         .filter(action => action && typeof action === "object");
-    const sendUnavailable = typeof runtime.host?.send !== "function" && actions.some(action => String(action.type ?? (action.text !== undefined ? "send" : action.values ? "set" : "")).toLowerCase() === "send");
-    if (sendUnavailable) {
-        button.disabled = true;
-        button.title = label(runtime.host, "Sending is not available here");
-    }
+    const typeOf = action => String(action.type ?? (action.text !== undefined ? "send" : action.values ? "set" : "")).toLowerCase();
+    const sends = actions.some(action => typeOf(action) === "send");
+    const apps = actions.filter(action => typeOf(action) === "app");
+    const condition = node.disabled === undefined ? null
+        : typeof node.disabled === "string" && !node.disabled.startsWith("=") ? `=${node.disabled}` : node.disabled;
     let busy = false;
-    if (node.disabled !== undefined) {
-        const condition = typeof node.disabled === "string" && !node.disabled.startsWith("=") ? `=${node.disabled}` : node.disabled;
-        runtime.effect(() => {
-            button.disabled = sendUnavailable || busy || truthy(resolveValue(condition, scope));
-        });
+    // Why the button is off, read live: the agent is answering, the chat is closed, there is no
+    // prompt, or this app has no such action. The reason is the tooltip, never a silent failure.
+    const blockedReason = () => {
+        if (sends) {
+            const reason = sendBlockReason(runtime.host);
+            if (reason) {
+                return reason;
+            }
+        }
+        if (apps.some(action => !appTargetAvailable(runtime.host, action.target))) {
+            return label(runtime.host, "Not available in this app");
+        }
+        return null;
+    };
+    const refresh = () => {
+        const reason = blockedReason();
+        button.disabled = reason !== null || busy || (condition !== null && truthy(resolveValue(condition, scope)));
+        why.textContent = reason ?? "";
+        if (reason) {
+            button.title = reason;
+            button.dataset.blocked = "1";
+        }
+        else {
+            button.removeAttribute("title");
+            delete button.dataset.blocked;
+        }
+    };
+    if (sends || apps.length > 0 || condition !== null) {
+        runtime.effect(refresh);
     }
     button.addEventListener("click", async () => {
-        if (busy || sendUnavailable) {
+        if (busy || blockedReason() !== null) {
             return;
         }
         for (const action of actions) {
-            const type = String(action.type ?? (action.text !== undefined ? "send" : action.values ? "set" : "")).toLowerCase();
+            const type = typeOf(action);
             if (type === "set") {
                 const values = action.values && typeof action.values === "object" ? action.values : {};
                 const updates = [];
@@ -2079,7 +2251,7 @@ function renderButton(runtime, node, scope) {
                     }
                 }
                 busy = true;
-                button.disabled = true;
+                refresh();
                 let sent = false;
                 try {
                     sent = (await runtime.host?.send?.(text, payload)) === true;
@@ -2088,16 +2260,55 @@ function renderButton(runtime, node, scope) {
                     sent = false;
                 }
                 busy = false;
-                button.disabled = sendUnavailable;
+                refresh();
                 runtime.flush();
-                flash(button, caption, label(runtime.host, sent ? "Sent" : "Not sent. Try again when the agent is idle."));
+                const reason = sent ? null : blockedReason();
+                flash(button, caption, reason ?? label(runtime.host, sent ? "Sent" : "Not sent. Try again."));
                 if (sent) {
                     button.classList.add("hui-button--sent");
                 }
             }
+            else if (type === "app") {
+                const target = typeof action.target === "string" ? action.target.trim() : "";
+                if (!appTargetAvailable(runtime.host, target)) {
+                    continue;
+                }
+                busy = true;
+                refresh();
+                let done = false;
+                try {
+                    done = (await runtime.host.app(target)) === true;
+                }
+                catch {
+                    done = false;
+                }
+                busy = false;
+                refresh();
+                runtime.flush();
+                if (!done) {
+                    flash(button, caption, label(runtime.host, "Could not do that. Try again."));
+                }
+            }
+            else if (type === "seek" || type === "play" || type === "pause") {
+                controlPlayer(runtime, action, scope, type);
+            }
         }
     });
     return button;
+}
+/** The host says why a reply cannot be posted right now; a host without send is read-only. */
+function sendBlockReason(host) {
+    const reason = host?.sendBlock?.();
+    if (typeof reason === "string" && reason) {
+        return reason;
+    }
+    return typeof host?.send === "function" ? null : label(host, "Sending is not available here");
+}
+/** A closed list of actions with a meaning in this app; the web app's other targets are not available here. */
+export const appActionTargets = Object.freeze(["open_settings", "new_chat", "open_schedule", "open_agents"]);
+const appTargetSet = new Set(appActionTargets);
+function appTargetAvailable(host, target) {
+    return typeof host?.app === "function" && typeof target === "string" && appTargetSet.has(target.trim());
 }
 function flash(button, label, text) {
     const original = label.textContent;
@@ -2176,7 +2387,7 @@ function renderTable(runtime, node, scope) {
                     cell.textContent = formatValue(value, column.format, column.digits);
                 }
                 else {
-                    setRichText(cell, stringOf(value));
+                    setRichText(cell, stringOf(value), runtime.host);
                 }
                 row.append(cell);
             }
@@ -2730,6 +2941,770 @@ function drawPie(context, donut) {
     }
 }
 const maxEachItems = 200;
+/** Custom HTML and canvas are not run here (ADR-077): the answer shows a note instead of an embedded page. */
+function renderCustomHtml(runtime, node) {
+    return typeof node.title === "string" && node.title.trim()
+        ? renderUnsupportedNode(runtime, node)
+        : el("p", "hui__note", label(runtime.host, "Custom HTML is not shown in this app."));
+}
+const fileWaitFastMs = 1000;
+const fileWaitSlowMs = 3000;
+const fileWaitFastAttempts = 10;
+const fileWaitAttempts = 70;
+/** How far past its scroller's edge a place still counts as near: it loads inside this band and lets go outside it. */
+const mediaNearMargin = "1200px 0px";
+/** Frames to wait for a place to be mounted before it loads without being watched. */
+const mediaMountFrames = 90;
+function scrollParent(node) {
+    for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        const overflow = getComputedStyle(parent).overflowY;
+        if (overflow === "auto" || overflow === "scroll" || overflow === "overlay") {
+            return parent;
+        }
+    }
+    return null;
+}
+/**
+ * Source of an image or player. "file" is the name of a file of this chat (a path relative to the
+ * project, or just the file name): the host resolves it to a blob: URL, and while the file is not
+ * there yet the place waits and looks again, then says it is missing. "src" is a remote address:
+ * this app loads nothing from the network, so it shows a note with the address to open or copy
+ * (so does an embedded player's address, which is never embedded).
+ * Both may be expressions: the source follows the state.
+ *
+ * Media memory is the chat's, not the place's (ADR-074): a place loads its file when it is near the
+ * view, and when it is scrolled far away or collapsed it lets the URL go (`host.releaseFile`), so the
+ * bytes behind it are freed, keeps its height so the answer does not jump, and loads the file again
+ * when it is near once more.
+ */
+function bindMediaSource(runtime, source, scope, holder, assign, hint) {
+    const read = typeof source === "function"
+        ? source
+        : () => ({ file: resolveValue(source.file, scope), src: resolveValue(source.src ?? source.embedUrl, scope) });
+    const note = el("div", "hui-media__note");
+    note.hidden = true;
+    note.setAttribute("role", "status");
+    holder.append(note);
+    let currentKey = null;
+    let currentName = "";
+    let timer = 0;
+    let round = 0;
+    let broken = false;
+    /** The file this place shows; it is loaded while the place is near the view. */
+    let wanted = "";
+    /** A look-up for `wanted` is running, waiting for the file, or has delivered. */
+    let started = false;
+    /** The file whose blob: URL is on the element: given back to the host when the place lets it go. */
+    let held = "";
+    /** The place is near the view. Without an observer (no layout, a test) it always is. */
+    let near = typeof IntersectionObserver !== "function";
+    let observer = null;
+    let frame = 0;
+    const show = (state, text, actions) => {
+        holder.classList.remove("hui-media--waiting", "hui-media--missing", "hui-media--remote");
+        if (state) {
+            holder.classList.add(`hui-media--${state}`);
+        }
+        if (state === "missing" || state === "remote") {
+            holder.style.minHeight = "";
+        }
+        note.replaceChildren();
+        note.hidden = state === null;
+        if (text) {
+            note.append(el("span", "hui-media__text", text));
+        }
+        if (actions) {
+            note.append(actions);
+        }
+    };
+    const stop = () => {
+        round++;
+        if (timer) {
+            window.clearTimeout(timer);
+            timer = 0;
+        }
+    };
+    const release = () => {
+        if (held) {
+            const name = held;
+            held = "";
+            runtime.host?.releaseFile?.(name);
+        }
+    };
+    runtime.onDispose(() => {
+        stop();
+        if (frame) {
+            cancelAnimationFrame(frame);
+        }
+        observer?.disconnect();
+        release();
+    });
+    const subject = (fallback) => (typeof hint === "string" && hint.trim() ? hint.trim() : fallback);
+    const begin = () => {
+        const name = wanted;
+        const mine = round;
+        let attempts = 0;
+        started = true;
+        show("waiting", label(runtime.host, "Waiting for the file: {0}", [name]));
+        const attempt = async () => {
+            timer = 0;
+            let url = null;
+            let failed = false;
+            try {
+                url = await runtime.host.resolveFile(name);
+            }
+            catch {
+                failed = true;
+            }
+            if (mine !== round) {
+                // Let go or replaced while it was looked up: give the URL straight back.
+                if (typeof url === "string" && url) {
+                    runtime.host.releaseFile?.(name);
+                }
+                return;
+            }
+            if (typeof url === "string" && url) {
+                held = name;
+                assign(url);
+                show(null);
+                return;
+            }
+            attempts++;
+            if (failed || attempts >= fileWaitAttempts) {
+                show("missing", label(runtime.host, "File not found: {0}", [name]));
+                return;
+            }
+            timer = window.setTimeout(attempt, attempts < fileWaitFastAttempts ? fileWaitFastMs : fileWaitSlowMs);
+        };
+        void attempt();
+    };
+    // Far out of view or collapsed: stop looking, drop the element's URL and hand it back.
+    const evict = () => {
+        if (!wanted || !started) {
+            return;
+        }
+        if (held) {
+            holder.style.minHeight = `${Math.ceil(holder.getBoundingClientRect().height)}px`;
+        }
+        stop();
+        assign(null);
+        release();
+        started = false;
+        show(null);
+    };
+    const watch = tries => {
+        frame = 0;
+        if (typeof IntersectionObserver !== "function") {
+            return;
+        }
+        if (!holder.isConnected) {
+            if (tries < mediaMountFrames) {
+                frame = requestAnimationFrame(() => watch(tries + 1));
+            }
+            else {
+                // Never mounted where it can be watched: show the file without it.
+                near = true;
+                if (wanted && !started && typeof runtime.host?.resolveFile === "function") {
+                    begin();
+                }
+            }
+            return;
+        }
+        observer = new IntersectionObserver(entries => {
+            const latest = entries[entries.length - 1];
+            if (!latest) {
+                return;
+            }
+            near = latest.isIntersecting;
+            if (near) {
+                if (wanted && !started && typeof runtime.host?.resolveFile === "function") {
+                    begin();
+                }
+            }
+            else {
+                evict();
+            }
+        }, { root: scrollParent(holder), rootMargin: mediaNearMargin });
+        observer.observe(holder);
+    };
+    if (!near) {
+        frame = requestAnimationFrame(() => watch(0));
+    }
+    runtime.effect(() => {
+        const { file, src } = read() ?? {};
+        const name = typeof file === "string" ? file.trim() : "";
+        const address = name ? null : safeUrl(src);
+        const key = name ? `file:${name}` : address ? `src:${address}` : `raw:${typeof src === "string" ? src.trim() : ""}`;
+        if (key === currentKey) {
+            return;
+        }
+        currentKey = key;
+        currentName = name;
+        broken = false;
+        stop();
+        release();
+        wanted = "";
+        started = false;
+        holder.style.minHeight = "";
+        assign(null);
+        show(null);
+        if (address) {
+            const actions = el("span", "hui-media__actions");
+            if (typeof runtime.host?.openLink === "function") {
+                actions.append(mediaAction(label(runtime.host, "Open link"), () => openAddress(runtime.host, address)));
+            }
+            actions.append(mediaAction(label(runtime.host, "Copy link"), () => copyAddress(runtime.host, address)));
+            show("remote", label(runtime.host, "Not shown in this app: {0}", [subject(new URL(address).hostname)]), actions);
+            return;
+        }
+        if (!name) {
+            if (key !== "raw:") {
+                show("remote", label(runtime.host, "Not shown in this app: {0}", [subject(key.slice(4, 84))]));
+            }
+            return;
+        }
+        if (typeof runtime.host?.resolveFile !== "function") {
+            show("missing", label(runtime.host, "Files are not available here: {0}", [name]));
+            return;
+        }
+        wanted = name;
+        if (near) {
+            begin();
+        }
+        else {
+            show("waiting", label(runtime.host, "Waiting for the file: {0}", [name]));
+        }
+    });
+    return {
+        /** The element could not decode what the host gave it. */
+        broken() {
+            broken = true;
+            show("missing", label(runtime.host, "The file could not be opened: {0}", [currentName]));
+        },
+        /** The element showed the file: forget an earlier failure, and the height kept while it was let go. */
+        ok() {
+            holder.style.minHeight = "";
+            if (broken) {
+                broken = false;
+                show(null);
+            }
+        }
+    };
+}
+function mediaAction(text, run) {
+    const button = el("button", "hui-media__action", text);
+    button.type = "button";
+    button.addEventListener("click", () => {
+        void run();
+    });
+    return button;
+}
+/** Only a blob: URL the host made from the bytes of a resolved file ever reaches a media element. */
+function setMediaSource(media, url) {
+    if (!url) {
+        if (media.hasAttribute("src")) {
+            media.removeAttribute("src");
+            media.load?.();
+        }
+        return;
+    }
+    if (!url.startsWith("blob:")) {
+        return;
+    }
+    if (media.getAttribute("src") !== url) {
+        media.setAttribute("src", url);
+    }
+}
+function appendCaption(runtime, figure, node, scope) {
+    if (node.caption) {
+        const caption = el("figcaption", null);
+        bindText(runtime, caption, node.caption, scope);
+        figure.append(caption);
+    }
+}
+/**
+ * Stage over a picture or video: "selection" is a selection frame (a crop), "overlay" is any nodes
+ * laid over the frame, usually regions with captions. Coordinates are fractions of the frame, so
+ * the stage follows the proportions of the media without margins.
+ */
+function mountStage(runtime, node, scope, depth, media) {
+    const overlay = Array.isArray(node.overlay) ? node.overlay : null;
+    const selection = node.selection && typeof node.selection === "object" ? node.selection : null;
+    if (!overlay && !selection) {
+        return media;
+    }
+    const stage = el("div", "hui-stage");
+    const layer = el("div", "hui-stage__layer");
+    stage.append(media, layer);
+    if (overlay) {
+        renderChildren(runtime, layer, overlay, scope, depth);
+    }
+    if (selection) {
+        const frame = renderRegion(runtime, {
+            bind: selection.bind,
+            aspect: selection.aspect,
+            label: selection.label ?? label(runtime.host, "Selected area"),
+            resizable: true,
+            mask: true
+        }, scope, depth);
+        if (frame) {
+            layer.append(frame);
+        }
+    }
+    return stage;
+}
+function normalizeRect(value) {
+    const read = (item, fallback) => {
+        const number = toNumber(item);
+        return Number.isFinite(number) ? number : fallback;
+    };
+    const round = number => Math.round(number * 10000) / 10000;
+    const w = Math.min(1, Math.max(0.01, read(value?.w, 0.3)));
+    const h = Math.min(1, Math.max(0.01, read(value?.h, 0.2)));
+    const x = Math.min(1 - w, Math.max(0, read(value?.x, 0)));
+    const y = Math.min(1 - h, Math.max(0, read(value?.y, 0)));
+    return { x: round(x), y: round(y), w: round(w), h: round(h) };
+}
+/** Move ("move") or stretch by a corner ("nw", "se", ...); ratio is width/height in fractions of the frame. */
+function transformRect(rect, mode, dx, dy, ratio) {
+    if (mode === "move") {
+        return normalizeRect({ ...rect, x: rect.x + dx, y: rect.y + dy });
+    }
+    const min = 0.02;
+    const west = mode.includes("w");
+    const north = mode.includes("n");
+    let left = rect.x;
+    let top = rect.y;
+    let right = rect.x + rect.w;
+    let bottom = rect.y + rect.h;
+    if (west) {
+        left = Math.min(right - min, Math.max(0, left + dx));
+    }
+    else {
+        right = Math.max(left + min, Math.min(1, right + dx));
+    }
+    if (north) {
+        top = Math.min(bottom - min, Math.max(0, top + dy));
+    }
+    else {
+        bottom = Math.max(top + min, Math.min(1, bottom + dy));
+    }
+    let w = right - left;
+    let h = bottom - top;
+    if (Number.isFinite(ratio) && ratio > 0) {
+        const roomH = north ? bottom : 1 - top;
+        const roomW = west ? right : 1 - left;
+        if (Math.abs(dy) * ratio > Math.abs(dx)) {
+            w = h * ratio;
+        }
+        else {
+            h = w / ratio;
+        }
+        if (h > roomH) {
+            h = roomH;
+            w = h * ratio;
+        }
+        if (w > roomW) {
+            w = roomW;
+            h = w / ratio;
+        }
+        if (west) {
+            left = right - w;
+        }
+        if (north) {
+            top = bottom - h;
+        }
+    }
+    return normalizeRect({ x: left, y: top, w, h });
+}
+/**
+ * Region {x, y, w, h} on a frame, in fractions. With "bind" it can be moved with the mouse, a
+ * finger and the arrow keys, and with "resizable" stretched by its corners (Shift and arrows);
+ * "aspect" keeps the proportions in the pixels of the frame. Without "bind" it is a fixed box at
+ * x/y/w/h (a caption, a hotspot).
+ */
+function renderRegion(runtime, node, scope, depth) {
+    const slot = node.bind !== undefined ? bindingFor(runtime, node.bind, scope) : null;
+    if (node.bind !== undefined && !slot) {
+        return null;
+    }
+    const tone = typeof node.tone === "string" && tones.has(node.tone) ? ` hui-tone--${node.tone}` : "";
+    const box = el("div", `hui-region${node.mask ? " hui-region--mask" : ""}${tone}`);
+    if (slot) {
+        slot.init(node.mask ? { x: 0.1, y: 0.1, w: 0.8, h: 0.8 } : { x: 0.35, y: 0.4, w: 0.3, h: 0.2 });
+    }
+    const read = () => normalizeRect(slot
+        ? slot.get()
+        : resolveValue({ x: node.x, y: node.y, w: node.w, h: node.h }, scope));
+    runtime.effect(() => {
+        const rect = read();
+        box.style.left = `${rect.x * 100}%`;
+        box.style.top = `${rect.y * 100}%`;
+        box.style.width = `${rect.w * 100}%`;
+        box.style.height = `${rect.h * 100}%`;
+    });
+    if (Array.isArray(node.children) && node.children.length > 0) {
+        const content = el("div", "hui-region__content");
+        renderChildren(runtime, content, node.children, scope, depth);
+        box.append(content);
+    }
+    if (slot && node.draggable !== false) {
+        wireRegion(runtime, box, slot, read, {
+            resizable: node.resizable === true,
+            aspect: toNumber(resolveValue(node.aspect, scope)),
+            label: stringOf(resolveValue(node.label ?? label(runtime.host, "Area"), scope))
+        });
+    }
+    return box;
+}
+/** The frame whose fractions the coordinates are: the stage layer, even for a region inside each. */
+function frameOf(box) {
+    return box.closest(".hui-stage__layer") ?? box.parentElement;
+}
+function wireRegion(runtime, box, slot, read, options) {
+    const resizable = options.resizable;
+    box.tabIndex = 0;
+    box.classList.add("hui-region--interactive");
+    box.setAttribute("role", "group");
+    box.setAttribute("aria-label", label(runtime.host, resizable ? "{0}: arrow keys move, Shift and arrow keys resize" : "{0}: arrow keys move", [options.label]));
+    if (resizable) {
+        for (const corner of ["nw", "ne", "sw", "se"]) {
+            const handle = el("span", `hui-region__handle hui-region__handle--${corner}`);
+            handle.dataset.corner = corner;
+            box.append(handle);
+        }
+    }
+    const ratioFor = bounds => (Number.isFinite(options.aspect) && options.aspect > 0 && bounds.width > 0
+        ? options.aspect * bounds.height / bounds.width
+        : NaN);
+    let frame = 0;
+    let pending = null;
+    const commit = rect => {
+        pending = rect;
+        if (frame) {
+            return;
+        }
+        frame = requestAnimationFrame(() => {
+            frame = 0;
+            if (pending) {
+                slot.set(pending);
+                pending = null;
+            }
+        });
+    };
+    runtime.onDispose(() => cancelAnimationFrame(frame));
+    box.addEventListener("pointerdown", event => {
+        if (event.button !== 0 || event.target.closest("button, input, select, textarea, a, video, audio")) {
+            return;
+        }
+        const bounds = frameOf(box)?.getBoundingClientRect();
+        if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+            box.setPointerCapture(event.pointerId);
+        }
+        catch {
+        }
+        box.focus({ preventScroll: true });
+        const mode = event.target.dataset?.corner ?? "move";
+        const origin = { x: event.clientX, y: event.clientY, rect: read() };
+        const ratio = ratioFor(bounds);
+        const move = moveEvent => commit(transformRect(origin.rect, mode, (moveEvent.clientX - origin.x) / bounds.width, (moveEvent.clientY - origin.y) / bounds.height, ratio));
+        const finish = () => {
+            cancelAnimationFrame(frame);
+            frame = 0;
+            if (pending) {
+                slot.set(pending);
+                pending = null;
+            }
+            box.removeEventListener("pointermove", move);
+            box.removeEventListener("pointerup", finish);
+            box.removeEventListener("pointercancel", finish);
+            box.classList.remove("hui-region--dragging");
+        };
+        box.classList.add("hui-region--dragging");
+        box.addEventListener("pointermove", move);
+        box.addEventListener("pointerup", finish);
+        box.addEventListener("pointercancel", finish);
+    });
+    box.addEventListener("keydown", event => {
+        const step = event.altKey ? 0.002 : 0.01;
+        const delta = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[event.key];
+        if (!delta || event.target !== box) {
+            return;
+        }
+        event.preventDefault();
+        const bounds = frameOf(box)?.getBoundingClientRect();
+        const ratio = bounds ? ratioFor(bounds) : NaN;
+        slot.set(event.shiftKey && resizable
+            ? transformRect(read(), "se", delta[0], delta[1], ratio)
+            : transformRect(read(), "move", delta[0], delta[1], NaN));
+    });
+}
+/**
+ * Video or audio player. Its own player does more than a remote one would: the current time is
+ * written to the state ("bind"), the length to "durationBind", "start"/"end" limit playback to a
+ * segment, "markers" are marks to jump to, and "playlist" plays segments one after another.
+ */
+function renderPlayer(runtime, node, scope, kind, depth) {
+    const figure = el("figure", `hui-player hui-player--${kind}`);
+    if (node.title) {
+        const title = el("div", "hui-player__title");
+        bindText(runtime, title, node.title, scope);
+        figure.append(title);
+    }
+    const hasPlaylist = node.playlist !== undefined;
+    if (!hasPlaylist && node.file === undefined && node.src === undefined && node.embedUrl === undefined) {
+        return null;
+    }
+    const media = el(kind, "hui-player__media");
+    media.controls = true;
+    media.preload = "metadata";
+    media.playsInline = true;
+    media.loop = node.loop === true;
+    media.muted = node.muted === true;
+    figure.append(kind === "video" ? mountStage(runtime, node, scope, depth ?? 0, media) : media);
+    const playlist = hasPlaylist ? createPlaylist(runtime, node, scope, media) : null;
+    const source = bindMediaSource(runtime, playlist ? () => playlist.source() : node, scope, figure, url => setMediaSource(media, url), node.title ?? node.caption);
+    media.addEventListener("error", () => {
+        if (media.getAttribute("src")) {
+            source.broken();
+        }
+    });
+    media.addEventListener("loadedmetadata", () => source.ok());
+    wirePlayer(runtime, node, scope, media, figure, playlist);
+    appendCaption(runtime, figure, node, scope);
+    return figure;
+}
+/**
+ * Playlist: items {file | src, start?, end?} play one after another, each as its own segment.
+ * "currentIndexBind" is the index of the current item (choosing a clip writes it too),
+ * "playlistKey" keeps the current item when the list is reordered.
+ */
+function createPlaylist(runtime, node, scope, media) {
+    const keyField = isSafeName(node.playlistKey) ? node.playlistKey : null;
+    const indexSlot = node.currentIndexBind !== undefined ? bindingFor(runtime, node.currentIndexBind, scope) : null;
+    let localIndex = 0;
+    let lastIndex = null;
+    let currentKey = null;
+    let items = [];
+    const keyOf = (item, index) => {
+        const value = keyField ? member(item, keyField) : undefined;
+        return typeof value === "string" || typeof value === "number" ? `k:${value}` : `i:${index}`;
+    };
+    const readIndex = () => {
+        const value = Math.trunc(toNumber(indexSlot ? indexSlot.get() : localIndex));
+        return Number.isFinite(value) ? value : 0;
+    };
+    const writeIndex = index => {
+        if (indexSlot) {
+            indexSlot.set(index);
+        }
+        else if (localIndex !== index) {
+            localIndex = index;
+            runtime.schedule();
+        }
+    };
+    const playlist = {
+        current() {
+            const value = resolveValue(node.playlist, scope);
+            items = Array.isArray(value) ? value.slice(0, maxEachItems).filter(item => item && typeof item === "object") : [];
+            let index = readIndex();
+            if (index === lastIndex && currentKey?.startsWith("k:")) {
+                const moved = items.findIndex((item, position) => keyOf(item, position) === currentKey);
+                if (moved < 0) {
+                    media.pause();
+                }
+                else if (moved !== index) {
+                    index = moved;
+                    writeIndex(moved);
+                }
+            }
+            index = Math.max(0, Math.min(items.length - 1, index));
+            if (indexSlot && readIndex() !== index) {
+                writeIndex(index);
+            }
+            lastIndex = index;
+            const item = items[index] ?? null;
+            currentKey = item ? keyOf(item, index) : null;
+            const identity = item
+                ? (currentKey.startsWith("k:") ? currentKey : `${index}|${stringOf(resolveValue(item.file ?? item.src, scope))}|${toNumber(resolveValue(item.start, scope))}`)
+                : null;
+            return { index, item, identity };
+        },
+        source() {
+            const { item } = playlist.current();
+            return item ? { file: resolveValue(item.file, scope), src: resolveValue(item.src, scope) } : null;
+        },
+        segment() {
+            const { item } = playlist.current();
+            return item
+                ? { start: toNumber(resolveValue(item.start, scope)), end: toNumber(resolveValue(item.end, scope)) }
+                : { start: NaN, end: NaN };
+        },
+        advance() {
+            const { index } = playlist.current();
+            if (index + 1 >= items.length) {
+                return false;
+            }
+            lastIndex = index + 1;
+            currentKey = keyOf(items[index + 1], index + 1);
+            writeIndex(index + 1);
+            return true;
+        }
+    };
+    return playlist;
+}
+function wirePlayer(runtime, node, scope, media, figure, playlist) {
+    const players = runtime.players ??= new Map();
+    const declared = node.id !== undefined ? stringOf(resolveValue(node.id, scope)).trim() : "";
+    runtime.playerSeq = (runtime.playerSeq ?? 0) + 1;
+    const id = declared || `player${runtime.playerSeq}`;
+    players.set(id, media);
+    runtime.onDispose(() => {
+        if (players.get(id) === media) {
+            players.delete(id);
+        }
+    });
+    const timeSlot = node.bind !== undefined ? bindingFor(runtime, node.bind, scope) : null;
+    const durationSlot = node.durationBind !== undefined ? bindingFor(runtime, node.durationBind, scope) : null;
+    let lastWritten = -1;
+    const writeTime = force => {
+        if (!timeSlot) {
+            return;
+        }
+        const time = Math.round(media.currentTime * 100) / 100;
+        if (force || Math.abs(time - lastWritten) >= 0.25) {
+            lastWritten = time;
+            timeSlot.set(time);
+        }
+    };
+    let segment = { start: NaN, end: NaN };
+    const readSegment = playlist
+        ? () => playlist.segment()
+        : () => ({ start: toNumber(resolveValue(node.start, scope)), end: toNumber(resolveValue(node.end, scope)) });
+    if (playlist || node.start !== undefined || node.end !== undefined) {
+        runtime.effect(() => {
+            const { start, end } = readSegment();
+            segment = { start, end: Number.isFinite(end) && end > (Number.isFinite(start) ? start : 0) ? end : NaN };
+        });
+    }
+    const inSegment = time => (!Number.isFinite(segment.start) || time >= segment.start - 0.05)
+        && (!Number.isFinite(segment.end) || time < segment.end - 0.05);
+    let bounded = false;
+    let continuing = false;
+    const resume = () => {
+        continuing = false;
+        media.play?.().catch(() => { });
+    };
+    media.addEventListener("play", () => {
+        if (Number.isFinite(segment.end) && Math.abs(media.currentTime - segment.end) < 0.1) {
+            media.currentTime = Number.isFinite(segment.start) ? segment.start : 0;
+        }
+        bounded = inSegment(media.currentTime);
+    });
+    media.addEventListener("seeked", () => {
+        bounded = inSegment(media.currentTime);
+        writeTime(true);
+    });
+    media.addEventListener("timeupdate", () => {
+        if (bounded && !media.paused && Number.isFinite(segment.end) && media.currentTime >= segment.end) {
+            media.pause();
+            if (playlist?.advance()) {
+                continuing = true;
+            }
+            else {
+                media.currentTime = segment.end;
+            }
+        }
+        writeTime(false);
+    });
+    media.addEventListener("ended", () => {
+        if (playlist && !continuing && playlist.advance()) {
+            continuing = true;
+        }
+    });
+    media.addEventListener("loadedmetadata", () => {
+        if (durationSlot && Number.isFinite(media.duration)) {
+            durationSlot.set(Math.round(media.duration * 100) / 100);
+        }
+        if (Number.isFinite(segment.start) && (continuing || media.currentTime < segment.start)) {
+            media.currentTime = segment.start;
+        }
+        if (continuing) {
+            resume();
+        }
+    });
+    if (playlist) {
+        let shown;
+        runtime.effect(() => {
+            const { identity } = playlist.current();
+            if (shown === undefined || identity === shown) {
+                shown = identity;
+                return;
+            }
+            shown = identity;
+            if (media.readyState >= 1) {
+                const { start } = readSegment();
+                media.currentTime = Number.isFinite(start) ? start : 0;
+                if (continuing) {
+                    resume();
+                }
+            }
+        });
+    }
+    const markers = Array.isArray(node.markers) ? node.markers.slice(0, 40) : [];
+    if (markers.length === 0) {
+        return;
+    }
+    const bar = el("div", "hui-player__markers");
+    for (const marker of markers) {
+        const time = toNumber(resolveValue(marker?.time, scope));
+        if (!Number.isFinite(time) || time < 0) {
+            continue;
+        }
+        const chip = el("button", "hui-player__marker");
+        chip.type = "button";
+        chip.append(el("span", "hui-player__marker-time", formatDuration(time, 0)));
+        if (typeof marker.label === "string" && marker.label) {
+            chip.append(el("span", null, marker.label));
+        }
+        chip.addEventListener("click", () => {
+            media.currentTime = time;
+            media.play?.().catch(() => { });
+        });
+        bar.append(chip);
+    }
+    if (bar.childElementCount > 0) {
+        figure.append(bar);
+    }
+}
+function controlPlayer(runtime, action, scope, type) {
+    const players = runtime.players;
+    if (!players || players.size === 0) {
+        return;
+    }
+    const target = action.target !== undefined ? stringOf(resolveValue(action.target, scope)).trim() : "";
+    const media = target ? players.get(target) : players.values().next().value;
+    if (!media) {
+        return;
+    }
+    if (type === "seek") {
+        const time = toNumber(resolveValue(action.time, scope));
+        if (Number.isFinite(time) && time >= 0) {
+            media.currentTime = time;
+        }
+    }
+    if (type === "pause") {
+        media.pause();
+    }
+    else if (type === "play" || action.play === true) {
+        media.play?.().catch(() => { });
+    }
+}
 function renderEach(runtime, node, scope, depth) {
     const as = isSafeName(node.as) ? node.as : "item";
     const indexName = isSafeName(node.indexAs) ? node.indexAs : "index";
@@ -2867,7 +3842,9 @@ function renderRange(runtime, node, scope) {
     };
     const track = el("div", "hui-range__track");
     const fill = el("div", "hui-range__fill");
-    track.append(fill);
+    const playhead = el("div", "hui-range__playhead");
+    playhead.hidden = true;
+    track.append(fill, playhead);
     const fieldLabel = stringOf(resolveValue(node.label ?? "", scope));
     const makeInput = (name, fallbackLabel) => {
         const input = el("input", `hui-range__input hui-range__input--${name}`);
@@ -2900,15 +3877,61 @@ function renderRange(runtime, node, scope) {
         return { start: Math.max(min, Math.min(max, start)), end: Math.max(min, Math.min(max, end)) };
     };
     const format = value => `${node.prefix ?? ""}${formatValue(value, node.format ?? "auto", node.digits)}${node.suffix ? ` ${node.suffix}` : ""}`;
+    // "player" ties the scale to a video or audio player by its id: the playback position shows on the
+    // scale, each handle previews its frame, and a click on the scale seeks.
+    const player = () => (node.player !== undefined
+        ? runtime.players?.get(stringOf(resolveValue(node.player, scope)).trim()) ?? null
+        : null);
+    const preview = time => {
+        const media = player();
+        if (media && media.readyState >= 1 && Number.isFinite(time)) {
+            media.pause();
+            media.currentTime = time;
+        }
+    };
+    let watched = null;
+    const place = () => {
+        const time = watched?.currentTime;
+        if (!Number.isFinite(time) || max <= min) {
+            playhead.hidden = true;
+            return;
+        }
+        playhead.hidden = false;
+        playhead.style.left = `${Math.max(0, Math.min(1, (time - min) / (max - min))) * 100}%`;
+    };
+    const watch = media => {
+        if (media === watched) {
+            return;
+        }
+        watched?.removeEventListener("timeupdate", place);
+        watched?.removeEventListener("seeked", place);
+        watched = media;
+        watched?.addEventListener("timeupdate", place);
+        watched?.addEventListener("seeked", place);
+        place();
+    };
+    runtime.onDispose(() => watch(null));
     low.addEventListener("input", () => {
         const value = fit(Math.min(toNumber(low.value), values().end - gap), Math.floor);
         low.value = String(value);
         startSlot.set(value);
+        preview(value);
     });
     high.addEventListener("input", () => {
         const value = fit(Math.max(toNumber(high.value), values().start + gap), number => Math.ceil(number - 2e-9));
         high.value = String(value);
         endSlot.set(value);
+        preview(value);
+    });
+    track.addEventListener("pointerdown", event => {
+        const media = player();
+        const rect = track.getBoundingClientRect();
+        if (!media || rect.width <= 0 || max <= min) {
+            return;
+        }
+        // Like the handles, a click shows that frame instead of playing on past the segment.
+        media.pause();
+        media.currentTime = Math.max(min, Math.min(max, min + ((event.clientX - rect.left) / rect.width) * (max - min)));
     });
     runtime.effect(() => {
         min = bound(node.min, 0);
@@ -2936,6 +3959,8 @@ function renderRange(runtime, node, scope) {
         fill.style.right = `${100 - ((end - min) / span) * 100}%`;
         low.style.zIndex = start > min + span / 2 ? "3" : "2";
         output.textContent = `${format(start)} — ${format(end)}`;
+        watch(player());
+        place();
     });
     return field;
 }

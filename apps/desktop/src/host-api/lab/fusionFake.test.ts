@@ -8,7 +8,7 @@ import {
   type FusionRoleV1,
   type FusionStateV1,
 } from '../fusionClient';
-import { checkPair, LAB_FUSION_BRIEF_DELAY_MS, LAB_FUSION_QUEUE_MS, LAB_FUSION_ROUND_MS, simulateFusionBrief } from './fusionFake';
+import { admitPair, checkPair, LAB_FUSION_BRIEF_DELAY_MS, LAB_FUSION_QUEUE_MS, LAB_FUSION_ROUND_MS, simulateFusionBrief } from './fusionFake';
 import type { HarnessKind } from './labContracts';
 import type { LabHost } from './labHost';
 import { labHost, record, rejection } from './labTestKit';
@@ -49,42 +49,102 @@ describe('fusion lab fake', () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it('refuses pairs by the host matrix', () => {
-    const refusal = (pair: FusionPairV1, sandbox = true): string | undefined => {
-      const answer = checkPair(pair, sandbox);
-      return answer === undefined ? undefined : `${answer.refusal}:${answer.role}`;
+  it('changes a model in place only after the round and delivery settle', async () => {
+    host.fusion.autoDemo = false;
+    const initial = await create(host, CODEX_PAIR);
+    const leadSessionId = initial.leadSessionId;
+    const sidekick = {
+      ...initial.pair.sidekick,
+      model: { id: 'gpt-lab-5-mini', name: 'GPT Lab 5 Mini', provider: 'openai-lab' },
+      thinkingLevel: 'high', serviceTier: 'fast',
     };
-    expect(refusal(pairOf(role('hermes', 'native'), role('codex', 'native')))).toBe('lead-harness-unsupported:lead');
-    expect(refusal(pairOf(role('codex', 'full-access'), role('hermes', 'native')))).toBe('sidekick-harness-unsupported:sidekick');
-    expect(refusal(pairOf(role('codex', 'read-only'), role('codex', 'read-only')))).toBe('read-only-lead:lead');
-    expect(refusal(CODEX_PAIR)).toBeUndefined();
-    expect(refusal(pairOf(role('claude-code', 'native'), role('claude-code', 'native')))).toBeUndefined();
-    // Native modes of different harnesses are incomparable.
-    expect(refusal(pairOf(role('claude-code', 'native'), role('codex', 'native')))).toBe('explicit-modes-required:sidekick');
-    expect(refusal(pairOf(role('codex', 'full-access'), role('codex', 'native')))).toBe('explicit-modes-required:sidekick');
-    expect(refusal(pairOf(role('codex', 'native'), role('pi', 'native')))).toBe('explicit-modes-required:sidekick');
-    expect(refusal(CROSS_PAIR)).toBeUndefined();
-    expect(refusal(pairOf(role('codex', 'workspace-write'), role('codex', 'full-access')))).toBe('sidekick-exceeds-lead:sidekick');
-    expect(refusal(pairOf(role('codex', 'full-access'), role('claude-code', 'workspace-write')))).toBe('sidekick-needs-full-access:sidekick');
-    expect(refusal(pairOf(role('codex', 'full-access'), role('claude-code', 'read-only')))).toBe('sidekick-needs-full-access:sidekick');
-    // Pi needs both roles at full access.
-    expect(refusal(pairOf(role('codex', 'full-access'), role('pi', 'full-access')))).toBeUndefined();
-    expect(refusal(pairOf(role('codex', 'workspace-write'), role('pi', 'workspace-write')))).toBe('sidekick-needs-full-access:sidekick');
-    // Nano follows Pi as a sidekick and never leads.
-    expect(refusal(pairOf(role('codex', 'full-access'), role('nano', 'full-access')))).toBeUndefined();
-    expect(refusal(pairOf(role('codex', 'workspace-write'), role('nano', 'workspace-write')))).toBe('sidekick-needs-full-access:sidekick');
-    expect(refusal(pairOf(role('nano', 'full-access'), role('codex', 'full-access')))).toBe('lead-harness-unsupported:lead');
+    const change = (revision: number, role = sidekick) => ({ type: 'changeSidekick', leadSessionId, change: {
+      kind: 'model', sidekick: role, revision, allowContextLoss: false,
+    } });
+    simulateFusionBrief(host.fusion, leadSessionId);
+    const open = await stateOf(host, leadSessionId);
+    expect(open.sidekickChangeBlock).toBe('FUSION_ROUND_OPEN');
+    await expect(fusion(host, change(open.revision))).rejects.toMatchObject({ code: 'FUSION_ROUND_OPEN' });
+    await vi.advanceTimersByTimeAsync(LAB_FUSION_QUEUE_MS + LAB_FUSION_ROUND_MS);
+    const settled = await stateOf(host, leadSessionId);
+    expect(settled.sidekickReplaceBlock).toBe('FUSION_SIDEKICK_ATTACHED');
+    await expect(fusion(host, change(settled.revision, { ...sidekick, model: { ...sidekick.model, id: 'missing' } })))
+      .rejects.toMatchObject({ code: 'FUSION_MODEL_MISSING' });
+    await expect(fusion(host, change(settled.revision))).resolves.toMatchObject({
+      type: 'state', state: { leadSessionId, sessions: settled.sessions, pair: { sidekick }, revision: settled.revision + 1 },
+    });
+    await expect(fusion(host, change(settled.revision))).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+
+  it('replaces a stopped sidekick with the permissions admitted for the original lead', async () => {
+    host.fusion.autoDemo = false;
+    const initial = await create(host, pairOf(role('claude-code', 'workspace-write'), role('claude-code', 'workspace-write')));
+    const leadSessionId = initial.leadSessionId;
+    simulateFusionBrief(host.fusion, leadSessionId);
+    const open = await stateOf(host, leadSessionId);
+    await fusion(host, { type: 'stopSidekick', leadSessionId });
+    const stopped = await stateOf(host, leadSessionId);
+    const replace = (allowContextLoss: boolean) => ({ type: 'changeSidekick', leadSessionId, change: {
+      kind: 'replace', sidekick: role('codex', 'full-access'), revision: stopped.revision, allowContextLoss,
+    } });
+    await expect(fusion(host, replace(false))).rejects.toMatchObject({ code: 'FUSION_CONTEXT_LOSS' });
+    await expect(fusion(host, replace(true))).resolves.toMatchObject({
+      type: 'state', state: {
+        leadSessionId, pair: { lead: initial.pair.lead, sidekick: role('codex', 'workspace-write') },
+        sessions: [{ sessionId: open.sessions[0]?.sessionId, retired: true }, { harness: 'codex', retired: false }],
+      },
+    });
+  });
+
+  it('admits cross-harness pairs by narrowing the sidekick, refusing only with a dimension', () => {
+    const answer = (pair: FusionPairV1, sandbox = true): string => {
+      const admission = admitPair(pair, sandbox);
+      if (!('refusal' in admission)) return admission.sidekickMode;
+      return [admission.refusal, admission.role, admission.dimension].filter((part) => part !== undefined).join(':');
+    };
+    expect(answer(pairOf(role('hermes', 'native'), role('codex', 'native')))).toBe('lead-harness-unsupported:lead');
+    expect(answer(pairOf(role('codex', 'full-access'), role('hermes', 'native')))).toBe('sidekick-harness-unsupported:sidekick');
+    expect(answer(pairOf(role('nano', 'full-access'), role('codex', 'full-access')))).toBe('lead-harness-unsupported:lead');
+    expect(answer(CODEX_PAIR)).toBe('native');
+    expect(answer(pairOf(role('claude-code', 'native'), role('codex', 'native')))).toBe('explicit-modes-required:lead');
+    expect(answer(pairOf(role('codex', 'native'), role('pi', 'full-access')))).toBe('explicit-modes-required:lead');
+    expect(answer(CROSS_PAIR)).toBe('full-access');
+    // A read-only lead gets a read-only sidekick.
+    expect(answer(pairOf(role('codex', 'read-only'), role('codex', 'read-only')))).toBe('read-only');
+    expect(answer(pairOf(role('codex', 'read-only'), role('claude-code', 'full-access')))).toBe('read-only');
+    expect(answer(pairOf(role('claude-code', 'read-only'), role('codex', 'read-only')))).toBe('read-only');
+    expect(answer(pairOf(role('claude-code', 'read-only'), role('nano', 'full-access')))).toBe('read-only');
+    // Workspace-write leads narrow the sidekick across harnesses.
+    expect(answer(pairOf(role('codex', 'workspace-write'), role('codex', 'full-access')))).toBe('workspace-write');
+    expect(answer(pairOf(role('codex', 'workspace-write'), role('claude-code', 'full-access')))).toBe('workspace-write');
+    expect(answer(pairOf(role('codex', 'workspace-write'), role('nano', 'full-access')))).toBe('read-only');
+    // Reads outside the folder are allowed (ADR-076); the sandbox is covered by the lead's writes.
+    expect(answer(pairOf(role('claude-code', 'workspace-write'), role('codex', 'workspace-write')))).toBe('workspace-write');
+    expect(answer(pairOf(role('claude-code', 'workspace-write'), role('codex', 'full-access')))).toBe('workspace-write');
+    expect(answer(pairOf(role('claude-code', 'workspace-write'), role('nano', 'full-access')))).toBe('read-only');
+    expect(answer(pairOf(role('claude-code', 'workspace-write'), role('pi', 'full-access')))).toBe('sidekick-exceeds-lead:sidekick:writes');
+    expect(answer(pairOf(role('codex', 'full-access'), role('claude-code', 'workspace-write')))).toBe('workspace-write');
+    expect(answer(pairOf(role('codex', 'full-access'), role('nano', 'native')))).toBe('native');
+    // Pi has full access only; Nano has no edit-only preset.
+    expect(answer(pairOf(role('codex', 'full-access'), role('pi', 'full-access')))).toBe('full-access');
+    expect(answer(pairOf(role('codex', 'workspace-write'), role('pi', 'workspace-write')))).toBe('sidekick-needs-full-access:sidekick');
+    expect(answer(pairOf(role('codex', 'workspace-write'), role('nano', 'workspace-write')))).toBe('sidekick-needs-full-access:sidekick');
     // A workspace-write Codex sidekick needs the sandbox.
     const sandboxed = pairOf(role('claude-code', 'full-access'), role('codex', 'workspace-write'));
-    expect(refusal(sandboxed)).toBeUndefined();
-    expect(refusal(sandboxed, false)).toBe('codex-sandbox-unverified:sidekick');
+    expect(answer(sandboxed)).toBe('workspace-write');
+    expect(answer(sandboxed, false)).toBe('codex-sandbox-unverified:sidekick');
+    expect(answer(pairOf(role('codex', 'workspace-write'), role('codex', 'full-access')), false)).toBe('read-only');
+    expect(checkPair(CROSS_PAIR, true)).toBeUndefined();
   });
 
   it('answers checkPair through the host and simulates an unverified Codex sandbox', async () => {
     const sandboxed = pairOf(role('claude-code', 'full-access'), role('codex', 'workspace-write'));
-    expect(await fusion(host, { type: 'checkPair', workspaceId: WS, pair: sandboxed })).toEqual({ type: 'pairCheck', ok: true });
+    expect(await fusion(host, { type: 'checkPair', workspaceId: WS, pair: sandboxed })).toEqual({
+      type: 'pairCheck', ok: true, sidekickMode: 'workspace-write',
+      capabilities: { writes: 'workspace', reads: 'anywhere', shell: 'workspace-sandbox', network: 'none', mcp: 'none' },
+    });
     const fastPair = pairOf({ ...role('codex', 'native'), serviceTier: 'fast' }, role('codex', 'native'));
-    expect(await fusion(host, { type: 'checkPair', workspaceId: WS, pair: fastPair })).toEqual({ type: 'pairCheck', ok: true });
+    expect(await fusion(host, { type: 'checkPair', workspaceId: WS, pair: fastPair })).toEqual({ type: 'pairCheck', ok: true, sidekickMode: 'native' });
     host.fusion.codexSandbox = false;
     expect(await fusion(host, { type: 'checkPair', workspaceId: WS, pair: sandboxed })).toEqual({
       type: 'pairCheck', ok: false, refusal: 'codex-sandbox-unverified', role: 'sidekick',
@@ -108,10 +168,15 @@ describe('fusion lab fake', () => {
     expect(await rejection(host.invoke('fusion_command_v1', { command: { type: 'state', leadSessionId: 'missing' } }))).toMatchObject({ code: 'NOT_FOUND' });
   });
 
+  it('records the narrowed sidekick preset in the frozen pair', async () => {
+    const state = await create(host, pairOf(role('codex', 'workspace-write'), role('claude-code', 'full-access')));
+    expect(state.pair.sidekick.permissionMode).toBe('workspace-write');
+  });
+
   it('answers a refused createChat with pairCheck and starts nothing', async () => {
     const before = host.state.sessions.size;
-    const result = await fusion(host, { type: 'createChat', workspaceId: WS, pair: pairOf(role('codex', 'read-only'), role('codex', 'read-only')) });
-    expect(result).toEqual({ type: 'pairCheck', ok: false, refusal: 'read-only-lead', role: 'lead' });
+    const result = await fusion(host, { type: 'createChat', workspaceId: WS, pair: pairOf(role('claude-code', 'read-only'), role('pi', 'full-access')) });
+    expect(result).toEqual({ type: 'pairCheck', ok: false, refusal: 'sidekick-exceeds-lead', role: 'sidekick', dimension: 'writes' });
     expect(host.state.sessions.size).toBe(before);
   });
 
@@ -168,9 +233,12 @@ describe('fusion lab fake', () => {
 
     await vi.advanceTimersByTimeAsync(LAB_FUSION_ROUND_MS * 2);
     expect(await stateOf(host, lead)).toEqual(stopped);
-    // Nothing is open: a second stop changes nothing.
+    // Nothing is open: stopping the pair only pauses it (journaled once).
     expect(await fusion(host, { type: 'stopPair', leadSessionId: lead })).toEqual({ type: 'accepted' });
-    expect((await stateOf(host, lead)).revision).toBe(stopped.revision);
+    const paused = await stateOf(host, lead);
+    expect(paused).toMatchObject({ paused: true, revision: stopped.revision + 1 });
+    expect(await fusion(host, { type: 'stopPair', leadSessionId: lead })).toEqual({ type: 'accepted' });
+    expect((await stateOf(host, lead)).revision).toBe(paused.revision);
     expect(await rejection(host.invoke('fusion_command_v1', { command: { type: 'stopSidekick', leadSessionId: 'missing' } }))).toMatchObject({ code: 'NOT_SUPPORTED' });
   });
 
@@ -351,7 +419,7 @@ describe('fusion lab fake', () => {
     for (const type of ['stopPair', 'stopSidekick', 'resetSidekick']) {
       expect(await rejection(safe.invoke('fusion_command_v1', { command: { type, leadSessionId: 'x' } }))).toMatchObject({ code: 'SAFE_MODE' });
     }
-    expect(await fusion(safe, { type: 'checkPair', workspaceId: WS, pair: CODEX_PAIR })).toEqual({ type: 'pairCheck', ok: true });
+    expect(await fusion(safe, { type: 'checkPair', workspaceId: WS, pair: CODEX_PAIR })).toEqual({ type: 'pairCheck', ok: true, sidekickMode: 'native' });
     expect(await fusion(safe, { type: 'find', sessionId: 'x' })).toEqual({ type: 'membership', role: null });
     expect(await rejection(safe.invoke('fusion_command_v1', { command: { type: 'state', leadSessionId: 'x' } }))).toMatchObject({ code: 'NOT_FOUND' });
   });

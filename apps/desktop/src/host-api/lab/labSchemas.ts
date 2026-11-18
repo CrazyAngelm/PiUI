@@ -88,6 +88,16 @@ export const composerInputsCommandSchema = tagged('type', {
   catalog: { sessionId: string },
 });
 
+/** `ChatFilesCommand` (chat files v1, ADR-074). */
+export const chatFilesCommandSchema = tagged('type', {
+  list: { sessionId: string },
+  preview: { sessionId: string, fileId: string },
+  save: { sessionId: string, fileId: string },
+  reveal: { sessionId: string, fileId: string },
+  open: { sessionId: string, fileId: string },
+  resolve: { sessionId: string, name: string },
+});
+
 const toolRule = object({
   tool: string,
   decision: enumOf(['allow', 'deny']),

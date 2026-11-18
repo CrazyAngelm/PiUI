@@ -111,6 +111,7 @@ fn native_config(kind: HarnessKind, label: &str) -> NativeRuntimeConfig {
         network_access: false,
         allowed_tools,
         native_subagents,
+        background_tasks: None,
         daemon_socket,
         package_root: None,
         agent_dir: None,

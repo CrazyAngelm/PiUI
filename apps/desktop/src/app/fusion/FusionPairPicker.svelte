@@ -1,10 +1,10 @@
 <script lang="ts">
   import Check from '@lucide/svelte/icons/check';
   import { t } from '../../features/locale/language';
-  import { fusionHost, type BriefPolicyV1, type FusionPairV1, type FusionRefusalV1, type FusionRoleNameV1, type FusionRoleV1 } from '../../host-api/fusionClient';
+  import { fusionHost, type BriefPolicyV1, type FusionCapabilitiesV1, type FusionCapabilityDimensionV1, type FusionPairV1, type FusionRefusalV1, type FusionRoleNameV1, type FusionRoleV1, type FusionSidekickChangeKindV1 } from '../../host-api/fusionClient';
   import { Segmented, Spinner, Switch } from '../../lib/ui';
   import FusionRolePicker, { type FusionHarnessOption } from './FusionRolePicker.svelte';
-  import { defaultPair, fusionErrorText, pairKey, refusalCopy, rememberablePair, restorePair, withOptions, withRole } from './fusionPair';
+  import { allowancePhrases, defaultPair, FUSION_PAIR_MEMORY_KEY, fusionErrorText, pairKey, refusalCopy, rememberFusionPair, restorePair, withOptions, withRole } from './fusionPair';
 
   /**
    * The pair of a new Fusion chat (ADR-043): who leads, who is the sidekick,
@@ -18,32 +18,33 @@
     trusted: boolean;
     harnesses: readonly FusionHarnessOption[];
     disabled: boolean;
+    editing?: FusionSidekickChangeKindV1;
     pair?: FusionPairV1 | undefined;
     /** True while the shown selection is the one the host accepted. */
     ready?: boolean;
   }
-  let { workspaceId, trusted, harnesses, disabled, pair = $bindable(undefined), ready = $bindable(false) }: Props = $props();
+  let { workspaceId, trusted, harnesses, disabled, editing, pair = $bindable(undefined), ready = $bindable(false) }: Props = $props();
 
-  const REMEMBER_KEY = 'piui.fusion.pair.v1';
   const CHECK_DELAY_MS = 250;
 
   type Verdict =
-    | { key: string; kind: 'ok' }
-    | { key: string; kind: 'refused'; refusal: FusionRefusalV1; role: FusionRoleNameV1 }
+    | { key: string; kind: 'ok'; sidekickMode: FusionRoleV1['permissionMode'] | undefined; capabilities: FusionCapabilitiesV1 | undefined }
+    | { key: string; kind: 'refused'; refusal: FusionRefusalV1; role: FusionRoleNameV1; dimension: FusionCapabilityDimensionV1 | undefined }
     | { key: string; kind: 'error'; message: string };
 
   let verdict = $state<Verdict | undefined>();
   let checking = $state(false);
+  let sidekickCatalogValid = $state(false);
 
   const availableKinds = $derived(harnesses.filter((item) => item.available).map((item) => item.kind));
 
   // Start from the remembered pair, else a cross-vendor default; a catalog that
   // arrives later fills in a pair that could not be built before.
   $effect.pre(() => {
-    if (pair !== undefined) return;
+    if (editing || pair !== undefined) return;
     let raw: string | null = null;
     try {
-      raw = localStorage.getItem(REMEMBER_KEY);
+      raw = localStorage.getItem(FUSION_PAIR_MEMORY_KEY);
     } catch {
       // Remembering is a convenience only.
     }
@@ -52,12 +53,7 @@
 
   $effect(() => {
     const current = pair;
-    if (current === undefined) return;
-    try {
-      localStorage.setItem(REMEMBER_KEY, rememberablePair(current));
-    } catch {
-      // Remembering is a convenience only.
-    }
+    if (!editing && current !== undefined) rememberFusionPair(current);
   });
 
   // The host judges the pair; a stale answer never decides for a newer selection.
@@ -77,7 +73,9 @@
         .request({ type: 'checkPair', workspaceId: id, pair: current })
         .then((result): Verdict => {
           if (result.type !== 'pairCheck') return { key, kind: 'error', message: fusionErrorText(undefined) };
-          return result.ok ? { key, kind: 'ok' } : { key, kind: 'refused', refusal: result.refusal, role: result.role };
+          return result.ok
+            ? { key, kind: 'ok', sidekickMode: result.sidekickMode, capabilities: result.capabilities }
+            : { key, kind: 'refused', refusal: result.refusal, role: result.role, dimension: result.dimension };
         })
         .catch((error: unknown): Verdict => ({ key, kind: 'error', message: fusionErrorText(error) }))
         .then((answer) => {
@@ -94,10 +92,22 @@
 
   const settled = $derived(pair !== undefined && !checking && verdict !== undefined && verdict.key === pairKey(pair));
   $effect(() => {
-    ready = settled && verdict?.kind === 'ok';
+    ready = settled && verdict?.kind === 'ok' && (!editing || sidekickCatalogValid);
   });
 
-  const refusalFor = (role: FusionRoleNameV1) => (verdict?.kind === 'refused' && verdict.role === role ? refusalCopy(verdict.refusal) : undefined);
+  const refusalFor = (role: FusionRoleNameV1) => (verdict?.kind === 'refused' && verdict.role === role ? refusalCopy(verdict.refusal, verdict.dimension) : undefined);
+
+  // What the sidekick will effectively be allowed, from the host's matrix (ADR-076).
+  const allowance = $derived(
+    verdict?.kind === 'ok' && settled
+      ? {
+          text: allowancePhrases(verdict.capabilities)
+            .map((phrase) => $t(phrase))
+            .join(', '),
+          narrowed: verdict.sidekickMode !== undefined && verdict.sidekickMode !== pair?.sidekick.permissionMode,
+        }
+      : undefined,
+  );
 
   function change(role: FusionRoleNameV1, next: FusionRoleV1): void {
     if (pair) pair = withRole(pair, role, next);
@@ -107,16 +117,18 @@
   }
 </script>
 
-<section class="picker" aria-label={$t('Fusion pair')}>
+<section class="picker" class:picker--edit={editing !== undefined} aria-label={$t(editing ? 'Sidekick settings' : 'Fusion pair')}>
+  {#if !editing}
   <p class="intro">{$t('The lead chats with you and hands work to a sidekick that keeps its own context between briefs.')}</p>
+  {/if}
 
   {#if pair}
     <div class="roles">
-      <FusionRolePicker role="lead" value={pair.lead} {workspaceId} modelsEnabled={trusted} {harnesses} {disabled} refusal={refusalFor('lead')} onChange={(next) => change('lead', next)} />
-      <FusionRolePicker role="sidekick" value={pair.sidekick} {workspaceId} modelsEnabled={trusted} {harnesses} {disabled} refusal={refusalFor('sidekick')} onChange={(next) => change('sidekick', next)} />
+      {#if !editing}<FusionRolePicker role="lead" value={pair.lead} {workspaceId} modelsEnabled={trusted} {harnesses} {disabled} refusal={refusalFor('lead')} onChange={(next) => change('lead', next)} />{/if}
+      <FusionRolePicker role="sidekick" value={pair.sidekick} {workspaceId} modelsEnabled={trusted} {harnesses} {disabled} {editing} bind:catalogValid={sidekickCatalogValid} refusal={refusalFor('sidekick') ?? (editing ? refusalFor('lead') : undefined)} onChange={(next) => change('sidekick', next)} />
     </div>
 
-    <details class="options">
+    {#if !editing}<details class="options">
       <summary>{$t('Pair options')}</summary>
       <div class="options__body">
         <div class="option">
@@ -136,15 +148,18 @@
         <Switch label={$t('Deliver reports to the lead automatically')} checked={pair.options.autoDeliver} {disabled} onCheckedChange={(checked) => option({ autoDeliver: checked })} />
         <Switch label={$t('Lead may also use its own subagents')} checked={pair.options.leadNativeSubagents} {disabled} onCheckedChange={(checked) => option({ leadNativeSubagents: checked })} />
       </div>
-    </details>
+    </details>{/if}
 
     <p class="status" role="status" aria-live="polite">
       {#if checking}
         <Spinner size={12} /> {$t('Checking the pair…')}
       {:else if verdict?.kind === 'ok'}
-        <Check size={14} aria-hidden="true" /> {$t('This pair can start.')}
+        {#if !editing}<Check size={14} aria-hidden="true" /> {$t('This pair can start.')}{/if}
+        {#if allowance}
+          <span class="allowance">{$t('Sidekick allowance')}: {allowance.text}{#if allowance.narrowed} ({$t('lowered to fit the lead')}){/if}</span>
+        {/if}
       {:else if verdict?.kind === 'refused'}
-        {$t('This pair cannot start yet. See the highlighted role.')}
+        {#if !editing}{$t('This pair cannot start yet. See the highlighted role.')}{/if}
       {:else if verdict?.kind === 'error'}
         {$t(verdict.message)}
       {/if}
@@ -165,6 +180,12 @@
     background:
       radial-gradient(120% 70% at 100% 0%, color-mix(in srgb, var(--piui-decoration-primary) 7%, transparent), transparent 60%),
       var(--piui-surface-1);
+  }
+  .picker--edit {
+    padding: 0;
+    margin: 0;
+    border: 0;
+    background: none;
   }
   .intro {
     margin: 0;
@@ -210,6 +231,9 @@
     margin: 0;
     color: var(--piui-text-muted);
     font-size: var(--piui-text-sm);
+  }
+  .allowance {
+    color: var(--piui-text);
   }
   .status--problem {
     color: var(--piui-warning-text);

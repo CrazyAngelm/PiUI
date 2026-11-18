@@ -34,10 +34,12 @@ Pi tool blocks and Codex MCP/dynamic tool blocks are built from arbitrary native
 - `{type:'approvalResolved',requestId}`
 - `{type:'binding',nativeId,nativePath?}` (host-private only)
 - `{type:'error',message:safeFixedSummary}`
+- `{type:'file',blockId,origin,path?|inline?}` (additive; see File events)
+- `{type:'historyPage',blocks:NativeBlock[]}` (additive; see History pages): older blocks, oldest first, that go before every block already shown
 - `{type:'notice',code:'unsupported-board-tool'|'unsupported-board-tool-resume'|'unsupported-sidekick-tool'|'unsupported-sidekick-tool-resume'}` (non-fatal; see hostTools)
 - `{type:'boardRequest',requestId,operation}` / `{type:'sidekickRequest',requestId,operation,identity}` / `{type:'sessionsRequest',requestId,operation}` / `{type:'coordinatorRequest',requestId,operation}` (runner-emitted, host-private)
 
-Runner request LF JSON: `{id:string,method:'initialize'|'snapshot'|'prompt'|'interrupt'|'models'|'setModel'|'setMode'|'respond'|'rename'|'dispose',params:object}`. Initialize params add `harness:'pi'|'nano'|'prime-agent'|'codex'|'hermes'|'claude-code'|'acp:<descriptor id>'` to config; exactly once. Return `{id,ok:true,result}` or `{id,ok:false,error:{code,message,details?}}` (`details`: optional bounded plain data an adapter sets as `safeDetails`, today only an ACP sign-in refusal's method names); event `{event:NativeEvent}`. Buffer raw bytes, split only LF. Pending native operations must not serialize interruption/approval behind an active turn. EOF closes admission, calls dispose, then exits; Rust handles hung descendants. No generic evaluate/exec/file method.
+Runner request LF JSON: `{id:string,method:'initialize'|'snapshot'|'prompt'|'interrupt'|'models'|'setModel'|'setMode'|'respond'|'rename'|'dispose',params:object}`. Initialize params add `harness:'pi'|'nano'|'prime-agent'|'codex'|'hermes'|'claude-code'|'acp:<descriptor id>'` to config; exactly once. Return `{id,ok:true,result}` or `{id,ok:false,error:{code,message,details?}}` (`details`: optional bounded plain data an adapter sets as `safeDetails`, today only an ACP sign-in refusal's method names); event `{event:NativeEvent}`. An error code is a refusal (nothing was carried out) except `native-outcome-unknown`: the request reached the native harness but its outcome is unknown (the harness exited before answering a written turn request, or answered without the started turn), so it may be running; Rust maps it to `BridgeFailureCode::OutcomeUnknown` and never treats it as refused or resends it (ADR-076). Buffer raw bytes, split only LF. Pending native operations must not serialize interruption/approval behind an active turn. EOF closes admission, calls dispose, then exits; Rust handles hung descendants. No generic evaluate/exec/file method.
 
 Fixtures may inject fake adapters/transport only via separate test module imports; never production env switches. Runtime proofs use native installed harness with synthetic provider where supported, not a replacement agent loop. Missing package/auth/platform behavior is explicit.
 
@@ -75,9 +77,19 @@ uses a fresh `thread/start`. A full fork omits `lastTurnId`. Fork requests send
 They send no `dynamicTools`, `initialTurnsPage`, `personality`, `path`,
 `ephemeral`, `attachToSource`, or `prediction`.
 
-After a Codex fork, one descending `thread/turns/list` page with
-`itemsView:'full'` supplies the child's initial history through the same
-projection used by resume. Effective cwd and permission checks still apply.
+A fork that cuts at a `userMessage` is exact only when that message opens its
+turn (only `hookPrompt` and `contextCompaction` items may precede it). A steer
+message sent inside a running turn sits after the agent's own items in that
+turn; Codex can only cut between turns, so such a fork is refused with
+`branch-unsupported` ("This chat cannot be branched natively.") instead of
+silently keeping or dropping the steer's turn.
+
+After a Codex fork, descending `thread/turns/list` pages with
+`itemsView:'full'` supply the child's initial history through the same
+projection used by resume. Only the first page comes with the response
+(`initialTurnsPage`) and is part of opening the chat: `initialize` returns once
+it is applied and the snapshot holds it (see History pages below). Resume uses
+the same paging. Effective cwd and permission checks still apply.
 The returned child ID and rollout path become its binding. Native forks are
 materialized; a first-turn cut remains a draft until its first prompt. A fork
 never registers board, sidekick or sessions dynamic tools, including on a
@@ -92,6 +104,36 @@ source history and unsupported native fork operations yield
 references fail with `invalid-session` before launching a native child. Native
 error details never reach the host-facing error message.
 
+
+## History pages (Codex resume and fork)
+
+- After `initialize` has answered, the bridge follows `nextCursor` for at most 49
+  further pages (`MAX_HISTORY_PAGES`, 50 pages in total), one request at a time,
+  each bounded to 20 s. A page that cannot be read (error, timeout, a malformed
+  answer) ends the walk silently: the chat is already open and usable, the newer
+  turns stay, there is never a hole in the middle, and nothing waits on it.
+- Each page becomes `{type:'historyPage',blocks}` events. The blocks are oldest
+  first and go before every block already shown; a block whose id is already
+  shown (from the newest page, or updated live) is never replaced by its older
+  copy and is not repeated. A page larger than 4 MiB is split into several events,
+  sent newest part first so each lands before the others. A block whose text is
+  over 512 K characters keeps its head and tail around an explicit omission
+  marker and sets `truncated:true`. No frame comes near the 32 MiB frame cap.
+- Chat files of older turns (`file` events, within the shared 200 per session)
+  follow the blocks of their page.
+- `snapshot()` holds at most about 12 MiB of the newest blocks. When older ones do
+  not fit, one custom block (`codex-history-omitted`, "Earlier Codex history is
+  not shown.") comes first, so a snapshot read after pages arrived never meets a
+  frame over the cap.
+- Thread notifications that arrive while the thread opens (before the first page
+  is applied) are held and replayed after it, so a live `item/completed` or
+  `turn/completed` always wins over the history snapshot it raced with. A turn
+  that completed live is never restored as the active turn from a stale
+  `inProgress` page, and does not make an `active` thread status fail to resolve.
+- Host and WebView: `NativeEvent::HistoryPage` becomes the additive workspace v15
+  event `{type:'historyPage',blocks}` (ADR-075). The transcript state puts the
+  blocks it does not show yet before the shown ones and changes only the
+  revision when nothing is new.
 
 ## Authenticated coordinator tool (optional)
 A managed run may enable `coordination: true` in host-private config. Ordinary sessions omit it. Factories receive optional third callback `coordinatorRequest(operation, {toolCallId, signal?})`; register a native `workspace` tool only when enabled and the callback exists. This does not replace a native model/tool loop or claim native daemon messaging support.
@@ -199,6 +241,52 @@ the adapter emits `unsupported-sessions-tool-resume`, registers no new tool,
 and refuses sessions calls without invoking the host. A saved sessions tool
 continues to work normally. Board and Fusion resume behavior is unchanged.
 
+## File events (chat files)
+
+An additive event tells the host that a tool block touched a file, so the chat
+can show it. It carries only a location or the bytes; the path is never added to
+block text beyond what the block already shows.
+
+- `{type:'file',blockId,path,origin,mimeType?}`: `path` is absolute (a relative
+  native path is resolved against the session `cwd`; no `..` normalisation beyond
+  that). `mimeType` is set only for a known image extension (png, jpeg, gif, webp).
+- `{type:'file',blockId,origin,inline:{mimeType,base64}}`: bytes the agent
+  returned. `base64` is strict base64 of at most 20 MiB (27,962,028 characters);
+  `mimeType` is one of the image types above or an audio type (wav, mpeg, mp3,
+  ogg, webm, mp4, aac, flac). Larger, malformed or other media is dropped.
+- `blockId` is the id of the tool block the file belongs to. `origin` is
+  `written` (an edit tool changed or created it), `read` (a read tool opened an
+  image), `generated` (an image generation tool saved it) or `returned` (the
+  agent handed it back as media or a `file:` link).
+- An adapter emits at most 200 file events per session and never the same
+  block and path (or payload) twice. A tool that is still running reports its
+  files only when it completes, so a changed path is not announced early. A
+  malformed native value never fails the turn.
+- Consumers must ignore an unknown `origin` or a frame they cannot use; the host
+  treats a path as untrusted input and a `file` event as display metadata, not
+  authority to read anything outside what its own policy allows.
+
+Sources: Claude Code `Write`/`Edit`/`MultiEdit`/`NotebookEdit` (`file_path`,
+`notebook_path`; written) and `Read` of an image (read), live and from a reopened
+transcript. Codex `fileChange` item paths (written), `imageView.path` (read) and
+`imageGeneration` (`savedPath`, else an inline `result`; generated). ACP and
+Hermes: completed `edit` tool `locations` and `diff` content paths (written),
+completed `read` tool `locations` with an image extension (read), `image` and
+`audio` content (inline, returned) and `resource_link` `file:` URIs (path,
+returned). The Hermes adapter remembers what a call announced (kind, locations,
+content) only while the call is in flight: it forgets it when the call completes
+or fails and clears every call still open when the turn ends; only calls in
+flight (at most 256) count against the cap, however long the chat is. Pi (and the Nano lane): `write`/`edit` `args.path` (written), `read`
+of an image path (read) and image result parts (inline; `read` for the `read`
+tool, otherwise returned). The host's read-only Pi projection restores the path
+files of a reopened chat by the same rules (`write`/`edit`, and a successful
+`read` of a png, jpg, jpeg, gif or webp path; a leading `@` is dropped), on the
+active branch only. Inline result images are not restored.
+
+The Rust side parses the frame into `piui_runtime::chat_file::ChatFileEvent`
+(`session_id`, `block_id`, source `Path` or `Inline{mime, bytes}`, `origin`);
+a malformed `file` frame is dropped and never ends the runtime.
+
 ## Terminal turn outcome
 `idle` is a session readiness state, NOT proof of task success. Native providers may end failed/interrupted turns by returning to idle. Each adapter MUST emit `{type:'turnCompleted',outcome:'succeeded'|'failed'|'interrupted'}` exactly once after an admitted turn reaches its native terminal outcome, before final idle. Native stop reasons/turn status determine outcome, not absence of transport errors. A failed command that was never admitted rejects normally; a transport loss with no terminal proof stays uncertain. Host tracks outcome with turn generation; initial idle or later idle cannot overwrite it. Scheduler success requires explicit succeeded, never status-only idle. Pi: `agent_end` fires once per low-level run and may be followed by an automatic retry (`willRetry:true`), a compaction retry or a queued follow-up run, so the turn completes on `agent_settled` (Pi >= 0.80.4); the last assistant `stopReason` of the whole turn decides the outcome. Settlement support is decided when the adapter starts, before any work is admitted, from the `@earendil-works/pi-coding-agent` package of the entry script (walking up from it) or of a launcher's global install (`node_modules` beside it, or `../lib/node_modules`), and is otherwise learned from the first `agent_settled`. There are three modes. Version known and >= 0.80.4: only `agent_settled` completes a turn. Version known and < 0.80.4 (a positively identified legacy runtime): the first `agent_end` whose `willRetry` is not `true` completes it. Version unknown (a launcher or wrapper with no discoverable package): a bare `agent_end(willRetry:false)` never completes the turn, because compaction recovery or a queued continuation may follow it. The adapter waits for `agent_settled`, and otherwise arms a 250 ms quiet timer that any `agent_start`, `auto_retry_start` or compaction event cancels; when it fires the adapter reads `get_state`, and only a runtime that is not streaming, not compacting and holds no queued messages completes the turn (a busy answer re-arms the timer; a failed probe counts as quiet). The first `agent_settled` seen switches the adapter to the settled mode. A failed assistant message does not emit its `error` event when it ends: Pi may retry it, and the host pauses its composer queue on an `error`. The adapter holds the safe summary and emits it, immediately before `turnCompleted:"failed"`, only if the settled turn's last assistant message still failed; a retried failure that succeeds emits no `error`. This is host-private metadata, not a persisted replacement transcript.
 
@@ -208,10 +296,10 @@ An assistant answer must have the same block `id` while it streams and when the 
 | Harness | Id | Live source | Resumed source |
 |---|---|---|---|
 | Claude Code | `claude-assistant-<hash>` / `claude-thinking-<hash>` of `<message id>:<rank>` | `stream_event` `message_start` `message.id`; `rank` = order of the text (or thinking) `content_block_start` within that message; the whole `assistant` message repeats the id | transcript `message.id` of each entry; `rank` = order of the text (or thinking) parts of that message id along the active branch (Claude Code writes one entry per content block, so entry uuids and content indexes cannot name a block) |
-| Pi | `pi-assistant-<hash>` / `pi-thinking-<hash>` of `<message timestamp>:<rank>` | `message_start` / `message_update` `message.timestamp`; `rank` = order of the text (or thinking) content block within that message | session entry `message.timestamp` (the same value, persisted unchanged); history shows one joined block per message, with rank 0 |
+| Pi | `pi-assistant-<hash>` / `pi-thinking-<hash>` of `<message timestamp>:<rank>` | `message_start` / `message_update` `message.timestamp`; `rank` = order of the text (or thinking) content block within that message | session entry `message.timestamp` (the same value, persisted unchanged); history shows one block per text (or thinking) content block with the same rank, so every live id has a history counterpart |
 | Codex | the native `ThreadItem.id` | `item/agentMessage/delta` `itemId`, `item/started`, `item/completed` | `thread/resume` turn items |
 
-Pi cannot use the session entry id: Pi allocates it in `appendMessage` after it has notified listeners of `message_end`, so no RPC event carries it. The assistant message `timestamp` is set once when streaming starts and is stored unchanged. A message that lacks a usable id or timestamp, or whose derived id is already taken, falls back to a unique live id (`claude-<kind>-<instance>-<n>`, `pi-stream-<n>`) or, in history, to the previous uuid/entry-derived id (`claude-history-*`, `pi-entry-*`). User and tool blocks keep their existing ids. A Pi assistant message that carries several text blocks streams one block per content block but is shown in history as one block, whose id is that of rank 0; the id of a later rank has no history counterpart.
+Pi cannot use the session entry id: Pi allocates it in `appendMessage` after it has notified listeners of `message_end`, so no RPC event carries it. The assistant message `timestamp` is set once when streaming starts and is stored unchanged. A message that lacks a usable id or timestamp, or whose derived id is already taken, falls back to a unique live id (`claude-<kind>-<instance>-<n>`, `pi-stream-<n>`) or, in history, to the previous uuid/entry-derived id (`claude-history-*`, `pi-entry-*`). The Pi bridge hashes `<entryId>:<kind>:<rank>` (`<entryId>:tool:<callId>` for a tool call) for that fallback and the host's read-only projection uses the same formula, so a chat shows the same ids before and after it is reopened; the bare-entry hash an earlier release gave an answer still resolves to that answer's text. User and tool blocks keep their existing ids. A Pi assistant message that carries several text blocks streams one block per content block and is read back the same way. History follows the active branch only (`get_entries` `leafId`, walking `parentId`; the host's read-only projection takes the newest entry as the leaf and walks `parentId` the same way for blocks, full answer text and chat files, and shows every entry in file order only for a file without a tree); a thinking block, a tool call (linked to its result by `toolCallId`, shown after the message's text blocks, id `pi-tool-<hash of toolCallId>`) and a compaction entry are blocks as they are live. `message_update` events are classified by family: `text_*` stream the answer, `thinking_*` stream reasoning, `toolcall_*` never become prose (the tool block is built from `tool_execution_*`), and an unknown update type is one generic fallback per name.
 
 
 ## Composer operations
@@ -418,7 +506,7 @@ turn, a shell-tool turn and `thread/resume`. Two incompatibilities were fixed:
 | Surface | 0.165.0 | Bridge |
 |---|---|---|
 | Service tier | The Fast tier is reported as `priority` (`model/list` `serviceTiers`, `thread/start` and `thread/settings/updated` `serviceTier`); `fast` is still accepted as an alias, `default` is standard | **Fixed**: `fast` and `priority` both read as Fast (a default thread showed Standard while running Fast); still sends `fast` / `default` |
-| Control-plane notifications | `account/updated`, `thread/queue/changed`, hook, project, skills and attachment changes arrive during ordinary turns | **Fixed**: dropped (`QUIET_NOTIFICATIONS`) instead of "Unsupported Codex event" blocks; `warning`, `guardianWarning` and `model/rerouted` keep the generic fallback |
+| Control-plane notifications | `account/updated`, `thread/queue/changed`, hook, project, skills and attachment changes arrive during ordinary turns | **Fixed**: dropped (`QUIET_NOTIFICATIONS`) instead of "Unsupported Codex event" blocks; `warning` renders its bounded user-facing message and `guardianWarning` and `model/rerouted` keep the generic fallback |
 
 ### Protocol compatibility 0.157.1 -> 0.163.0
 
@@ -465,12 +553,14 @@ is identical.
 | `initialize` / `initialized`, `userAgent` | Unchanged for every field the bridge sends or reads | Version gate above |
 | `--disable` feature flags | All seven registered with the same stage/default at every version | Unchanged |
 | `thread/start` (`model`, `modelProvider`, `serviceTier`, `cwd` omitted, `baseInstructions`, `developerInstructions`, `config`, `permissions`, `approvalPolicy`, `ephemeral`, `dynamicTools`) | Additive only (`projectId`; `daybreakEnabled`; `personality` deprecated) | Unchanged |
+| Concurrent `thread/resume` | Another Codex process owns the native writer lock | The exact -32600 active-writer error for the requested thread maps to `native-thread-busy`, allowing the host to show saved history. |
 | `thread/resume` (`excludeTurns`, `initialTurnsPage{sortDirection,itemsView}`) | `excludeTurns` stable from 0.153.4; still no `dynamicTools` | Unchanged; managed resume stays `unsupported-coordinator-resume` |
 | Thread responses (`thread`, `model`, `modelProvider`, `serviceTier`, `cwd`, `sandbox`, `activePermissionProfile.id` `:read-only`/`:workspace`/`:danger-full-access`, `approvalPolicy`, `reasoningEffort`, `initialTurnsPage`) | Additive (`disabledPluginIds`, resume `collaborationMode`) | Unchanged; still verifies cwd and effective permissions |
 | `turn/start` (`input` text with snake_case `text_elements`, `model`, `serviceTier`, `effort`, `sandboxPolicy`), `turn/steer{expectedTurnId}`, `turn/interrupt`, `thread/compact/start`, `thread/name/set`, `thread/unsubscribe`, `thread/settings/update` | Additive only (`turnTrigger`, `toolOutput`, `serviceTierForTurn`; `disabledPluginIds`) | Unchanged |
 | `model/list{cursor,includeHidden}`, `skills/list`, `config/read`, `mcpServerStatus/list` | Params unchanged; additive response fields only (`Model.multiAgentVersion`; `Model.availableAccessPrograms`, …) | Unchanged |
 | `thread/settings/updated` | `{threadId, threadSettings{model, modelProvider, serviceTier, effort, …}}` at every version | **Fixed**: the bridge read flat fields and `reasoningEffort`, so settings changed outside `setModel` were ignored on every version |
 | Turn/item stream (`turn/*`, `item/*`, deltas, `turn/diff\|plan/updated`, `thread/tokenUsage/updated`, `thread/status/changed`, `serverRequest/resolved`, `error`) | Unchanged | Unchanged |
+| `warning` | Codex 0.169.0 declares an optional thread target and a user-facing message | A matching-thread or global warning produces a plain-text timeline summary at the existing native text limit. Other payload fields are omitted. Malformed warnings retain the generic fallback. |
 | `configWarning`, `deprecationNotice` | Present at every version; 0.157.1 sends startup `configWarning`s right after `initialize` (the real handshake emitted one for an unrecognized key in the user's config) | **Fixed**: fixed `resources().warnings` text instead of an "Unsupported Codex event" block; native text and paths dropped |
 | `account/gatewayOAuth/changed` | New in 0.157.1 (gateway sign-in state, no thread) | Ignored as control plane, like `account/rateLimits/updated` |
 | `thread/attachment/updated` | New in 0.157.1, only after client attachment calls | Never triggered (generic fallback) |
@@ -521,6 +611,20 @@ mode, message, requestedSchema, _meta}`; a request without `mode` (MCP before
   same path (the request reaches the Inbox like any native approval); nothing
   is accepted automatically.
 
+
+### Reasoning parts and image generation
+
+Reasoning is accumulated per part, not per item: `item/reasoning/summaryTextDelta`
+parts are keyed by `summaryIndex`, `item/reasoning/textDelta` parts by
+`contentIndex`, and the two channels are kept apart. `item/reasoning/summaryPartAdded`
+opens a new summary part. The shown text is the summary parts, then the
+content parts, non-empty parts joined with a blank line (`\n\n`); what streamed equals the text of the completed `reasoning` item, so
+a completed item never rewrites the shown text. The Rust history projection joins
+reasoning with a single newline; hosts must not rely on the two being identical.
+
+An `imageGeneration` item is a tool block (label "Image generation", tool name
+`image-generation`) and, when it carries `savedPath` (or an inline `result`
+image), a `generated` file event.
 
 ## ACP agents (`acp.mjs`, harness `acp:<descriptor id>`)
 
@@ -645,10 +749,14 @@ the selected Nano model. A mismatched source or mode fails before inference.
   mid-turn emits no outcome (uncertain). Follow-ups queue like Hermes; steer and
   compaction are unsupported.
 - Updates: `agent_message_chunk`/`agent_thought_chunk` stream as blocks plus text
-  deltas; `user_message_chunk` only during a replay; `tool_call` and
+  deltas, one text stream per `messageId` (an update without one continues the
+  current stream); `user_message_chunk` only during a replay; `tool_call` and
   `tool_call_update` become one tool block per call (text content, a unified
   diff built from `diff` content, a scalar summary of `rawInput`; at most ~16
-  KiB); `plan` is one checklist block per turn; `available_commands_update`
+  KiB). A new tool call ends the text stream before it; an update of a tool
+  that is already shown does not. When the turn ends, the stop reason decides
+  how still-open blocks end (`cancelled` is interrupted, a refusal or other
+  failure is failed, `end_turn` is complete); `plan` is one checklist block per turn; `available_commands_update`
   feeds `resources()` (as skills); `current_mode_update` and
   `config_option_update` update the settings; `usage_update` and
   `session_info_update` are ignored; anything else is a generic fallback block.
@@ -784,6 +892,19 @@ permission mode, fast mode) stay authoritative. No provider client or model loop
   over 64 MiB shown as one unreadable entry) and, when the active chain holds
   more than 32 MiB of text, projects only its newest part behind one custom
   "Earlier Claude Code history is not shown." block.
+- Internal user text: only Claude Code's own native markers are hidden, matched
+  as the whole entry: an element named `command-name`, `command-message`,
+  `command-args`, `local-command-caveat`, `local-command-stdout`,
+  `local-command-stderr`, `system-reminder`, `task-notification`, `bash-input`,
+  `bash-stdout`, `bash-stderr`, `ide_opened_file` or `ide_selection` that closes
+  itself at the end, and a bare `[Request interrupted by user ...]` line. A
+  person's message that starts with another XML-like tag (`<task>`, `<div>`) is
+  shown. The host's read-only projection (`workspace_history.rs`) uses the same list.
+- Edit diffs: for `Edit`, `MultiEdit` and `Write` the native result's
+  `structuredPatch` (`tool_use_result`, transcript `toolUseResult`) becomes the
+  tool block text in the diff form the transcript renders: an `update: <path>`
+  header (`add: <path>` for a created file) followed by unified hunks (`@@ -a,b +c,d @@` and ` `/`-`/`+` lines), bounded
+  like other tool text; a failed or patch-less result keeps the plain output.
 - Catalog: models map `value`/`displayName`/`supportedEffortLevels` (disabled
   rows dropped, provider `anthropic`, `supportsFast` always `false`); commands
   map to `skill` resources. Subagent types are omitted (no matching resource kind).
