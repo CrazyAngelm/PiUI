@@ -847,6 +847,15 @@ test("an originator with spaces still names the Codex version", async () => {
   finally { await adapter.dispose(); }
 });
 
+test("Codex identifies an existing writer when resuming the same native thread", async () => {
+  const events = [];
+  await assert.rejects(
+    createCodexAdapter({ ...config, nativeId: "thread-resumed", runtimeArgs: [fixture, "--active-writer"] }, event => events.push(event)),
+    error => error.bridgeCode === "native-thread-busy" && !error.safeMessage.includes("thread-resumed"),
+  );
+  assert.equal(events.some(event => event.type === "binding"), false);
+});
+
 test("a newer app-server still has to pass the startup checks: protocol drift fails closed with a typed error", async () => {
   const newer = "--codex-version=0.165.0";
   const startup = [
@@ -887,10 +896,9 @@ test("known housekeeping notifications of 0.165 are ignored without a block or a
   const events = [];
   const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--codex-version=0.165.0", "--housekeeping"] }, (event) => events.push(event));
   try {
-    // The fixture's own `warning` (after its unsupported attestation request is
-    // answered) is the only fallback: account/updated and remoteControl/status/changed add none.
-    await waitFor(() => adapter.snapshot().blocks.some((block) => block.safeSummary === "Unsupported Codex event: warning"));
-    assert.deepEqual(adapter.snapshot().blocks.filter((block) => block.fallback).map((block) => block.safeSummary), ["Unsupported Codex event: warning"]);
+    // Wait for the final fixture notification before inspecting the transcript.
+    await waitFor(() => adapter.snapshot().blocks.some((block) => block.safeSummary === "unsupported request rejected"));
+    assert.deepEqual(adapter.snapshot().blocks.filter((block) => block.fallback).map((block) => block.safeSummary), []);
     assert.doesNotMatch(JSON.stringify({ events, snapshot: adapter.snapshot() }), /account\/updated|remoteControl|planType/);
     assert.deepEqual(events.filter((event) => event.type === "error").map((event) => event.message), ["Codex requested an unsupported host operation."]);
   } finally { await adapter.dispose(); }
@@ -1394,12 +1402,26 @@ for (const version of ["0.147.0", "0.153.4", "0.157.1", "0.163.0", "0.165.0"]) {
       assert.deepEqual(snapshot.model, { id: "fixture-model-2", provider: "openai", name: "fixture-model-2" });
       assert.equal(snapshot.thinkingLevel, "high");
       assert.equal(snapshot.serviceTier, "fast");
-      // Only the fixture's generic `warning` stays on the fallback path.
-      assert.deepEqual(snapshot.blocks.filter((block) => block.fallback).map((block) => block.safeSummary), ["Unsupported Codex event: warning"]);
+      assert.deepEqual(snapshot.blocks.filter((block) => block.fallback).map((block) => block.safeSummary), []);
       assert.deepEqual(events.filter((event) => event.type === "turnCompleted"), [{ type: "turnCompleted", outcome: "succeeded" }]);
     } finally { await adapter.dispose(); }
   });
 }
+
+test("Codex presents bounded user-facing warning messages and keeps malformed warnings on the safe fallback", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--warning-events"] }, event => events.push(event));
+  try {
+    const { blocks } = adapter.snapshot();
+    const warnings = blocks.filter(block => block.label === "Codex warning");
+    assert.ok(warnings.some(block => block.kind === "custom" && !block.fallback && block.safeSummary === "Global native warning"));
+    const long = warnings.find(block => block.safeSummary.startsWith("Thread warning "));
+    assert.equal(long.safeSummary.length, 16 * 1024);
+    assert.ok(long.safeSummary.endsWith("…"));
+    assert.ok(blocks.some(block => block.fallback && block.safeSummary === "Unsupported Codex event: warning"));
+    assert.doesNotMatch(JSON.stringify({ events, blocks }), /PRIVATE_(WARNING|OTHER_THREAD)/);
+  } finally { await adapter.dispose(); }
+});
 
 test("configuration and deprecation warnings become fixed resource warnings", async () => {
   const events = [];
@@ -1759,8 +1781,7 @@ test("0.165 control-plane notifications stay out of the transcript and the prior
   try {
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(adapter.snapshot().serviceTier, "fast");
-    // Only the fixture's generic `warning` stays on the fallback path.
-    assert.deepEqual(adapter.snapshot().blocks.filter((block) => block.fallback).map((block) => block.safeSummary), ["Unsupported Codex event: warning"]);
+    assert.deepEqual(adapter.snapshot().blocks.filter((block) => block.fallback).map((block) => block.safeSummary), []);
   } finally { await adapter.dispose(); }
 });
 

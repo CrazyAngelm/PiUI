@@ -212,6 +212,10 @@ const disabledFeatures = process.argv.flatMap((argument, index, all) => (argumen
 input.on("line", (line) => {
   const message = JSON.parse(line);
   if (message.id !== undefined && message.method !== undefined) {
+    if (message.method === "thread/resume" && process.argv.includes("--active-writer")) {
+      send({ id: message.id, error: { code: -32600, message: `thread ${message.params.threadId} already has an active writer` } });
+      return;
+    }
     if (message.method === rejectStartup) {
       send({ id: message.id, error: { code: -32601, message: "PRIVATE_NATIVE_DETAIL method not found" } });
       return;
@@ -250,6 +254,12 @@ input.on("line", (line) => {
       send({ method: "account/updated", params: { authMode: "chatgpt", planType: "plus", emittedAtMs: 1 } });
       send({ method: "account/updated", params: { authMode: "chatgpt", planType: "plus", emittedAtMs: 2 } });
       send({ method: "remoteControl/status/changed", params: { status: "disabled", serverName: "fixture", installationId: "fixture-installation", environmentId: null } });
+    }
+    if (process.argv.includes("--warning-events")) {
+      send({ method: "warning", params: { threadId: null, message: "Global native warning", details: "PRIVATE_WARNING_METADATA" } });
+      send({ method: "warning", params: { threadId, message: "Thread warning\n" + "x".repeat(17000) } });
+      send({ method: "warning", params: { threadId: "other-thread", message: "PRIVATE_OTHER_THREAD" } });
+      send({ method: "warning", params: { threadId, message: { unexpected: "PRIVATE_WARNING_OBJECT" } } });
     }
     if (process.argv.includes("--config-warning")) {
       send({ method: "configWarning", params: { summary: "PRIVATE_CONFIG_DETAIL `features.fixture` is ignored.", details: null, path: "C:\\PRIVATE_CONFIG_PATH\\config.toml" } });

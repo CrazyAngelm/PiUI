@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { releasePlan } from './release-build.mjs';
-import { fileManifest, pinnedPiVersion } from './nano-runtime/stage.mjs';
+import { fileManifest, pinnedPiVersion, readCachedRuntime } from './nano-runtime/stage.mjs';
 import { ReleaseConfigError, isTauriPublicKey, releaseConfig, writeReleaseConfig } from './release-config.mjs';
 
 // minisign's published test public key (from minisign-verify's tests), in the
@@ -180,6 +181,30 @@ test('the Nano bundle lock pins Pi and each npm registry package', () => {
   assert.throws(() => pinnedPiVersion(lock, '^1.5.2'), /must pin/);
   delete lock.packages[`node_modules/${pi}`].integrity;
   assert.throws(() => pinnedPiVersion(lock, version), /must pin/);
+});
+
+test('a Nano release reuses stable inputs and refuses a changed cache file', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'piui-runtime-cache-'));
+  try {
+    assert.equal(readCachedRuntime(join(directory, 'missing'), '1.5.2'), null);
+    const archive = join(directory, 'nano-runtime.tar.zst');
+    const manifest = join(directory, 'nano-runtime-files.json');
+    const hash = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
+    writeFileSync(archive, 'fixture');
+    writeFileSync(manifest, '{"node.exe":{}}');
+    writeFileSync(join(directory, 'checksums.json'), JSON.stringify({ archive: hash(archive), manifest: hash(manifest) }));
+    const cached = readCachedRuntime(directory, '1.5.2');
+    assert.equal(cached.files, 1);
+    assert.equal(cached.env.PIUI_NANO_RUNTIME_ARCHIVE, archive);
+    assert.deepEqual(readCachedRuntime(directory, '1.5.2'), cached);
+    writeFileSync(manifest, '{}');
+    assert.throws(() => readCachedRuntime(directory, '1.5.2'), /Corrupt Nano runtime/);
+    writeFileSync(manifest, '{"node.exe":{}}');
+    writeFileSync(archive, 'changed');
+    assert.throws(() => readCachedRuntime(directory, '1.5.2'), /Corrupt Nano runtime/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('the Nano bundle manifest records relative paths, lengths and SHA-256 and rejects links', () => {

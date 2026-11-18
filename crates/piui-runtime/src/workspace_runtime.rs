@@ -1387,6 +1387,7 @@ pub const fn builtin_verified_versions(kind: HarnessKind) -> Option<&'static str
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BridgeFailureCode {
+    NativeThreadBusy,
     TurnActive,
     NoActiveTurn,
     UnsupportedMethod,
@@ -2910,6 +2911,7 @@ fn map_bridge_failure(code: &str) -> BridgeFailureCode {
         "native-command-rejected" => BridgeFailureCode::NativeCommandRejected,
         "already-initialized" => BridgeFailureCode::AlreadyInitialized,
         "not-initialized" => BridgeFailureCode::NotInitialized,
+        "native-thread-busy" => BridgeFailureCode::NativeThreadBusy,
         "not-running" => BridgeFailureCode::NotRunning,
         "native-protocol-mismatch"
         | "unsupported-native-version"

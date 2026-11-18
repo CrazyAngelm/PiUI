@@ -9,6 +9,10 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+# Node can inherit PowerShell 7's PSModulePath while starting Windows
+# PowerShell. Load the signing cmdlet shipped with this host.
+Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $configPath = Join-Path $root "apps/desktop/src-tauri/tauri.conf.json"
 $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json

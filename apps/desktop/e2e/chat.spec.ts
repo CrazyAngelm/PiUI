@@ -70,6 +70,48 @@ test.describe('new chat', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'What should we work on?' })).toBeVisible();
   });
 
+  test('a Codex chat in use shows its transcript and resumes when the writer releases it', async ({ lab, page }) => {
+    await lab.open('demo');
+    await lab.openSettings();
+    await page.getByRole('group', { name: 'Language' }).getByRole('radio', { name: 'Русский' }).click();
+    // The first open gets the host's read-only fallback. Resume reaches the
+    // ordinary Lab host, modelling a writer that released its thread.
+    await page.evaluate(async (url) => {
+      const { workspaceHost }: typeof import('../src/host-api/workspaceClient') = await import(url);
+      const request = workspaceHost.request;
+      workspaceHost.request = async (command) => {
+        if (command.type !== 'openSession') return request(command);
+        workspaceHost.request = request;
+        const snapshot = await workspaceHost.snapshot(command.sessionId);
+        return { type: 'session', snapshot: {
+          ...snapshot, session: { ...snapshot.session, status: 'closed' },
+          blocks: [...snapshot.blocks, {
+            id: 'codex-warning', kind: 'custom', status: 'complete', label: 'Codex warning',
+            text: 'Native warning text', fallback: false,
+          }],
+          capabilities: { ...snapshot.capabilities, prompt: {
+            supported: false, reason: 'This chat is open in another Codex process.', enforcement: 'unsupported',
+          } },
+        } };
+      };
+    }, '/src/host-api/workspaceClient.ts');
+    await page.getByRole('navigation', { name: 'Навигация рабочей области' })
+      .getByRole('button', { name: /^Route host calls through one transport/ }).click();
+    const messages = page.getByRole('region', { name: 'Сообщения диалога' });
+    await messages.waitFor(); // First load of the lazy chat view in an isolated run.
+    await expect(messages).toContainText('Does anything still import Tauri directly');
+    const warning = messages.locator('details').filter({ has: page.getByText('Предупреждение Codex', { exact: true }) });
+    await warning.locator('summary').click();
+    await expect(warning).toContainText('Native warning text');
+    await expect(warning).not.toContainText('Режим совместимости');
+    await expect(page.getByText(/Этот чат открыт в другом процессе Codex/)).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Сообщение', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Возобновить', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('textbox', { name: 'Сообщение', exact: true })).toBeEnabled();
+    await expect(page.getByText(/Этот чат открыт в другом процессе Codex/)).toHaveCount(0);
+  });
+
   test('safe mode keeps history readable and refuses to start agents', async ({ lab, page }) => {
     // A page-local clipboard double preserves the user's real clipboard.
     await page.addInitScript(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {

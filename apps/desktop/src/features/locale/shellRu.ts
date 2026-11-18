@@ -199,6 +199,8 @@ export const shellRu: Readonly<Record<string, string>> = {
   "Teams": "Команды",
   "The agent can read but not change files": "Агент читает, но не меняет файлы",
   "The agent process is stopped. The transcript stays readable.": "Процесс агента остановлен. Переписка остаётся доступной.",
+  "Codex warning": "Предупреждение Codex",
+  "Another Codex process is using this chat. You can read its history here. Resume after the other process releases it.": "Этот чат открыт в другом процессе Codex. Здесь можно читать переписку. Когда другой процесс освободит чат, нажмите «Возобновить».",
   "The chat could not be opened": "Не удалось открыть чат",
   "The chat is removed from Nano Desktop. The harness keeps its own history.": "Чат будет удалён из Nano Desktop. Агент сохранит свою историю.",
   "The draft has unsaved changes.": "В черновике есть несохранённые изменения.",

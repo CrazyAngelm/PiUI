@@ -394,10 +394,10 @@ fn parse_and_validate_header(
                 .ok_or(WorkspaceHistoryError::InvalidHeader)?;
             // Codex's immutable app-server thread id is `id`; `session_id` is
             // a distinct execution-session identity in current rollouts.
-            let id = string_field(payload, &["id"])
+            let id = crate::raw_string_field(payload, &["id"])
                 .filter(|id| !id.is_empty())
                 .ok_or(WorkspaceHistoryError::InvalidHeader)?;
-            let cwd = string_field(payload, &["cwd"])
+            let cwd = crate::raw_string_field(payload, &["cwd"])
                 .filter(|cwd| Path::new(cwd).is_absolute())
                 .ok_or(WorkspaceHistoryError::InvalidHeader)?;
             Ok((id, cwd))
@@ -2941,6 +2941,21 @@ mod tests {
         assert!(projection.timeline_blocks()[0].fallback);
         assert_eq!(projection.timeline_blocks()[0].preview, None);
         assert_eq!(projection.report.parse_state, ParseState::Unsupported);
+    }
+
+    #[test]
+    fn codex_header_identity_keeps_long_paths_and_repeated_spaces() {
+        let cwd =
+            std::env::temp_dir().join(format!("two  spaces-{}", "x".repeat(crate::PREVIEW_LIMIT)));
+        let header = serde_json::json!({
+            "type": "session_meta", "payload": { "id": "native-id", "cwd": cwd }
+        })
+        .to_string();
+        let (id, path) =
+            parse_and_validate_header(Some(&(1, header.as_bytes())), WorkspaceHistoryFormat::Codex)
+                .expect("valid Codex header");
+        assert_eq!(id, "native-id");
+        assert_eq!(Path::new(&path), cwd);
     }
 
     #[test]

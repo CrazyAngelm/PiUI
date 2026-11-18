@@ -16,6 +16,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { versionProblems } from './check-version.mjs';
 import { stageWindowsNanoRuntime } from './nano-runtime/stage.mjs';
 import { PLATFORMS, ReleaseConfigError, releaseConfig, writeReleaseConfig } from './release-config.mjs';
 
@@ -68,6 +69,12 @@ async function main(argv) {
     return;
   }
   const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
+  const { problems } = versionProblems(root);
+  if (problems.length) {
+    console.error(problems.join('\n'));
+    process.exitCode = 1;
+    return;
+  }
   let result;
   try {
     result = dryRun ? { ...releaseConfig(process.env, platform), path: '<target/release-config/tauri.release.conf.json>' } : writeReleaseConfig(root, process.env, platform);
@@ -98,28 +105,24 @@ async function main(argv) {
     console.log(`> ${step.command.join(' ')}`);
     if (dryRun) continue;
     const staged = bundlesNano ? await stageWindowsNanoRuntime() : null;
-    try {
-      const env = staged ? { ...process.env, ...staged.env } : process.env;
-      if (staged) {
-        console.log(`Nano runtime Pi ${staged.env.PIUI_NANO_RUNTIME_VERSION}: ${staged.files} files, ${staged.bytes} archive bytes.`);
-        const smoke = {
-          cwd: root,
-          command: ['cargo', 'test', '--release', '--locked', '-p', 'piui-runtime', '--lib', 'bundled_nano'],
-        };
-        console.log(`> ${smoke.command.join(' ')}`);
-        const smokeStatus = run(smoke, env);
-        if (smokeStatus !== 0) {
-          process.exitCode = smokeStatus;
-          return;
-        }
-      }
-      const status = run(step, env);
-      if (status !== 0) {
-        process.exitCode = status;
+    const env = staged ? { ...process.env, ...staged.env } : process.env;
+    if (staged) {
+      console.log(`Nano runtime Pi ${staged.env.PIUI_NANO_RUNTIME_VERSION}: ${staged.files} files, ${staged.bytes} archive bytes.`);
+      const smoke = {
+        cwd: root,
+        command: ['cargo', 'test', '--release', '--locked', '-p', 'piui-runtime', '--lib', 'bundled_nano'],
+      };
+      console.log(`> ${smoke.command.join(' ')}`);
+      const smokeStatus = run(smoke, env);
+      if (smokeStatus !== 0) {
+        process.exitCode = smokeStatus;
         return;
       }
-    } finally {
-      staged?.dispose();
+    }
+    const status = run(step, env);
+    if (status !== 0) {
+      process.exitCode = status;
+      return;
     }
   }
 }

@@ -487,8 +487,12 @@
               <p class="notice">{$t("This chat's worktree was removed. Its history stays readable; start a new chat to keep working.")}</p>
             {:else if snapshot.session.status === 'closed'}
               <p class="notice">
-                {$t('The agent process is stopped. The transcript stays readable.')}
-                <Button size="sm" variant="ghost" onclick={() => void store.openSession(session.id)}>{$t('Resume')}</Button>
+                {#if !snapshot.capabilities.prompt.supported && snapshot.capabilities.prompt.reason === 'This chat is open in another Codex process.'}
+                  {$t('Another Codex process is using this chat. You can read its history here. Resume after the other process releases it.')}
+                {:else}
+                  {$t('The agent process is stopped. The transcript stays readable.')}
+                {/if}
+                <Button size="sm" variant="ghost" disabled={loadingNow} onclick={() => void (active ? store.openSession(session.id) : store.showSession(session.id))}>{$t('Resume')}</Button>
               </p>
             {:else if session.runId}
               <!-- Run members follow their run's saved settings (ADR-044). -->

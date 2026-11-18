@@ -506,7 +506,7 @@ turn, a shell-tool turn and `thread/resume`. Two incompatibilities were fixed:
 | Surface | 0.165.0 | Bridge |
 |---|---|---|
 | Service tier | The Fast tier is reported as `priority` (`model/list` `serviceTiers`, `thread/start` and `thread/settings/updated` `serviceTier`); `fast` is still accepted as an alias, `default` is standard | **Fixed**: `fast` and `priority` both read as Fast (a default thread showed Standard while running Fast); still sends `fast` / `default` |
-| Control-plane notifications | `account/updated`, `thread/queue/changed`, hook, project, skills and attachment changes arrive during ordinary turns | **Fixed**: dropped (`QUIET_NOTIFICATIONS`) instead of "Unsupported Codex event" blocks; `warning`, `guardianWarning` and `model/rerouted` keep the generic fallback |
+| Control-plane notifications | `account/updated`, `thread/queue/changed`, hook, project, skills and attachment changes arrive during ordinary turns | **Fixed**: dropped (`QUIET_NOTIFICATIONS`) instead of "Unsupported Codex event" blocks; `warning` renders its bounded user-facing message and `guardianWarning` and `model/rerouted` keep the generic fallback |
 
 ### Protocol compatibility 0.157.1 -> 0.163.0
 
@@ -553,12 +553,14 @@ is identical.
 | `initialize` / `initialized`, `userAgent` | Unchanged for every field the bridge sends or reads | Version gate above |
 | `--disable` feature flags | All seven registered with the same stage/default at every version | Unchanged |
 | `thread/start` (`model`, `modelProvider`, `serviceTier`, `cwd` omitted, `baseInstructions`, `developerInstructions`, `config`, `permissions`, `approvalPolicy`, `ephemeral`, `dynamicTools`) | Additive only (`projectId`; `daybreakEnabled`; `personality` deprecated) | Unchanged |
+| Concurrent `thread/resume` | Another Codex process owns the native writer lock | The exact -32600 active-writer error for the requested thread maps to `native-thread-busy`, allowing the host to show saved history. |
 | `thread/resume` (`excludeTurns`, `initialTurnsPage{sortDirection,itemsView}`) | `excludeTurns` stable from 0.153.4; still no `dynamicTools` | Unchanged; managed resume stays `unsupported-coordinator-resume` |
 | Thread responses (`thread`, `model`, `modelProvider`, `serviceTier`, `cwd`, `sandbox`, `activePermissionProfile.id` `:read-only`/`:workspace`/`:danger-full-access`, `approvalPolicy`, `reasoningEffort`, `initialTurnsPage`) | Additive (`disabledPluginIds`, resume `collaborationMode`) | Unchanged; still verifies cwd and effective permissions |
 | `turn/start` (`input` text with snake_case `text_elements`, `model`, `serviceTier`, `effort`, `sandboxPolicy`), `turn/steer{expectedTurnId}`, `turn/interrupt`, `thread/compact/start`, `thread/name/set`, `thread/unsubscribe`, `thread/settings/update` | Additive only (`turnTrigger`, `toolOutput`, `serviceTierForTurn`; `disabledPluginIds`) | Unchanged |
 | `model/list{cursor,includeHidden}`, `skills/list`, `config/read`, `mcpServerStatus/list` | Params unchanged; additive response fields only (`Model.multiAgentVersion`; `Model.availableAccessPrograms`, …) | Unchanged |
 | `thread/settings/updated` | `{threadId, threadSettings{model, modelProvider, serviceTier, effort, …}}` at every version | **Fixed**: the bridge read flat fields and `reasoningEffort`, so settings changed outside `setModel` were ignored on every version |
 | Turn/item stream (`turn/*`, `item/*`, deltas, `turn/diff\|plan/updated`, `thread/tokenUsage/updated`, `thread/status/changed`, `serverRequest/resolved`, `error`) | Unchanged | Unchanged |
+| `warning` | Codex 0.169.0 declares an optional thread target and a user-facing message | A matching-thread or global warning produces a plain-text timeline summary at the existing native text limit. Other payload fields are omitted. Malformed warnings retain the generic fallback. |
 | `configWarning`, `deprecationNotice` | Present at every version; 0.157.1 sends startup `configWarning`s right after `initialize` (the real handshake emitted one for an unrecognized key in the user's config) | **Fixed**: fixed `resources().warnings` text instead of an "Unsupported Codex event" block; native text and paths dropped |
 | `account/gatewayOAuth/changed` | New in 0.157.1 (gateway sign-in state, no thread) | Ignored as control plane, like `account/rateLimits/updated` |
 | `thread/attachment/updated` | New in 0.157.1, only after client attachment calls | Never triggered (generic fallback) |
