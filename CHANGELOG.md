@@ -4,6 +4,12 @@ All notable changes to Nano Desktop (formerly PiUI) are documented here.
 
 Nano Desktop is currently a developer preview. Versions before 1.0 may change without a stable migration promise; changes to typed host contracts remain versioned under `contracts/`.
 
+## [0.3.7] - 2026-11-18
+
+### Added
+
+- **Online updates.** Builds from this version on offer new versions in Settings → About (**Check for updates**, then **Download and restart**). Every download is checked against the key built into the app before it runs. Turn on **Check for updates automatically** to hear about new versions without looking.
+
 ## [0.3.6] - 2026-11-18
 
 ### Changed
