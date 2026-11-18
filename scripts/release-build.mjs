@@ -13,12 +13,14 @@
 // pruning the Cargo cache (scripts/build-cache.mjs): target/ stays, so the next
 // build is incremental, but only within its size budget.
 import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { versionProblems } from './check-version.mjs';
 import { stageWindowsNanoRuntime } from './nano-runtime/stage.mjs';
-import { PLATFORMS, ReleaseConfigError, releaseConfig, writeReleaseConfig } from './release-config.mjs';
+import { PLATFORMS, ReleaseConfigError, localUpdaterKey, releaseConfig, writeReleaseConfig } from './release-config.mjs';
 
 const BUNDLES = { windows: 'nsis', linux: 'deb,appimage', macos: 'app,dmg' };
 const MACOS_TARGET = 'universal-apple-darwin';
@@ -75,6 +77,8 @@ async function main(argv) {
     process.exitCode = 1;
     return;
   }
+  // A full release on this computer signs its updates with the local key pair, if there is one.
+  if (!portable) Object.assign(process.env, localUpdaterKey(process.env, homedir(), existsSync, (path) => readFileSync(path, 'utf8')));
   let result;
   try {
     result = dryRun ? { ...releaseConfig(process.env, platform), path: '<target/release-config/tauri.release.conf.json>' } : writeReleaseConfig(root, process.env, platform);

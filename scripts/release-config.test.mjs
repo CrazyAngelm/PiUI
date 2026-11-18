@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { releasePlan } from './release-build.mjs';
 import { fileManifest, pinnedPiVersion, readCachedRuntime } from './nano-runtime/stage.mjs';
-import { DEFAULT_UPDATER_ENDPOINT, ReleaseConfigError, isTauriPublicKey, releaseConfig, writeReleaseConfig } from './release-config.mjs';
+import { DEFAULT_UPDATER_ENDPOINT, ReleaseConfigError, isTauriPublicKey, localUpdaterKey, releaseConfig, writeReleaseConfig } from './release-config.mjs';
 
 // minisign's published test public key (from minisign-verify's tests), in the
 // Tauri encoding. No signing key is created or stored by these tests.
@@ -232,4 +232,19 @@ test('the Nano bundle manifest records relative paths, lengths and SHA-256 and r
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('a local build uses the key pair kept on this computer unless the shell names one', () => {
+  const home = join('H', 'me');
+  const file = join(home, '.tauri', 'piui-updater.key');
+  const files = new Set([file, `${file}.pub`]);
+  const read = (path) => (path === `${file}.pub` ? ' PUBKEY\n' : assert.fail(`read ${path}`));
+  assert.deepEqual(localUpdaterKey({}, home, (path) => files.has(path), read), {
+    PIUI_UPDATER_PUBKEY: 'PUBKEY',
+    TAURI_SIGNING_PRIVATE_KEY_PATH: file,
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: '',
+  });
+  assert.deepEqual(localUpdaterKey({ TAURI_SIGNING_PRIVATE_KEY: 'k' }, home, () => true, read), {});
+  assert.deepEqual(localUpdaterKey({}, home, (path) => path === file, read), {});
+  assert.equal(localUpdaterKey({ PIUI_UPDATER_KEY_FILE: 'other.key' }, home, () => true, () => 'P').TAURI_SIGNING_PRIVATE_KEY_PATH, 'other.key');
 });

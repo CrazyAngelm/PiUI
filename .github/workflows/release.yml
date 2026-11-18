@@ -12,10 +12,11 @@ name: Release
 #            PIUI_AZURE_SIGNING_ENDPOINT, PIUI_AZURE_SIGNING_ACCOUNT, PIUI_AZURE_SIGNING_PROFILE
 #            PIUI_WINDOWS_TIMESTAMP_URL
 
+# Releases are built and published on the release computer (scripts/release-build.mjs, then
+# scripts/publish-update.mjs), which creates the version tag itself. This workflow therefore runs
+# only on request, from a tag: `gh workflow run release.yml --ref vX.Y.Z`.
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: read

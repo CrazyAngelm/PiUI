@@ -8,6 +8,8 @@
 //                              default: the rolling `updater` release of this repository
 //   TAURI_SIGNING_PRIVATE_KEY  the private key; read by the Tauri CLI, only checked for presence here
 //                              (TAURI_SIGNING_PRIVATE_KEY_PASSWORD when the key has a password)
+//   When none of the key variables is set, a local build uses the key pair at
+//   ~/.tauri/piui-updater.key(.pub) if it exists (PIUI_UPDATER_KEY_FILE names another file).
 // Windows Authenticode (one of):
 //   PIUI_WINDOWS_CERTIFICATE_THUMBPRINT  SHA-1 thumbprint of a certificate in the Windows store
 //   PIUI_AZURE_SIGNING_ENDPOINT, PIUI_AZURE_SIGNING_ACCOUNT, PIUI_AZURE_SIGNING_PROFILE
@@ -33,6 +35,22 @@ export class ReleaseConfigError extends Error {
     super(message);
     this.name = 'ReleaseConfigError';
   }
+}
+
+/**
+ * The updater key pair kept on this computer, as the variables the build reads, when the shell sets
+ * none of them. The private key is passed by path, so its contents never enter this process.
+ */
+export function localUpdaterKey(env, home, exists, read) {
+  const named = ['PIUI_UPDATER_PUBKEY', 'TAURI_SIGNING_PRIVATE_KEY', 'TAURI_SIGNING_PRIVATE_KEY_PATH'];
+  if (named.some((name) => value(env, name) !== undefined)) return {};
+  const file = value(env, 'PIUI_UPDATER_KEY_FILE') ?? join(home, '.tauri', 'piui-updater.key');
+  if (!exists(file) || !exists(`${file}.pub`)) return {};
+  return {
+    PIUI_UPDATER_PUBKEY: read(`${file}.pub`).trim(),
+    TAURI_SIGNING_PRIVATE_KEY_PATH: file,
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? '',
+  };
 }
 
 function value(env, name) {

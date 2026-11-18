@@ -1,11 +1,14 @@
 # Releasing Nano Desktop
 
-This guide is for the repository owner. A release is a Git tag `vX.Y.Z`; the
-[Release workflow](../.github/workflows/release.yml) builds every platform and
-publishes one GitHub **pre-release**. Code signing and signed automatic updates
-are optional: they switch on only when the secrets and variables below exist.
-Without them the workflow publishes the same unsigned build as before, and the
-application never checks for updates.
+This guide is for the repository owner. Releases are built on the release
+computer and published to GitHub with `scripts/publish-update.mjs` (see
+[Cutting a release](#cutting-a-release)), which creates the tag `vX.Y.Z`, a
+GitHub **pre-release** and the update feed installed copies read. The
+[Release workflow](../.github/workflows/release.yml), which builds every
+platform in CI, runs only on request (`gh workflow run release.yml --ref vX.Y.Z`).
+Code signing and signed automatic updates are optional: they switch on only
+when their keys exist. Without them the build is unsigned and never checks for
+updates.
 
 Windows is the primary, verified platform. Linux packages (Ubuntu 22.04 and
 newer) contain native agents in the bridge's own process group: the host ends
@@ -81,14 +84,17 @@ and the release is built without updates; malformed values fail the build.
 #### Publishing a locally built release
 
 Releases built on your own computer (`node scripts/release-build.mjs windows`)
-update installed copies the same way once the feed is published. Set the same
-values in the shell first (PowerShell; the private key file stays where it is):
+update installed copies the same way once the feed is published. When the shell
+sets no key variable, the build uses the key pair at
+`~/.tauri/piui-updater.key` and `.key.pub` (or the file named by
+`PIUI_UPDATER_KEY_FILE`), passing the private key to the bundler by path. The
+release computer has that pair (no password) and a copy on another drive.
+Losing it does not break
+anything already installed, but those copies then need one manual install of a
+build signed with a new key.
 
 ```powershell
-$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -Raw "$HOME\.tauri\piui-updater.key"
-$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<the key's password>"
-$env:PIUI_UPDATER_PUBKEY = (Get-Content -Raw "$HOME\.tauri\piui-updater.key.pub").Trim()
-node scripts/release-build.mjs windows
+node scripts/release-build.mjs windows     # "Updates: on" in its first lines
 node scripts/publish-update.mjs            # checks artifacts/, writes latest.json, prints the plan
 node scripts/publish-update.mjs --publish  # uploads vX.Y.Z and refreshes the updater release (gh)
 ```
@@ -172,12 +178,14 @@ notarization are not wired into the workflow yet.
    in-app notes come from this section) and update the compare links.
 3. Run `pnpm repo:check`; it names every declaration that disagrees.
 4. Commit, push to `master` and wait for CI to pass.
-5. Tag and push: `git tag -a vX.Y.Z -m "Nano Desktop X.Y.Z"` then
-   `git push origin vX.Y.Z`.
-6. Follow the **Release** workflow run. When `publish` finishes, open the
-   pre-release and check the files, the notes and `SHA256SUMS.txt`. With updates
-   configured, open `…/releases/download/updater/latest.json` and check the
-   version and URLs.
+5. On the release computer, from that commit: `node scripts/release-build.mjs windows`,
+   then `node scripts/publish-update.mjs --publish`. It tags the commit, creates
+   the pre-release with the files and notes, and refreshes
+   `…/releases/download/updater/latest.json`; installed copies then offer the
+   update in Settings → About.
+6. To build Linux and macOS as well, run the **Release** workflow on the tag
+   (`gh workflow run release.yml --ref vX.Y.Z`); it needs the updater key as the
+   `TAURI_SIGNING_PRIVATE_KEY` secret to keep their updates on.
 
 ## Building a release locally
 
