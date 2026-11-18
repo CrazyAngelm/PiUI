@@ -237,7 +237,7 @@ jobs:
         with:
           node-version: 22
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: NanoDesktop-${{ github.ref_name }}-*
           path: downloads
