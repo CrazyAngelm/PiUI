@@ -471,7 +471,13 @@
             {#if boardProject}
               <ChatBoardActivity workspaceId={boardProject} sessionId={snapshot.session.id} blocks={snapshot.blocks} />
             {/if}
-            <ExtensionSurface sessionId={snapshot.session.id} status={snapshot.session.status} placement="above" agentLabel={harnessMeta(snapshot.session.harness).label} />
+            <ExtensionSurface
+              sessionId={snapshot.session.id}
+              status={snapshot.session.status}
+              placement="above"
+              agentLabel={harnessMeta(snapshot.session.harness).label}
+              canMessage={!store.safeMode && fusion?.role !== 'sidekick' && snapshot.session.status !== 'closed' && !session.runId && snapshot.capabilities.prompt.supported}
+            />
             {#if store.safeMode}
               <p class="notice">{$t('Runtime actions are disabled in safe mode. Your draft is preserved.')}</p>
             {:else if fusion?.role === 'sidekick'}

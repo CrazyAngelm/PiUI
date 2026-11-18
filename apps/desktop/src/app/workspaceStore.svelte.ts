@@ -581,7 +581,8 @@ export class WorkspaceStore {
       this.catalog = next;
       // Chats whose lead is gone (deleted from another window or a restart) lose their cached Fusion role.
       fusionMembership.prune(new Set(next.sessions.map((session) => session.id)));
-      const candidate = preferredWorkspaceId ?? this.selectedWorkspaceId;
+      // The project chosen for Home, not the open chat's, which only shadows it while the chat is open.
+      const candidate = preferredWorkspaceId ?? this.chosenWorkspaceId;
       const workspaceId = next.workspaces.some((workspace) => workspace.id === candidate)
         ? candidate
         : (next.workspaces.find((workspace) => !workspace.missing && !workspace.personal)?.id ??

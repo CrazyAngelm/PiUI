@@ -79,7 +79,7 @@ describe('extension UI view state', () => {
     for (let index = 0; index < 8; index += 1) {
       state = reduceExtensionUiState(
         state,
-        { action: 'notify', id: `notice-${index}`, message: `Notice ${index}`, level: 'info' },
+        { action: 'notify', id: `notice-${index}`, message: `Notice ${index}`, level: 'error' },
         '',
       ).state;
     }
@@ -91,5 +91,16 @@ describe('extension UI view state', () => {
       'Notice 7',
     ]);
     expect(removeExtensionDialog(state, 'dialog-a').dialogs).toEqual([]);
+
+    // Service notices after an error are not kept, so they cannot push the error out.
+    for (let index = 0; index < 8; index += 1) {
+      state = reduceExtensionUiState(
+        state,
+        { action: 'notify', id: `service-${index}`, message: `Loaded ${index}`, level: index % 2 ? 'warning' : 'info' },
+        '',
+      ).state;
+    }
+    expect(state.notifications.at(-1)?.message).toBe('Notice 7');
+    expect(state.notifications.every((notice) => notice.level === 'error')).toBe(true);
   });
 });

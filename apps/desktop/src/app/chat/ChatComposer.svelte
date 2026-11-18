@@ -79,6 +79,12 @@
   let editing = $state('');
   let editText = $state('');
   let queueEditor = $state<HTMLTextAreaElement | null>(null);
+  let root = $state<HTMLElement | null>(null);
+  /** Closes the queue editor and gives the focus back to that message's Edit button. */
+  function closeEditor(id: string): void {
+    editing = '';
+    void tick().then(() => root?.querySelector<HTMLElement>(`[data-queue-edit="${CSS.escape(id)}"]`)?.focus());
+  }
   // "Edit" puts the caret at the end of the queued text, ready to type.
   $effect(() => {
     const field = queueEditor;
@@ -114,11 +120,13 @@
   const running = $derived(snapshot.session.status === 'running');
   const stopping = $derived(snapshot.session.status === 'stopping');
   const canSteer = $derived(Boolean(composer?.capabilities.steer));
-  // While the microphone records, the send button stops the recording and sends what was said.
-  let dictate = $state<{ stopAndSend: () => void } | undefined>();
-  let recording = $state(false);
+  // While dictating, Send (button or Enter) stops the recording and sends what was said.
+  let dictate = $state<{ stopAndSend: () => void } | null | undefined>();
+  let dictationActive = $state(false);
+  const dictating = $derived(dictationActive && Boolean(dictate));
+  const submit = (): void => (dictating ? dictate?.stopAndSend() : void send());
   // A running turn shows Stop in the send button's place until there is something to send.
-  const showStop = $derived((running || stopping) && !recording && !text.trim());
+  const showStop = $derived((running || stopping) && !dictating && !text.trim());
   const commands = $derived([
     ...(composer?.capabilities.compact
       ? [{ name: 'compact', description: 'Compact conversation context', enabled: snapshot.session.status === 'idle' && !composer.queue.items.length }]
@@ -406,9 +414,9 @@
   }
 
   /** Dictated words go in at the caret. */
-  function dictated(words: string): void {
+  function dictated(words: string): Promise<void> {
     const next = insertAtCaret(text, input?.selectionStart ?? caret, words);
-    void place(next.text, next.caret);
+    return place(next.text, next.caret);
   }
 
   /** `/btw`: a branch of this chat at its end, opened beside it; the question is the branch's first message. */
@@ -627,8 +635,8 @@
   }
 </script>
 
-<div class="composer-wrap" data-nano-composer="root">
-  {#if queue.length}
+<div class="composer-wrap" data-nano-composer="root" bind:this={root}>
+  {#if queue.length || composer?.queue.paused}
     <section class="queue" aria-label={$t('Message queue')}>
       {#if composer?.queue.paused}
         <p class="queue__paused">
@@ -649,24 +657,25 @@
               onkeydown={(event) => {
                 if (event.key === 'Escape') {
                   event.preventDefault();
-                  editing = '';
+                  closeEditor(item.id);
                 }
               }} />
             <div class="queue__actions">
-              <Button size="sm" variant="ghost" onclick={() => (editing = '')}>{$t('Cancel')}</Button>
+              <Button size="sm" variant="ghost" onclick={() => closeEditor(item.id)}>{$t('Cancel')}</Button>
               <Button
                 size="sm"
                 variant="primary"
                 disabled={busy || !editText.trim()}
                 onclick={async () => {
-                  if (await action({ type: 'edit', sessionId, requestId: item.id, text: editText })) editing = '';
+                  if (await action({ type: 'edit', sessionId, requestId: item.id, text: editText })) closeEditor(item.id);
                 }}>{$t('Save')}</Button
               >
             </div>
           {:else}
             <span class="queue__mark" aria-hidden="true"><CornerDownRight size={14} /></span>
             <div class="queue__body">
-              <p class="queue__text" title={item.text}>{item.text}</p>
+              <!-- A message whose delivery is unknown is shown whole, to compare it with the chat before removing it. -->
+              <p class="queue__text" class:queue__text--whole={item.status === 'uncertain'} title={item.text}>{item.text}</p>
               {#if item.attachments?.length}
                 <p class="queue__images" aria-label={$t('Attached images')}>
                   <ImageIcon size={12} />
@@ -688,6 +697,7 @@
                 {/if}
                 <IconButton
                   size="sm"
+                  data-queue-edit={item.id}
                   label={$t('Edit')}
                   onclick={() => {
                     editing = item.id;
@@ -758,7 +768,7 @@
           menuIndex = 0;
         }}
         beforeKeyDown={keydown}
-        onSubmit={() => void send()}
+        onSubmit={submit}
         onkeyup={(event) => {
           if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) syncCaret();
         }}
@@ -804,7 +814,7 @@
       </div>
       <div class="composer__right">
         {#if !remoteMode}
-          <DictateButton bind:this={dictate} bind:recording onText={dictated} onSend={() => void send()} scope={`chat:${sessionId}`} disabled={busy || safeMode} />
+          <DictateButton bind:this={dictate} bind:active={dictationActive} onText={dictated} onSend={() => void send()} scope={`chat:${sessionId}`} disabled={busy || safeMode} />
         {/if}
         {#if showStop}
           <button
@@ -821,9 +831,9 @@
           <button
             type="button"
             data-nano-composer="send"
-            onclick={() => (recording ? dictate?.stopAndSend() : void send())}
-            disabled={recording ? busy : busy || !composer || !text.trim()}
-            aria-label={recording ? $t('Stop dictation and send') : running ? $t('Add to queue') : $t('Send')}
+            onclick={submit}
+            disabled={dictating ? busy : busy || !composer || !text.trim()}
+            aria-label={dictating ? $t('Stop dictation and send') : running ? $t('Add to queue') : $t('Send')}
           >
             {#if busy}<Spinner size={14} />{:else}<ArrowUp size={16} />{/if}
           </button>
@@ -900,6 +910,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .queue__text--whole {
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
   }
   .queue__images,
   .queue__status {

@@ -297,6 +297,9 @@ describe('WorkspaceStore split panes', () => {
     await store.loadCatalog(other);
     expect(store.selectedWorkspaceId).toBe(own);
     expect(store.selectedWorkspace?.id).toBe(own);
+    // A later reload without a preference keeps that choice instead of taking the open chat's project.
+    await store.loadCatalog();
+    expect(store.selectedWorkspaceId).toBe(own);
     store.goHome();
     expect(store.selectedWorkspaceId).toBe(other);
     store.dispose();

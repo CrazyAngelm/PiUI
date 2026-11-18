@@ -69,6 +69,9 @@ export function reduceExtensionUiState(
       };
     }
     case 'notify': {
+      // Info and warnings are service messages (loaded, reset, mode changed) and are not kept: only an
+      // error takes space in the chat, so a burst of them cannot push a visible error out.
+      if (action.level !== 'error') return { state, draft };
       const withoutDuplicate = state.notifications.filter((notice) => notice.id !== action.id);
       const notifications = [...withoutDuplicate, {
         id: action.id,

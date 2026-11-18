@@ -31,13 +31,13 @@ async function started(access: DraftAccess): Promise<ExtensionSurfaces> {
 describe('extension surfaces of a chat', () => {
   it('keeps notices, statuses, widgets and the title per session', async () => {
     const surfaces = await started(drafts());
-    surfaces.apply(event({ action: 'notify', id: 'n1', message: 'Built', level: 'info' }));
+    surfaces.apply(event({ action: 'notify', id: 'n1', message: 'Build failed', level: 'error' }));
     surfaces.apply(event({ action: 'status', key: 'k', text: 'Checks: running' }));
     surfaces.apply(event({ action: 'widget', key: 'w', lines: ['a', 'b'], placement: 'belowEditor' }));
     surfaces.apply(event({ action: 'title', title: 'Reviewing' }));
     surfaces.apply(event({ action: 'status', key: 'other' }, 't'));
     const view = surfaces.stateFor('s');
-    expect(view.notifications.map((notice) => notice.message)).toEqual(['Built']);
+    expect(view.notifications.map((notice) => notice.message)).toEqual(['Build failed']);
     expect(view.statuses).toEqual([{ key: 'k', text: 'Checks: running' }]);
     expect(view.widgets).toEqual([{ key: 'w', lines: ['a', 'b'], placement: 'belowEditor' }]);
     expect(view.title).toBe('Reviewing');
@@ -84,7 +84,7 @@ describe('extension surfaces of a chat', () => {
     surfaces.apply(event({ action: 'status', key: 'k', text: 'Checks: running' }));
     surfaces.apply(event({ action: 'widget', key: 'w', lines: ['<b>line</b>'], placement: 'aboveEditor' }));
     surfaces.apply(event({ action: 'editorText', text: 'Prepared' }));
-    const above = render(ExtensionSurface, { props: { sessionId: 's', status: 'idle', placement: 'above', agentLabel: 'Pi', surfaces } }).body;
+    const above = render(ExtensionSurface, { props: { sessionId: 's', status: 'idle', placement: 'above', agentLabel: 'Pi', canMessage: true, surfaces } }).body;
     expect(above).toContain('role="alert"');
     expect(above).not.toContain('<img src=x');
     expect(above).toContain('&lt;img');
@@ -94,6 +94,10 @@ describe('extension surfaces of a chat', () => {
     expect(above).toContain('Ask the agent');
     expect(above).toContain('Details');
     expect(above).toContain('Replace draft');
+    // A chat without a message box (a sidekick, a pipeline member) offers no question to send.
+    const readOnly = render(ExtensionSurface, { props: { sessionId: 's', status: 'idle', placement: 'above', agentLabel: 'Pi', surfaces } }).body;
+    expect(readOnly).toContain('role="alert"');
+    expect(readOnly).not.toContain('Ask the agent');
     const below = render(ExtensionSurface, { props: { sessionId: 's', status: 'idle', placement: 'below', agentLabel: 'Pi', surfaces } }).body;
     expect(below).not.toContain('Checks: running');
     expect(below).not.toContain('line');

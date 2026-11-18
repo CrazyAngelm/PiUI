@@ -363,6 +363,9 @@ test.describe('queue and steer', () => {
     // Nothing is resent automatically: the queue stays paused until the person checks history.
     await expect(queue.getByRole('button', { name: 'Resume queue' })).toBeDisabled();
     await queue.getByRole('button', { name: 'Dismiss after checking history' }).click();
+    // The pause outlives the last message, so a new message is never held without a way to resume.
+    await expect(queue).not.toContainText('Delivery uncertain');
+    await queue.getByRole('button', { name: 'Resume queue' }).click();
     await expect(queue).toBeHidden();
   });
 });

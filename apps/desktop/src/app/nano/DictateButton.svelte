@@ -14,11 +14,12 @@
 
   interface Props {
     /** Receives the recognized words; the composer puts them at its caret. */
-    onText: (text: string) => void;
+    onText: (text: string) => void | Promise<void>;
     /** Sends the composer after a recording that was stopped with `stopAndSend()` has been turned into text. */
     onSend?: () => void;
-    /** True while the microphone records; the composer's own send button then stops and sends. */
-    recording?: boolean;
+    /** True from the first press until the words are in the draft; the composer's own send button
+     * (and Enter) then calls `stopAndSend()` instead of sending the draft without them. */
+    active?: boolean;
     /** The composer this button belongs to: `chat:<sessionId>` or `new:<workspaceId or "personal">`. One unsent recording is kept per scope. */
     scope: string;
     /** The composer cannot take input now (safe mode, sending). */
@@ -33,7 +34,7 @@
   let {
     onText,
     onSend = undefined,
-    recording = $bindable(false),
+    active = $bindable(false),
     scope,
     disabled = false,
     client = nanoAccountHost,
@@ -53,12 +54,13 @@
         dictationTransport(source, client, provider),
         {
           maxBytes: () => source.maxBytes,
-          onText: (text) => {
+          onText: async (text) => {
             const send = sendAfter;
             sendAfter = false;
-            onText(text);
-            // The words are in the draft after a tick; then the message goes out.
-            if (send && onSend) void tick().then(() => onSend());
+            // The message goes out only once the words are in the draft.
+            await onText(text);
+            await tick();
+            if (send && onSend) onSend();
           },
           errorCopy: dictationErrorCopy,
           scope: () => scope,
@@ -68,8 +70,9 @@
       ),
   );
   const isRecording = $derived(dictation.phase === 'recording');
+  const isActive = $derived(dictation.phase !== 'idle');
   $effect(() => {
-    recording = isRecording;
+    active = isActive;
   });
   const working = $derived(dictation.phase === 'requesting' || dictation.phase === 'sending');
   const label = $derived(isRecording ? $t('Stop dictation') : $t('Dictate'));
@@ -83,11 +86,15 @@
     if (dictation.phase === 'idle') untrack(() => void (sendAfter = false));
   });
 
-  /** The composer's send button while recording: one send action, not a second button beside it. */
+  /** The composer's send action while dictating: one send, not a second button beside it.
+   * While the clip is transcribed it only asks for the send that follows the words. */
   export function stopAndSend(): void {
-    if (dictation.phase !== 'recording') return;
-    sendAfter = Boolean(onSend);
-    dictation.stop();
+    if (dictation.phase === 'recording') {
+      sendAfter = Boolean(onSend);
+      dictation.stop();
+    } else if (dictation.phase === 'sending') {
+      sendAfter = Boolean(onSend);
+    }
   }
 
   // A failure is told once, then forgotten with the toast.
@@ -107,7 +114,10 @@
   });
 
   // Nothing is left recording when the composer goes away; what was said stays as a pending recording.
-  onDestroy(() => dictation.cancel('teardown'));
+  onDestroy(() => {
+    dictation.cancel('teardown');
+    active = false;
+  });
 
   // A recording belongs to the source it started with: it is cancelled when the source changes or goes away.
   // Only a change of the key counts: the account status is replaced by every token refresh, and that
@@ -117,7 +127,8 @@
   $effect(() => cancelWhenSourceChanges(sourceKey));
 
   function keydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape' && dictation.phase !== 'idle') {
+    // An Escape a field already used (closing an editor or a menu) is not meant for the recording.
+    if (event.key === 'Escape' && !event.defaultPrevented && dictation.phase !== 'idle') {
       event.preventDefault();
       dictation.cancel();
     }

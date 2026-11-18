@@ -267,7 +267,6 @@ export const shellRu: Readonly<Record<string, string>> = {
   "Search this chat": "Поиск по чату",
   "Send": "Отправить",
   "Send after the current turn finishes": "Отправить, когда агент закончит текущий ход",
-  "Send now as Steer": "Отправить сразу",
   "Sending…": "Отправка…",
   "Show earlier messages ({0})": "Показать более ранние сообщения ({0})",
   "Stopped": "Остановлено",

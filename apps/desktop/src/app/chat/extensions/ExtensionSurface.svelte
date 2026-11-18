@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import Puzzle from '@lucide/svelte/icons/puzzle';
   import X from '@lucide/svelte/icons/x';
   import { t } from '../../../features/locale/language';
@@ -13,21 +13,28 @@
     /** `above` owns notices, statuses, the title and prepared text; `below` shows lower widgets. */
     placement: 'above' | 'below';
     agentLabel: string;
+    /** This chat has a message box (not a sidekick, a pipeline member, a stopped or read-only chat). */
+    canMessage?: boolean;
     /** Test seam; the chat uses the shared store. */
     surfaces?: ExtensionSurfaces;
   }
-  let { sessionId, status, placement, agentLabel, surfaces = extensionSurfaces }: Props = $props();
+  let { sessionId, status, placement, agentLabel, canMessage = false, surfaces = extensionSurfaces }: Props = $props();
+  let replaceButton = $state<HTMLButtonElement | null>(null);
 
   const view = $derived(surfaces.stateFor(sessionId));
-  // Extension info and warnings are service messages (loaded, reset, mode changed): only an error
-  // takes space in the chat, said plainly, with the extension's own words behind Details.
-  const notices = $derived(view.notifications.filter((notice) => notice.level === 'error'));
+  // Only errors are kept (extensionUiState): said plainly, with the extension's own words behind Details.
+  const notices = $derived(view.notifications);
 
-  /** Puts a question about the error in the message box; a typed draft is kept as a suggestion. */
-  function askAgent(notice: { id: string; message: string }): void {
+  /** Puts a question about the error in the message box; a typed draft is kept as a suggestion.
+   * The focus follows the text: to the message box, or to "Replace draft" when a draft was kept. */
+  async function askAgent(notice: { id: string; message: string }, event: MouseEvent): Promise<void> {
+    const zone = (event.currentTarget as HTMLElement | null)?.closest('.composer-zone');
     const question = [$t('The {0} extension reported an error:', [agentLabel]), notice.message, $t('What does it mean, and does anything need to be done?')];
     surfaces.prepareText(sessionId, question.join('\n\n'));
     surfaces.dismissNotice(sessionId, notice.id);
+    await tick();
+    if (view.editorSuggestion !== undefined) replaceButton?.focus();
+    else zone?.querySelector<HTMLTextAreaElement>('[data-nano-composer="root"] textarea')?.focus();
   }
   const widgets = $derived(view.widgets.filter((widget) => widget.placement === (placement === 'above' ? 'aboveEditor' : 'belowEditor')));
 
@@ -63,7 +70,9 @@
             </details>
           </div>
           <div class="notice__actions">
-            <Button size="sm" variant="ghost" onclick={() => askAgent(notice)}>{$t('Ask the agent')}</Button>
+            {#if canMessage}
+              <Button size="sm" variant="ghost" onclick={(event: MouseEvent) => void askAgent(notice, event)}>{$t('Ask the agent')}</Button>
+            {/if}
             <IconButton size="sm" tooltip={false} label={$t('Dismiss notice')} onclick={() => surfaces.dismissNotice(sessionId, notice.id)}><X /></IconButton>
           </div>
         </div>
@@ -87,7 +96,7 @@
   <div class="suggestion" role="status">
     <span>{$t('An extension prepared text for the message box. Your draft was kept.')}</span>
     <Button size="sm" variant="ghost" onclick={() => surfaces.discardSuggestion(sessionId)}>{$t('Discard')}</Button>
-    <Button size="sm" onclick={() => surfaces.acceptSuggestion(sessionId)}>{$t('Replace draft')}</Button>
+    <Button size="sm" bind:ref={replaceButton} onclick={() => surfaces.acceptSuggestion(sessionId)}>{$t('Replace draft')}</Button>
   </div>
 {/if}
 

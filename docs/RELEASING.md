@@ -93,6 +93,12 @@ node scripts/publish-update.mjs            # checks artifacts/, writes latest.js
 node scripts/publish-update.mjs --publish  # uploads vX.Y.Z and refreshes the updater release (gh)
 ```
 
+Push the commit first: a new release is tagged at this checkout's commit, and
+re-publishing an existing version is refused unless its tag points at the same
+commit. The feed lists only the files that run uploads, after they are checked
+against `SHA256SUMS.txt`. A feed on the channel that also serves Linux or macOS
+is not replaced by a Windows-only one unless you pass `--drop-platforms`.
+
 The first build with the key is still installed by hand once; every build after
 it is offered in Settings → About.
 

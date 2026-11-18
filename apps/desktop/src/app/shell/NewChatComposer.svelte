@@ -124,8 +124,10 @@
   }
   let catalogFor = $state('');
   let busy = $state(false);
-  let dictate = $state<{ stopAndSend: () => void } | undefined>();
-  let recording = $state(false);
+  let dictate = $state<{ stopAndSend: () => void } | null | undefined>();
+  let dictationActive = $state(false);
+  const dictating = $derived(dictationActive && Boolean(dictate));
+  const submit = (): void => (dictating ? dictate?.stopAndSend() : void send());
   let textarea = $state<HTMLTextAreaElement | null>(null);
   let menuIndex = $state(0);
   let menuDismissed = $state(false);
@@ -726,8 +728,8 @@
   const dictationScope = $derived(`new:${workspaceId || 'personal'}`);
 
   /** Dictated words go in at the caret. The helper arrives with the dictation button. */
-  function dictated(words: string): void {
-    void import('../nano/dictation').then(({ insertAtCaret }) => {
+  function dictated(words: string): Promise<void> {
+    return import('../nano/dictation').then(({ insertAtCaret }) => {
       const next = insertAtCaret(text, textarea?.selectionStart ?? caret, words);
       return place(next.text, next.caret);
     });
@@ -937,7 +939,7 @@
       });
       acknowledgeDraft();
     } catch (error) {
-      toasts.error($t('Could not start the chat'), errorMessage(error));
+      toasts.error($t('Could not start the chat'), $t(errorMessage(error)));
     } finally {
       busy = false;
     }
@@ -1083,7 +1085,7 @@
         menuIndex = 0;
       }}
       beforeKeyDown={keydown}
-      onSubmit={() => void send()}
+      onSubmit={submit}
       onkeyup={(event) => {
         if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) syncCaret();
       }}
@@ -1190,16 +1192,16 @@
     <div class="actions">
       {#if dictationSource.available && !remoteMode}
         {#await loadDictate() then { default: DictateButton }}
-          <DictateButton bind:this={dictate} bind:recording onText={dictated} onSend={() => void send()} scope={dictationScope} disabled={busy || store.safeMode} />
+          <DictateButton bind:this={dictate} bind:active={dictationActive} onText={dictated} onSend={() => void send()} scope={dictationScope} disabled={busy || store.safeMode} />
         {/await}
       {/if}
-      <!-- While the microphone records, this one button stops the recording and sends what was said. -->
+      <!-- While dictating, this one button (and Enter) stops the recording and sends what was said. -->
       <button
         type="button"
         data-nano-composer="send"
-        onclick={() => (recording ? dictate?.stopAndSend() : void send())}
-        disabled={recording ? busy : !canSend}
-        aria-label={recording ? $t('Stop dictation and send') : $t('Start chat')}
+        onclick={submit}
+        disabled={dictating ? busy : !canSend}
+        aria-label={dictating ? $t('Stop dictation and send') : $t('Start chat')}
       >
         {#if busy}<Spinner size={14} />{:else}<ArrowUp size={16} />{/if}
       </button>
