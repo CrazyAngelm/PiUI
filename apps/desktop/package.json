@@ -1,6 +1,6 @@
 {
   "name": "@piui/desktop",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "private": true,
   "description": "Nano Desktop Tauri and Svelte desktop application",
   "license": "MIT",
