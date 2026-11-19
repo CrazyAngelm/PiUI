@@ -12,7 +12,28 @@ export function dictationTransport(
   client: Pick<NanoAccountClient, 'dictate'>,
   provider: Pick<DictationClient, 'transcribe'>,
 ): DictationTransport {
-  return { dictate: (request) => (source.active === 'nano' ? client.dictate(request) : provider.transcribe(request)) };
+  return {
+    dictate: async (request) => {
+      const answer = await (source.active === 'nano' ? client.dictate(request) : provider.transcribe(request));
+      return { ...answer, text: stripSubtitleCredit(answer.text) };
+    },
+  };
+}
+
+// Whisper-class models trained on subtitled video invent a credit line on
+// silence or noise ("Субтитры сделал DimaTorzok"). Only such credit lines are
+// removed, at the end of the text or when they are all there is.
+const SUBTITLE_CREDIT = [
+  /(?:^|[\s.!?…]+)Субтитры\s+(?:сделал|сделаны|создавал|делал|подогнал|предоставил)\s+[^\n]{0,60}$/iu,
+  /(?:^|[\s.!?…]+)Редактор\s+субтитров\s+[^\n]{0,60}$/iu,
+  /(?:^|[\s.!?…]+)(?:Subtitles|Captions)\s+(?:by|created by)\s+[^\n]{0,60}$/iu,
+];
+
+/** Removes a hallucinated subtitle credit from a transcription. */
+export function stripSubtitleCredit(text: string): string {
+  let result = text;
+  for (const pattern of SUBTITLE_CREDIT) result = result.replace(pattern, '');
+  return result.trim();
 }
 
 /** English source copy of a failed transcription; the view translates it. */
