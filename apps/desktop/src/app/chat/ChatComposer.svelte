@@ -828,8 +828,9 @@
     {/if}
     <div data-nano-composer="bar">
       <div class="composer__left">
-        <!-- Attachments, dictation and pipelines need this computer's files, microphone and library: not offered to a remote browser. -->
-        {#if !remoteMode}
+        <!-- Attachments, dictation and pipelines need this computer's files, microphone and library: not offered to a remote browser.
+             While dictating, only Cancel, Stop and Send are left in the bar. -->
+        {#if !remoteMode && !dictating}
           <AttachButton images={imageState} busy={attachments.busy} disabled={busy || Boolean(pipelineId)} onPick={() => void attachments.pick(workspaceId, imageState)} />
           <ExecutorPicker
             {workspaceId}
@@ -839,7 +840,7 @@
             onChange={(next) => void chooseExecutor(next)}
           />
         {/if}
-        {#if !pipelineId}
+        {#if !pipelineId && !dictating}
           <RuntimeChip
             session={snapshot.session}
             disabled={busy || snapshot.session.status !== 'idle' || !snapshot.capabilities.models.supported}

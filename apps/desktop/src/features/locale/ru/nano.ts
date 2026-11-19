@@ -74,7 +74,8 @@ export const nanoRu: Readonly<Record<string, string>> = {
   // Dictation
   'Dictate': 'Диктовать',
   'Stop dictation': 'Остановить диктовку',
-  'Stop dictation (Esc cancels)': 'Остановить диктовку (Esc отменяет)',
+  'Cancel dictation': 'Отменить диктовку',
+  'Cancel dictation (Esc)': 'Отменить диктовку (Esc)',
   'Service data': 'Служебные данные',
   'Stop dictation and send': 'Остановить запись и отправить',
   'Recording {0}': 'Запись {0}',

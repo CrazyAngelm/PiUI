@@ -36,6 +36,12 @@ retry. What a person said must never be lost to a failed request.
   - *Not offered twice.* While this window records or sends a clip, the pending
     bar does not offer it for retry (the store holds its id until the session
     is idle again).
+- **Cancel is a button as well as Esc** (2026-11-20). From the first press until
+  the words are in the draft the composer bar shows only Cancel, Stop and Send
+  (the attachment, agent, model and project controls are hidden meanwhile). Cancel
+  ends the dictation exactly as Esc does, so the rules above apply: nothing is
+  left after under five seconds, and a longer recording stays as an unsent
+  recording that the bar above the composer can retry, save or delete.
 - **One per composer scope** (`chat:<sessionId>`, `new:<workspaceId or
   "personal">`). While one waits, a new recording is refused with a toast.
 - **Where it is kept.** In the WebView's IndexedDB (`piui-dictation-pending`,

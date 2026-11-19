@@ -1075,6 +1075,11 @@ Branch `feat/workbench-1116`. Decisions: ADR-064 to ADR-071.
   for a cut before a message the RPC `fork` on a source opened without any
   writing flag. The host falls back to the linked branch when the source has no
   session file; Nano and the other agents are unchanged.
+- **Cancel while dictating.** The tester missed a way to cancel a voice
+  recording (Esc worked but was only named in a tooltip). The composer bar now
+  shows only Cancel, Stop and Send while dictating, in the chat and the new-chat
+  composer; Cancel behaves as Esc (ADR-066). Lab end-to-end tests drive it with
+  Chromium's fake microphone (`e2e/dictation-recording.spec.ts`).
 - **Evidence.** Pi 1.4.0 through the real bridge on hand-built sessions, no model
   turn: whole-chat and cut forks, the first-message cut, refusals, and the
   source file's hash unchanged. Bridge, Rust and Lab tests are synthetic. Not

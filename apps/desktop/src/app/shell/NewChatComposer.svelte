@@ -1185,7 +1185,9 @@
     {/await}
   {/if}
   <div data-nano-composer="bar">
+    <!-- While dictating, only Cancel, Stop and Send are left in the bar. -->
     <div class="chips">
+      {#if !dictating}
       {#if !remoteMode}
         <AttachButton images={imageState} busy={attachments.busy} disabled={busy || store.safeMode || !workspaceId || (usesPipeline && !fusionMode)} onPick={pick} />
       {/if}
@@ -1261,6 +1263,7 @@
           remember();
         }}
       />
+      {/if}
     </div>
     <div class="actions">
       {#if dictationSource.available && !remoteMode}

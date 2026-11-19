@@ -2,6 +2,7 @@
   import { onDestroy, tick, untrack } from 'svelte';
   import Mic from '@lucide/svelte/icons/mic';
   import Square from '@lucide/svelte/icons/square';
+  import X from '@lucide/svelte/icons/x';
   import { t } from '../../features/locale/language';
   import { dictationHost, type DictationClient } from '../../host-api/dictationClient';
   import { nanoAccountHost, type NanoAccountClient } from '../../host-api/nanoAccountClient';
@@ -76,7 +77,7 @@
   });
   const working = $derived(dictation.phase === 'requesting' || dictation.phase === 'sending');
   const label = $derived(isRecording ? $t('Stop dictation') : $t('Dictate'));
-  const tooltip = $derived(isRecording ? $t('Stop dictation (Esc cancels)') : $t('Dictate'));
+  const tooltip = $derived(isRecording ? $t('Stop dictation') : $t('Dictate'));
   const nearLimit = $derived(isRecording && dictationNearLimit(dictation.elapsedMs));
   const status = $derived(
     isRecording ? $t('Recording {0}', [dictationClockWithLimit(dictation.elapsedMs)]) : dictation.phase === 'sending' ? $t('Transcribing…') : '',
@@ -138,6 +139,23 @@
 <svelte:window onkeydown={keydown} />
 
 {#if source.available}
+  <!-- Cancel is offered for as long as the dictation runs (the microphone prompt, the recording, the upload), as Esc is. -->
+  {#if isActive}
+    <Tooltip content={$t('Cancel dictation (Esc)')}>
+      {#snippet trigger(props)}
+        <button
+          {...props}
+          type="button"
+          class="dictate dictate--cancel"
+          aria-label={$t('Cancel dictation')}
+          aria-keyshortcuts="Escape"
+          onclick={() => dictation.cancel()}
+        >
+          <X size={14} />
+        </button>
+      {/snippet}
+    </Tooltip>
+  {/if}
   <Tooltip content={tooltip}>
     {#snippet trigger(props)}
       <button
@@ -194,6 +212,9 @@
   .dictate:focus-visible {
     outline: 2px solid var(--piui-focus);
     outline-offset: 1px;
+  }
+  .dictate--cancel:hover:not(:disabled) {
+    color: var(--piui-danger);
   }
   /* Recording: one crimson accent, a slanted blade like the model picker's current row. */
   .dictate--recording {
