@@ -249,7 +249,10 @@ mod tests {
 
     #[test]
     fn a_launcher_that_fails_is_an_error_so_the_page_falls_back_to_copy() {
-        assert_eq!(await_launcher(exits_with(0), Duration::from_secs(10)), Ok(()));
+        assert_eq!(
+            await_launcher(exits_with(0), Duration::from_secs(10)),
+            Ok(())
+        );
         assert_eq!(
             await_launcher(exits_with(3), Duration::from_secs(10)),
             Err(())

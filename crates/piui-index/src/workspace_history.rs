@@ -8,8 +8,8 @@ use super::{
     BlockOrigin, BoundedScanError, GenericBlockKind, GenericBlockStatus, GenericTimelineBlock,
     OriginItem, ParseState, ScanReport, SessionDiscoveryLimits, UnknownEntrySummary,
     bounded_display, display_content, display_limit, is_session_jsonl, lf_frames,
-    open_session_file_no_follow, redact_display_paths, scan_bytes_for_display_with_origins_on, sha256,
-    string_field, trim_old_display,
+    open_session_file_no_follow, redact_display_paths, scan_bytes_for_display_with_origins_on,
+    sha256, string_field, trim_old_display,
 };
 use piui_platform::{ProjectDirectory, ProjectDirectoryError};
 use serde_json::{Map, Value};
@@ -200,14 +200,11 @@ impl WorkspaceHistoryProjection {
             return None;
         }
         if let Some(block_id) = block_id
-            && let Some(candidate) = self
-                .assistant_texts
-                .iter()
-                .find(|candidate| {
-                    candidate.block_id == block_id
-                        || candidate.legacy_id == block_id
-                        || candidate.aliases.iter().any(|alias| alias == block_id)
-                })
+            && let Some(candidate) = self.assistant_texts.iter().find(|candidate| {
+                candidate.block_id == block_id
+                    || candidate.legacy_id == block_id
+                    || candidate.aliases.iter().any(|alias| alias == block_id)
+            })
             && valid_hash.is_none_or(|hash| candidate.sha256.eq_ignore_ascii_case(hash))
         {
             return Some(candidate.text.as_str());
@@ -457,10 +454,8 @@ fn pi_native_block_ids(
                 }) => {
                     candidates.push(opaque_id("pi-tool", call_id));
                     if let Some(entry_id) = entry_id {
-                        candidates.push(opaque_id(
-                            "pi-entry",
-                            &format!("{entry_id}:tool:{call_id}"),
-                        ));
+                        candidates
+                            .push(opaque_id("pi-entry", &format!("{entry_id}:tool:{call_id}")));
                     }
                 }
                 _ => {}
@@ -592,14 +587,12 @@ fn pi_chat_files(
 
 /// The bridge's `imageTypeOfPath`: the text after the last dot names an image.
 fn pi_image_extension(path: &str) -> bool {
-    path.rsplit('.')
-        .next()
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "png" | "jpg" | "jpeg" | "gif" | "webp"
-            )
-        })
+    path.rsplit('.').next().is_some_and(|extension| {
+        matches!(
+            extension.to_ascii_lowercase().as_str(),
+            "png" | "jpg" | "jpeg" | "gif" | "webp"
+        )
+    })
 }
 
 fn project_pi_history(
@@ -652,13 +645,15 @@ fn project_pi_history(
         .zip(aliases)
         .filter(|((block, _), _)| block.kind == GenericBlockKind::Assistant)
         .zip(exact)
-        .map(|(((block, legacy_id), aliases), text)| AssistantHistoryText {
-            sha256: sha256(text.as_bytes()),
-            block_id: block.id.clone(),
-            legacy_id: legacy_id.clone(),
-            aliases,
-            text,
-        })
+        .map(
+            |(((block, legacy_id), aliases), text)| AssistantHistoryText {
+                sha256: sha256(text.as_bytes()),
+                block_id: block.id.clone(),
+                legacy_id: legacy_id.clone(),
+                aliases,
+                text,
+            },
+        )
         .collect();
     let files = finalize_chat_files(
         pi_chat_files(&report.timeline_blocks, &origins, display_project_root),
@@ -3944,16 +3939,20 @@ mod tests {
             .map(|block| block.preview.clone().unwrap_or_default())
             .collect::<Vec<_>>();
         assert_eq!(previews, ["Question", "Kept answer"]);
-        assert_eq!(projection.final_assistant_text(None, None), Some("Kept answer"));
-        assert!(projection.chat_files().is_empty(), "the abandoned branch wrote nothing here");
+        assert_eq!(
+            projection.final_assistant_text(None, None),
+            Some("Kept answer")
+        );
+        assert!(
+            projection.chat_files().is_empty(),
+            "the abandoned branch wrote nothing here"
+        );
     }
 
     #[test]
     fn pi_restores_the_images_a_read_looked_at() {
         let directory = TemporaryDirectory::new();
-        let call = |id: &str, path: &str| {
-            serde_json::json!({"type":"toolCall","id":id,"name":"read","arguments":{"path":path}})
-        };
+        let call = |id: &str, path: &str| serde_json::json!({"type":"toolCall","id":id,"name":"read","arguments":{"path":path}});
         let result = |id: &str, call: &str, error: bool| {
             serde_json::json!({"type":"message","id":id,"message":{"role":"toolResult",
                 "toolCallId":call,"isError":error,"content":[{"type":"text","text":"done"}]}})
@@ -3981,8 +3980,14 @@ mod tests {
         assert_eq!(
             files,
             [
-                (Some(directory.path().join("shots/a.PNG")), HistoryChatFileOrigin::Read),
-                (Some(directory.path().join("shots/b.webp")), HistoryChatFileOrigin::Read),
+                (
+                    Some(directory.path().join("shots/a.PNG")),
+                    HistoryChatFileOrigin::Read
+                ),
+                (
+                    Some(directory.path().join("shots/b.webp")),
+                    HistoryChatFileOrigin::Read
+                ),
             ]
         );
     }

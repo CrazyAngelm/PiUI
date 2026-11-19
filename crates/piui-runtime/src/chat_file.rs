@@ -302,7 +302,9 @@ mod tests {
 
     #[test]
     fn a_malformed_frame_still_parses_and_is_dropped() {
-        let path = absolute("chat-file-test.png").to_string_lossy().into_owned();
+        let path = absolute("chat-file-test.png")
+            .to_string_lossy()
+            .into_owned();
         let oversized = "A".repeat(MAX_INLINE_BASE64_CHARS + 4);
         let cases = [
             json!({ "type": "file" }),

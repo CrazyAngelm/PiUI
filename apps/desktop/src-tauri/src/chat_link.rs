@@ -367,7 +367,10 @@ mod tests {
         ));
         assert_eq!(result, Err(ChatLinkError::Busy));
         assert!(!asked.get());
-        assert!(slot.load(Ordering::Acquire), "the open dialog keeps its slot");
+        assert!(
+            slot.load(Ordering::Acquire),
+            "the open dialog keeps its slot"
+        );
     }
 
     #[test]

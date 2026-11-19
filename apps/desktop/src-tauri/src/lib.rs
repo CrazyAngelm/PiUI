@@ -862,7 +862,8 @@ pub fn run() -> Result<(), tauri::Error> {
                 .workspace
                 .set_chat_files_publisher(std::sync::Arc::new(move |event| {
                     use tauri::Emitter;
-                    let _ = chat_files_events.emit(workspace_api::chat_files::CHAT_FILES_EVENT, event);
+                    let _ =
+                        chat_files_events.emit(workspace_api::chat_files::CHAT_FILES_EVENT, event);
                 }));
             let orchestration = orchestration_api::OrchestrationApiState::open(&app_data_dir)
                 .map_err(|_| std::io::Error::other("Could not open local orchestration data"))?;

@@ -147,7 +147,8 @@ test('main screens run under the app CSP without violations', async ({ lab, page
   await page.getByRole('textbox', { name: 'Message' }).fill('/extension-demo');
   await page.getByRole('textbox', { name: 'Message' }).press('Enter');
   await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'Build a preview?' }) }).getByRole('button', { name: 'Deny' }).click();
-  await expect(page.getByRole('status').filter({ hasText: 'Preview build declined.' })).toBeVisible({ timeout: 20_000 });
+  // The extension's service notices stay out of the chat (0.3.6): declining only closes the request.
+  await expect(page.getByRole('heading', { name: 'Build a preview?' })).toBeHidden({ timeout: 20_000 });
   await clean('Pi extension surfaces');
 
   // Read-only Pi session history with its branches.
