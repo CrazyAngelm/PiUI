@@ -16,6 +16,7 @@
   import { useWorkspace } from '../shell/context';
   import { toolKind, type ToolKind } from '../chat/transcript/toolKinds';
   import RunCanvas from './RunCanvas.svelte';
+  import RunContinueBar from './RunContinueBar.svelte';
   import RunTriggerLabel from './RunTriggerLabel.svelte';
   import TaskPanel from './TaskPanel.svelte';
   import { RUN_LABEL, RUN_TONE, listedRuns, runCounts, shortId, stepViews, type RunFilter } from './runPresentation';
@@ -226,6 +227,7 @@
           <RunCanvas {run} {workspaceId} {views} selectedId={runs.selectedStepId} {activity} onSelect={(id) => runs.select(id)} />
         {/key}
       </div>
+      {#if !remoteMode}{#key run.id}<RunContinueBar {run} {workspaceId} {safeMode} />{/key}{/if}
     {:else if runs.runLoading || (runs.listLoading && runs.summaries.length === 0)}
       <div class="stage__loading"><Skeleton lines={6} /></div>
     {:else if runs.runError}

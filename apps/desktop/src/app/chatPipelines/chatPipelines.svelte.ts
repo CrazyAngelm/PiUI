@@ -27,8 +27,9 @@ import { coalesceReads } from '../../lib/coalescedReads';
 import { readWorkspaceHistory } from '../../host-api/workspaceHistory';
 import type { AgentGraph } from '../../features/orchestration/agentGraph';
 import { performRunAction } from '../../features/orchestration/runActions';
+import { harnessConfiguration } from '../../harness-adapters';
 import { formatValue } from '../runs/runPresentation';
-import { acceptsChat, answerTask, chatInput, extraInputs, outputsAnswer, replyStep, runMessage, withPipelineContext, type PipelineContext } from './chatPipeline';
+import { acceptsChat, answerTask, chatInput, extraInputs, outputsAnswer, replyStep, runMessage, runReply, withPipelineContext, type PipelineContext } from './chatPipeline';
 
 export interface PipelineLibraryClient {
   request(command: PipelineLibraryCommandV1): Promise<PipelineLibraryResultV1>;
@@ -132,6 +133,16 @@ export class ChatPipelinesStore {
     } finally {
       this.loadingProjects.delete(workspaceId);
     }
+  }
+
+  /**
+   * The project's launch commands by name, read again on every call (the editor saves without telling
+   * this store). Unlike `loadProject` it reads no definitions and no library: a screen that only lists a
+   * few pipelines asks for the details of those itself.
+   */
+  async loadCommands(workspaceId: string): Promise<readonly DefinitionSummary[] | undefined> {
+    if (remoteMode || !hostSupports('orchestration_catalog_v6') || !workspaceId) return undefined;
+    return this.refreshCommands(workspaceId);
   }
 
   async loadLibrary(workspaceId: string): Promise<ProjectLibrary | undefined> {
@@ -452,14 +463,65 @@ export class ChatPipelinesStore {
     if (outcome.type === 'unconfirmed') throw new ChatPipelineError(outcome.error.message);
     this.ensureLive();
     this.putRun(outcome.run);
+    await this.recordRun(sessionId, workspaceId, outcome.run.id, 'The run started, but this chat could not remember it. Find it in Runs.');
+    return outcome.run;
+  }
+
+  /** Files a run under a chat; `failure` is what the person reads when the host could not remember it. */
+  private async recordRun(sessionId: string, workspaceId: string, runId: string, failure: string): Promise<void> {
     try {
-      const result = await this.library.request({ type: 'recordChatRun', sessionId, workspaceId, runId: outcome.run.id });
+      const result = await this.library.request({ type: 'recordChatRun', sessionId, workspaceId, runId });
       if (result.type === 'chat') this.putChat(sessionId, result.chat);
     } catch {
-      // The run started; only its place in this chat was not remembered.
-      throw new ChatPipelineError('The run started, but this chat could not remember it. Find it in Runs.');
+      throw new ChatPipelineError(failure);
     }
-    return outcome.run;
+  }
+
+  /**
+   * Continues a run in a chat (ADR-078): an ordinary chat with the agent that answered it, holding the
+   * run as a card. The run's result reaches that agent inside the person's first message, as it does
+   * for a run started from a chat. Nothing starts and no history is copied; a failed or stopped run
+   * is handed on as a card only, and its model is not carried over because it may be why it failed.
+   * The chat is opened only once the run is filed under it, so a first message can never go out
+   * without the result; when filing fails the chat is opened anyway, to paste the result by hand.
+   */
+  async continueRun(
+    creator: ChatCreator,
+    request: {
+      workspaceId: string;
+      run: OrchestrationRunV6;
+      /** What the person picked for new chats here; an agent that cannot honour it gets its own default. */
+      permissionMode: PermissionMode;
+      /** Used when the run has no agent step to continue with. */
+      fallbackHarness: HarnessKind;
+      available: readonly HarnessKind[];
+      title: string;
+      /** Called once the run is filed under the chat (not when filing failed). */
+      onFiled?: (sessionId: string) => void;
+      /** Shows the chat; the caller decides whether the person is still looking at this run. */
+      open: (sessionId: string) => Promise<void>;
+    },
+  ): Promise<string> {
+    if (!runFinished(request.run)) throw new ChatPipelineError('Wait for the run to finish before continuing it in a chat.');
+    const reply = runReply(request.run);
+    const harness = reply && request.available.includes(reply.harness) ? reply.harness : request.fallbackHarness;
+    const model = request.run.status === 'succeeded' && reply?.harness === harness ? reply.model : undefined;
+    const permissionMode = harnessConfiguration(harness).permissionModes.includes(request.permissionMode) ? request.permissionMode : 'native';
+    const { sessionId } = await creator.createChat(
+      { workspaceId: request.workspaceId, harness, permissionMode, text: '', ...(model ? { model } : {}) },
+      { open: false, title: request.title },
+    );
+    this.ensureLive();
+    this.putRun(request.run);
+    try {
+      await this.recordRun(sessionId, request.workspaceId, request.run.id, 'The chat was created, but it could not remember this run. Paste the result into it yourself.');
+    } catch (error) {
+      await request.open(sessionId);
+      throw error;
+    }
+    request.onFiled?.(sessionId);
+    await request.open(sessionId);
+    return sessionId;
   }
 
   /** Finished runs whose result the chat's agent has not been given yet. */

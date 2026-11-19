@@ -1189,7 +1189,7 @@ impl OrchestrationScheduler {
                 }
             },
             Ok(TurnOutcome::Failed) => CompletionOutcome::Failed {
-                failure: FailureRecord::new("native-turn-failed"),
+                failure: native_turn_failure(handle.turn_error().as_deref()),
             },
             Ok(TurnOutcome::Interrupted) => CompletionOutcome::Failed {
                 failure: FailureRecord::new("native-turn-interrupted"),
@@ -2502,6 +2502,15 @@ fn execution_for_member(run: &Run, member_id: &str) -> Option<String> {
     tasks.first().map(|(_, execution)| execution.clone())
 }
 
+/// A failed native turn keeps the stable code and, when the adapter said why,
+/// that summary as the detail, so the step shows a cause and not only a code.
+fn native_turn_failure(reason: Option<&str>) -> FailureRecord {
+    match reason {
+        Some(reason) => FailureRecord::with_detail("native-turn-failed", reason),
+        None => FailureRecord::new("native-turn-failed"),
+    }
+}
+
 async fn wait_for_terminal_outcome(
     turns: &mut watch::Receiver<TurnState>,
     baseline_generation: u64,
@@ -2896,6 +2905,20 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_native_turn_keeps_the_adapters_reason_as_its_detail() {
+        let reason = "The selected Pi model is unavailable.";
+        let failure = native_turn_failure(Some(reason));
+        assert_eq!(failure.code, "native-turn-failed");
+        assert_eq!(failure.detail.as_deref(), Some(reason));
+        // An adapter that said nothing leaves the stable code alone.
+        let silent = native_turn_failure(None);
+        assert_eq!(silent.code, "native-turn-failed");
+        assert_eq!(silent.detail, None);
+        // A blank reason is not a detail.
+        assert_eq!(native_turn_failure(Some("  \n")).detail, None);
+    }
 
     fn capability(
         supported: bool,

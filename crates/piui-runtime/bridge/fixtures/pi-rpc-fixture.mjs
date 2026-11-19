@@ -272,6 +272,58 @@ const scenarios = {
     { type: "agent_end", willRetry: false },
     { type: "agent_settled" },
   ],
+  "err-quota": [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "429 insufficient_quota: You exceeded your current quota SECRET-MUST-NOT-LEAK" } },
+    { type: "agent_end", willRetry: false },
+    { type: "agent_settled" },
+  ],
+  "err-model-missing": [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "404 The model `chat-latest` does not exist or you do not have access to it. SECRET-MUST-NOT-LEAK" } },
+    { type: "agent_end", willRetry: false },
+    { type: "agent_settled" },
+  ],
+  "err-settings": [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "400 Unsupported parameter: reasoning.effort is not supported with this model. SECRET-MUST-NOT-LEAK" } },
+    { type: "agent_end", willRetry: false },
+    { type: "agent_settled" },
+  ],
+  "err-context": [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "400 maximum context length is 128000 tokens SECRET-MUST-NOT-LEAK" } },
+    { type: "agent_end", willRetry: false },
+    { type: "agent_settled" },
+  ],
+  // What OpenAI answers when a ChatGPT sign-in is asked for an API-only model.
+  "err-model-not-supported": [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "400 {\"detail\":\"The 'chat-latest' model is not supported when using Codex with a ChatGPT account.\",\"code\":\"model_not_found\"} SECRET-MUST-NOT-LEAK" } },
+    { type: "agent_end", willRetry: false },
+    { type: "agent_settled" },
+  ],
+  // The provider's code outranks its status line: a 403 that says model_not_found is not an authentication problem.
+  "err-model-403": [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "403 {\"error\":{\"code\":\"model_not_found\"}} SECRET-MUST-NOT-LEAK" } },
+    { type: "agent_end", willRetry: false },
+    { type: "agent_settled" },
+  ],
+  // "billing" alone is not a quota signal.
+  "err-billing-timeout": [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "502 billing service connection timed out SECRET-MUST-NOT-LEAK" } },
+    { type: "agent_end", willRetry: false },
+    { type: "agent_settled" },
+  ],
+  // A very long single line must neither stall the bridge nor fall through to a wrong class.
+  "err-long": [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: `${"model ".repeat(40_000)}SECRET-MUST-NOT-LEAK` } },
+    { type: "agent_end", willRetry: false },
+    { type: "agent_settled" },
+  ],
   "nano-plain": [
     { type: "agent_start" },
     { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "402 SECRET-MUST-NOT-LEAK" } },
@@ -294,7 +346,13 @@ process.stdin.on("data", (chunk) => {
     const request = JSON.parse(line.toString("utf8"));
     if (catalogOnly) {
       if (request.type === "get_available_models" && ++modelRequests > 1) throw new Error("duplicate model lookup");
-      if (!["get_available_models", "get_commands"].includes(request.type)) throw new Error("unexpected session request");
+      if (!["get_available_models", "get_commands", "get_state"].includes(request.type)) throw new Error("unexpected session request");
+      if (request.type === "get_state" && process.argv.includes("--fail-state")) {
+        write({ id: request.id, type: "response", command: request.type, success: false });
+        continue;
+      }
+      // A runtime that never answers get_state: the model list it already gave must survive.
+      if (request.type === "get_state" && process.argv.includes("--silent-state")) continue;
       if (request.type === "get_commands" && process.argv.includes("--fail-commands")) {
         write({ id: request.id, type: "response", command: request.type, success: false });
         continue;
@@ -312,7 +370,9 @@ process.stdin.on("data", (chunk) => {
       { name: "session-name", description: "Set or clear session name", source: "extension", path: "/home/SECRET-MUST-NOT-LEAK/ext.ts" },
       { name: "settings", source: "builtin" },
     ] } });
-    else if (request.type === "get_available_models") write({ id: request.id, type: "response", command: request.type, success: true, data: { models: [{ provider: "fixture", id: "model", name: "Fixture Model" }] } });
+    else if (request.type === "get_available_models") write({ id: request.id, type: "response", command: request.type, success: true, data: { models: process.argv.includes("--catalog-many")
+      ? [{ provider: "fixture", id: "alpha", name: "Alpha" }, { provider: "fixture", id: "model", name: "Fixture Model" }, { provider: "fixture", id: "zeta", name: "Zeta" }]
+      : [{ provider: "fixture", id: "model", name: "Fixture Model" }] } });
     else if (request.type === "get_entries" && process.argv.includes("--history-rich")) write({ id: request.id, type: "response", command: request.type, success: true, data: richHistory });
     else if (request.type === "get_entries") write({ id: request.id, type: "response", command: request.type, success: true, data: { entries: [
       { id: "entry-private", type: "message", message: { role: "user", content: "hello" } },

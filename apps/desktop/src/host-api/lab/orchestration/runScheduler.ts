@@ -18,7 +18,7 @@ import { claudeSignInRequired } from '../catalogFake';
 import { commandReferences, definitionIssue, HARNESS_SIGN_IN_REQUIRED, launchPolicyIssue, oneShotPolicyIssue } from './definitionRules';
 import {
   advanceAutomatic, cancelRun, cancelTask, completeScript, completeSubpipeline, completeTask, CoordinatorFault, dispatchTask,
-  leaseTask, markUncertain, newRun, profileForStep, readyTaskIds, rejectReadyTask, runningExecutions, stepOf, taskOf,
+  failedTurn, leaseTask, markUncertain, newRun, profileForStep, readyTaskIds, rejectReadyTask, runningExecutions, stepOf, taskOf,
   type Completion, type LabRun, type ScriptCompletion,
 } from './runEngine';
 import {
@@ -438,7 +438,10 @@ export class LabRunScheduler {
     }
     const completion: Completion = outcome === 'succeeded' && answer?.text !== undefined
       ? { status: 'succeeded', text: answer.text, reference: { sessionId, blockId: answer.id, contentHash: sha256Hex(answer.text) } }
-      : { status: 'failed', code: outcome === 'interrupted' ? 'native-turn-interrupted' : 'native-turn-failed' };
+      : outcome === 'interrupted'
+        ? { status: 'failed', code: 'native-turn-interrupted' }
+        // Like the host: a Pi turn names its cause, other harnesses do not.
+        : failedTurn(this.runtime.record(sessionId)?.harness ?? '');
     completeTask(run, stepId, sessionId, completion);
     this.emit(workspaceId, run);
     this.reschedule(workspaceId, runId);

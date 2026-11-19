@@ -10,6 +10,7 @@ import {
   missingInputs,
   outputsAnswer,
   replyStep,
+  runReply,
   splitPipelineContext,
   withChatInput,
   withPipelineContext,
@@ -144,5 +145,35 @@ describe('answers from declared pipeline outputs (v6.7)', () => {
     expect(await outputsAnswer(failed, text, format)).toBeUndefined();
     const noText = withOutputs([{ name: 'plan', kind: 'text', sourceStepId: 'plan' }], [done('plan')]);
     expect(await outputsAnswer(noText, async () => undefined, format)).toBeUndefined();
+  });
+});
+
+describe('runReply', () => {
+  const snapshot = (steps: PipelineStep[], members: { id: string; profileId: string }[], profiles: Record<string, unknown>[]) =>
+    ({ definition: { pipeline: { id: 'p', name: 'P', steps }, team: { members }, profiles }, tasks: [] }) as unknown as Pick<OrchestrationRunV6, 'definition' | 'tasks'>;
+  const members = [
+    { id: 'm-a', profileId: 'p-a' },
+    { id: 'm-b', profileId: 'p-b' },
+  ];
+
+  it('is the agent of the last final step, read from the run’s own team and profiles', () => {
+    const profiles = [
+      { id: 'p-a', harness: 'codex', model: 'gpt' },
+      { id: 'p-b', harness: 'claude-code', model: ' opus ', modelProvider: 'anthropic' },
+    ];
+    const reply = runReply(snapshot([step('a'), step('b', ['a'])], members, profiles));
+    expect(reply).toEqual({ stepName: 'b', harness: 'claude-code', model: { id: 'opus', name: 'opus', provider: 'anthropic' } });
+  });
+
+  it('has no model when the profile names none', () => {
+    const reply = runReply(snapshot([step('a')], members, [{ id: 'p-a', harness: 'pi', model: '  ' }]));
+    expect(reply).toEqual({ stepName: 'a', harness: 'pi' });
+  });
+
+  it('is undefined without an agent step or without its profile', () => {
+    const script = step('s', [], { executor: { type: 'script' } as never });
+    expect(runReply(snapshot([script], members, [{ id: 'p-a', harness: 'codex', model: 'gpt' }]))).toBeUndefined();
+    expect(runReply(snapshot([step('a')], members, []))).toBeUndefined();
+    expect(runReply(snapshot([step('a')], [], [{ id: 'p-a', harness: 'codex', model: 'gpt' }]))).toBeUndefined();
   });
 });

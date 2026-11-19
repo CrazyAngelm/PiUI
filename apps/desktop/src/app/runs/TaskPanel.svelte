@@ -27,7 +27,7 @@
   import SquareArrowOutUpRight from '@lucide/svelte/icons/square-arrow-out-up-right';
   import HarnessMark from '../shell/HarnessMark.svelte';
   import { harnessMeta } from '../harnessMeta';
-  import { failureText } from './runGraph';
+  import { failureAdvice, failureText } from './runGraph';
   import {
     RUN_LABEL,
     RUN_TONE,
@@ -76,6 +76,8 @@
   const member = $derived(run.definition.team.members.find((item) => item.id === view.step.assignedMemberId));
   const profile = $derived(member ? run.definition.profiles.find((item) => item.id === member.profileId) : undefined);
   const record = $derived<TaskRecord | undefined>(attempt >= 0 ? view.attempts[attempt] : view.task);
+  const nativeFailure = $derived(record?.failure?.code === 'native-turn-failed');
+  const failureAdviceText = $derived(record?.failure ? failureAdvice(record.failure.code, record.failure.detail) : undefined);
   const shown = $derived(attempt >= 0 && record ? stepState(view.step, record) : view.state);
   // A script runs on the host: its execution id is not a native session.
   const script = $derived(view.step.executor?.type === 'script' ? view.step.executor : undefined);
@@ -211,7 +213,15 @@
       <TriangleAlert size={15} />
       <div class="note__body">
         <p>{$t(failureText(record.failure.code))}</p>
-        {#if record.failure.detail}<pre class="detail">{record.failure.detail}</pre>{/if}
+        {#if nativeFailure && record.failure.detail}
+          <p class="cause">{$t(record.failure.detail)}</p>
+        {:else if record.failure.detail}
+          <pre class="detail">{record.failure.detail}</pre>
+        {/if}
+        {#if failureAdviceText}<p>{$t(failureAdviceText)}</p>{/if}
+        {#if nativeFailure && profile?.model}
+          <p class="muted small">{$t('Model: {0}', [profile.modelProvider ? `${profile.modelProvider} / ${profile.model}` : profile.model])}</p>
+        {/if}
       </div>
     </div>
   {/if}
@@ -262,7 +272,7 @@
       {#if sessionId}
         <Button size="sm" variant="ghost" onclick={() => onOpenSession(sessionId)}>
           {#snippet leading()}<MessageSquare />{/snippet}
-          {$t('Open chat')}
+          {$t('Open agent history')}
         </Button>
       {/if}
       {#if childRun && onOpenRun}
@@ -279,7 +289,7 @@
       {#if sessionId}
         <Button size="sm" variant="ghost" onclick={() => onOpenSession(sessionId)}>
           {#snippet leading()}<MessageSquare />{/snippet}
-          {$t('Open chat')}
+          {$t('Open agent history')}
         </Button>
       {/if}
       {#if childRun && onOpenRun}
@@ -602,6 +612,9 @@
   .detail {
     max-height: 180px;
     color: var(--piui-text);
+  }
+  .cause {
+    font-weight: 600;
   }
   .output {
     max-height: 420px;

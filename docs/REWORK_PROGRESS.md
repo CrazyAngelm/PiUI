@@ -1046,6 +1046,27 @@ Branch `feat/workbench-1116`. Decisions: ADR-064 to ADR-071.
   - Synthetic: bridge tests (three new ones) and the runtime tests.
   - Not run: a reopen in the installed application.
 
+## 2026-11-19 — tester feedback: failed-step cause, image-only send, pipelines from a chat
+
+- **Failed step.** A step whose native turn failed kept only "the agent's turn
+  failed in its environment". The host now keeps the adapter's own summary as
+  the failure detail, the Pi bridge classifies more provider errors (quota,
+  context, settings, model not found) and puts the model Pi reports as current
+  first in its catalog, so editors and templates no longer take an arbitrary
+  first model. The step panel shows the cause, what to change and the model
+  that ran (`docs/HARNESS_CATALOGS.md`). Other harnesses still take the first
+  catalog model.
+- **Image-only message.** A pasted image alone enables Send in an open chat and
+  in the new-chat composer; the front end supplies a visible default line,
+  because providers reject an empty text part and the host rejects empty text.
+- **Pipelines from a chat (ADR-078).** The new chat lists saved pipelines under
+  the composer; a finished run offers "Continue in a chat" (or "Back to the
+  chat"); the participant "Open chat" is "Open agent history".
+- **Evidence.** Synthetic only: unit tests, the Pi bridge fixture and Lab
+  end-to-end tests. Not run: the installed application, a real provider turn.
+  Not done: the run graph as a chat's side panel and the assistant on the
+  shared transcript (ADR-078 lists them as later steps).
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

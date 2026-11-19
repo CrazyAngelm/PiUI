@@ -82,6 +82,21 @@ at once. For OpenCode the host awaits the native model listing (seconds) only
 while it knows no models of the agent; otherwise the known list answers at once
 and the listing is read again in the background for the next request.
 
+Order matters for one consumer: a new agent, a template and the editor's
+"add agent" take the **first** model of the catalog. Pi's registry order is
+arbitrary (and lists every provider, including custom ones), so the Pi bridge
+asks Pi for its current model (`get_state`, a cheap request that does not
+touch history) and lists that model first; a Pi that cannot answer keeps the
+registry order. Such a draft therefore starts on the model and provider a plain
+`pi` chat runs, not on whichever entry sorts first.
+
+A failed native turn of a pipeline step records the adapter's own summary of
+why (the text the chat shows as an error) as the failure `detail` next to the
+stable code `native-turn-failed`; the step panel shows that cause, what to
+change, and the step's model and provider. The provider's own text stays
+private: the Pi bridge maps it to a fixed summary (no credits, model
+unavailable, rejected settings, request too long, sign-in, unreachable).
+
 The pipeline inspector and assistant revalidate through this shared cache on
 open or harness/version changes. Their component state does not extend the
 catalog lifetime. New chat preserves an explicit remembered selection while

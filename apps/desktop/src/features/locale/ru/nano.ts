@@ -147,4 +147,16 @@ export const nanoRu: Readonly<Record<string, string>> = {
   'Nano Desktop could not save the remote access settings.': 'Nano Desktop не смог сохранить настройки удалённого доступа.',
   'The remote access action could not be completed.': 'Не удалось выполнить действие удалённого доступа.',
   'This is not available in a remote session.': 'Недоступно в удалённом сеансе.',
+  // Fixed summaries of a failed Nano or Pi turn (the Pi bridge); they reach a pipeline step's panel as well as the chat.
+  'Sign in to Nano to continue.': 'Войдите в Nano, чтобы продолжить.',
+  'Your Nano credits are used up.': 'Кредиты Nano закончились.',
+  'This Nano mode is not available on your plan.': 'Этот режим Nano недоступен на вашем тарифе.',
+  'Nano is receiving too many requests. Try again shortly.': 'Nano получает слишком много запросов. Попробуйте чуть позже.',
+  'Nano cannot be reached. Check your connection.': 'Nano недоступен. Проверьте подключение.',
+  'This version of Nano Desktop is too old. Update to continue.': 'Эта версия Nano Desktop устарела. Обновите её, чтобы продолжить.',
+  'The request is too large for Nano. Shorten the conversation or attachments.': 'Запрос слишком большой для Nano. Сократите разговор или вложения.',
+  'The Nano model provider is unavailable. Try again shortly.': 'Поставщик моделей Nano недоступен. Попробуйте чуть позже.',
+  'Your ChatGPT workspace usage limit was reached. Open Nano account settings to manage ChatGPT usage.': 'Достигнут лимит использования ChatGPT вашего рабочего пространства. Откройте настройки аккаунта Nano, чтобы управлять использованием ChatGPT.',
+  'Your ChatGPT plan usage limit was reached. Open Nano account settings to manage ChatGPT usage.': 'Достигнут лимит использования вашего тарифа ChatGPT. Откройте настройки аккаунта Nano, чтобы управлять использованием ChatGPT.',
+  'The Pi runtime exited unexpectedly.': 'Среда Pi неожиданно завершилась.',
 };

@@ -318,4 +318,58 @@ test.describe('pipeline code that cannot load', () => {
     await composer.getByRole('button', { name: 'Pi', exact: true }).click();
     await expect(page.getByRole('combobox', { name: 'Who answers' })).toBeVisible();
   });
+
+});
+
+test.describe('finding and continuing pipelines (ADR-078)', () => {
+  test('a new chat lists the project’s pipelines under the composer, and More opens the picker on its Pipelines tab', async ({ lab, page }) => {
+    await lab.open();
+    const composer = home(page);
+    const row = page.getByRole('group', { name: 'Start with a pipeline' });
+    await expect(row).toBeVisible();
+    await expect(row.getByRole('button', { name: 'Code review', exact: true })).toBeVisible();
+    // Only a few pipelines are named (the rest are behind More), and the row is in the page's tab order.
+    expect(await row.getByRole('button').count()).toBeLessThanOrEqual(4);
+
+    await row.getByRole('button', { name: 'More…' }).click();
+    await expect(page.getByRole('combobox', { name: 'Who answers' })).toBeFocused();
+    await expect(page.getByRole('group', { name: 'Executor type' }).getByRole('radio', { name: 'Pipelines' })).toBeChecked();
+    await page.keyboard.press('Escape');
+
+    // Choosing one selects it for the message, and the row gives way to the pipeline's own bar.
+    await row.getByRole('button', { name: 'Code review', exact: true }).click();
+    await expect(composer.getByRole('group', { name: 'Pipeline for this message' })).toBeVisible();
+    await expect(row).toHaveCount(0);
+    // The person keeps typing where they were: choosing a chip does not take the focus away.
+    await expect(composer.getByRole('textbox', { name: 'Message' })).toBeFocused();
+  });
+
+  test('a finished run can be continued in a chat, and the run then leads back to that chat', async ({ lab, page }) => {
+    test.slow();
+    await lab.open();
+    const runs = await lab.openRuns();
+    await runs.getByRole('button', { name: /^Succeeded Code review/ }).click();
+    const run = page.getByRole('region', { name: 'Run' });
+    const bar = run.getByRole('group', { name: 'Talk to the agent about this run' });
+    await expect(bar).toContainText('Ask the agent to change the result');
+    await bar.getByRole('button', { name: 'Continue in a chat' }).click();
+
+    // An ordinary chat with the agent that answered, holding the run as a card; nothing was started.
+    const card = page.getByRole('article', { name: 'Pipeline run: Code review' });
+    await expect(card).toBeVisible({ timeout: 30_000 });
+    await expect(card).toContainText('Succeeded');
+    await expect(page.getByText('The next message hands the pipeline result to Prime Agent.')).toBeVisible();
+    await page.getByRole('textbox', { name: 'Message' }).fill('Make the summary shorter');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Conversation messages' }).getByText('Handed on the result of Code review')).toBeVisible();
+
+    // The run remembers its chat: the same button now goes back instead of starting another one.
+    const again = await lab.openRuns();
+    await again.getByRole('button', { name: /^Succeeded Code review/ }).click();
+    const back = page.getByRole('region', { name: 'Run' }).getByRole('group', { name: 'Talk to the agent about this run' });
+    await expect(back).toContainText('belongs to a chat');
+    await expect(back.getByRole('button', { name: 'Continue in a chat' })).toHaveCount(0);
+    await back.getByRole('button', { name: 'Back to the chat' }).click();
+    await expect(page.getByRole('article', { name: 'Pipeline run: Code review' })).toBeVisible();
+  });
 });

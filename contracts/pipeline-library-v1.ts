@@ -82,7 +82,7 @@ export type PipelineLibraryCommandV1 =
   | { type: 'chat'; sessionId: string }
   /** The chat must belong to `workspaceId`. Without `launchCommandId` it talks directly. */
   | { type: 'setChatPipeline'; sessionId: string; workspaceId: string; launchCommandId?: string }
-  /** Records a run started from the chat; repeating a recorded run id changes nothing. */
+  /** Records a run started from the chat, or a finished run continued in it (ADR-078); repeating a recorded run id changes nothing. */
   | { type: 'recordChatRun'; sessionId: string; workspaceId: string; runId: string }
   /** Marks runs whose result the chat has handed on. Unknown ids are ignored. */
   | { type: 'consumeChatRuns'; sessionId: string; runIds: string[] };

@@ -104,4 +104,9 @@ export const chatPipelinesRu: Readonly<Record<string, string>> = {
   'The pipeline library is full. Delete a template, then try again.': 'Библиотека конвейеров заполнена. Удалите шаблон и попробуйте снова.',
   'Nano Desktop could not save the pipeline library. Nothing was lost.': 'Nano Desktop не удалось сохранить библиотеку конвейеров. Ничего не потеряно.',
   'The operation could not be completed.': 'Не удалось выполнить операцию.',
+  'Wait for the run to finish before continuing it in a chat.': 'Дождитесь окончания запуска, чтобы продолжить его в чате.',
+  'The chat was created, but it could not remember this run. Paste the result into it yourself.':
+    'Чат создан, но не запомнил этот запуск. Вставьте результат в него сами.',
+  'Start with a pipeline': 'Запустить конвейером',
+  'More…': 'Ещё…',
 };

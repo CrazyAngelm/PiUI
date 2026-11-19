@@ -638,22 +638,36 @@ export async function createPiAdapter(config, emit) {
     ["nano_upstream_error", "The Nano model provider is unavailable. Try again shortly."],
   ];
   const classifyTurnError = (message) => {
-    const detail = typeof message?.errorMessage === "string" ? message.errorMessage.toLowerCase() : "";
+    // Bounded first: the patterns below scan the text more than once.
+    const detail = typeof message?.errorMessage === "string" ? message.errorMessage.slice(0, 2000).toLowerCase() : "";
     if (nano) {
       const relay = NANO_RELAY_ERRORS.find(([code]) => detail.includes(code));
       if (relay) return relay[1];
     }
+    // A provider's own code outranks its status line: a 403 that says model_not_found is a model problem.
+    if (/model[ _-]?not[ _-]?found/.test(detail)) return "The selected Pi model is unavailable.";
     if (/api[ _-]?key|authenticat|unauthori[sz]ed|forbidden|credential|log[ -]?in|\b401\b|\b403\b/.test(detail)) {
       return "The Pi runtime could not authenticate the selected model.";
     }
-    if (/model[^\n]*(not found|unknown|unavailable)|unsupported[^\n]*model|\b404\b/.test(detail)) {
+    if (/unsupported (parameter|value)|not supported (with|for) this model/.test(detail)) {
+      return "The selected Pi model rejected the request settings.";
+    }
+    if (/model[ _-]?not[ _-]?found|model[^\n]*(not found|unknown|unavailable|does not exist|not have access|no access|not supported when)|unsupported[^\n]*model|\b404\b/.test(detail)) {
       return "The selected Pi model is unavailable.";
+    }
+    if (/context[ _-]?length|context window|maximum context|prompt is too long|too many tokens|request too large/.test(detail)) {
+      return "The request is too long for the selected Pi model.";
     }
     if (detail.includes("subscription_sharing_workplace_individual_usage_limit_exceeded")) {
       return "Your ChatGPT workspace usage limit was reached. Open Nano account settings to manage ChatGPT usage.";
     }
     if (detail.includes("subscription_sharing_usage_limit_exceeded")) {
       return "Your ChatGPT plan usage limit was reached. Open Nano account settings to manage ChatGPT usage.";
+    }
+    // Not temporary: the account itself has nothing left to spend. Only an explicit signal says so
+    // (a bare "billing" also appears in "billing service timed out").
+    if (/insufficient[ _-]?quota|exceeded your current quota|credit balance|out of credits|no credits|billing[ _-]hard[ _-]limit/.test(detail)) {
+      return "The model provider reports no credits or quota left on this account.";
     }
     if (/rate[ _-]?limit|quota|too many requests|\b429\b|overloaded|capacity/.test(detail)) {
       return "The Pi model provider is temporarily unavailable.";
@@ -1061,7 +1075,20 @@ export async function createPiAdapter(config, emit) {
       return { accepted: true };
     },
     async interrupt() { cancelApprovals(); await request("abort"); },
-    async catalogModels() { return (await this.models()).map(model => ({ ...model, supportsFast: false })); },
+    async catalogModels() {
+      const models = (await this.models()).map(model => ({ ...model, supportsFast: false }));
+      // Pi's registry order is arbitrary, and a new agent or template takes the
+      // first entry. The model a plain `pi` would run (its own default) goes
+      // first, so a step starts on that and not on whatever happens to sort first.
+      // Best effort: a runtime that never answers must not cost the list it already gave.
+      const current = await new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(undefined), 2000);
+        timer.unref?.();
+        request("get_state").then((reply) => mapModel(reply?.model), () => undefined).then((value) => { clearTimeout(timer); resolve(value); });
+      });
+      const at = current ? models.findIndex((entry) => entry.id === current.id && entry.provider === current.provider) : -1;
+      return at > 0 ? [models[at], ...models.slice(0, at), ...models.slice(at + 1)] : models;
+    },
     async models() {
       const result = await request("get_available_models");
       availableModels = mapModels(result?.models);

@@ -25,6 +25,8 @@ function taskbarCount(page: Page): () => Promise<number> {
 
 /** The attention controller mounts after first paint; give it its first observation. */
 async function settleController(page: Page): Promise<void> {
+  // The Lab host publishes its taskbar record once it is built; on a loaded machine that is after first paint.
+  await page.waitForFunction(() => (window as unknown as { __piuiLabAttention?: unknown }).__piuiLabAttention !== undefined);
   await page.waitForTimeout(1_200);
 }
 

@@ -4,7 +4,7 @@ import type {
   RunInputValue, RunStatus, RunSummary, RunTrigger, TaskOutput, TaskRecord,
 } from '../labContracts';
 import { runInputSection, substituteInputTokens } from '../../runInputs';
-import { executorKind, isHostExecutedStep, scriptResult } from '../../stepExecutors';
+import { executorKind, failureWithDetail, isHostExecutedStep, scriptResult } from '../../stepExecutors';
 import { pinnedResult, REVIEW_RETRY_PINNED } from '../../pinnedData';
 import type { SubpipelineResult } from '../../subpipelines';
 
@@ -44,9 +44,19 @@ export class CoordinatorFault extends Error {
   }
 }
 
+/**
+ * A failed native turn as the host records it: only Pi and Nano name the cause (their bridge maps
+ * provider text to fixed summaries); every other harness leaves the stable code alone.
+ */
+export function failedTurn(harness: string): Completion {
+  return harness === 'pi' || harness === 'nano'
+    ? { status: 'failed', code: 'native-turn-failed', detail: 'The selected Pi model is unavailable.' }
+    : { status: 'failed', code: 'native-turn-failed' };
+}
+
 export type Completion =
   | { readonly status: 'succeeded'; readonly reference: NativeHistoryReference; readonly text: string }
-  | { readonly status: 'failed'; readonly code: string };
+  | { readonly status: 'failed'; readonly code: string; readonly detail?: string };
 
 /** `ScriptCompletion`: what the host observed when a script ended (v6.2). */
 export type ScriptCompletion =
@@ -471,7 +481,7 @@ export function completeTask(run: LabRun, stepId: string, executionId: string, c
     task.resultReference = outcome.reference;
   } else {
     task.status = 'failed';
-    task.failure = { code: outcome.code };
+    task.failure = outcome.detail !== undefined ? failureWithDetail(outcome.code, outcome.detail) : { code: outcome.code };
   }
   task.revision += 1;
   if (outcome.status === 'failed') cancelReady(run);

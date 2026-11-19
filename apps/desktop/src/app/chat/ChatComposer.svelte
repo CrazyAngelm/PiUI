@@ -125,8 +125,6 @@
   let dictationActive = $state(false);
   const dictating = $derived(dictationActive && Boolean(dictate));
   const submit = (): void => (dictating ? dictate?.stopAndSend() : void send());
-  // A running turn shows Stop in the send button's place until there is something to send.
-  const showStop = $derived((running || stopping) && !dictating && !text.trim());
   const commands = $derived([
     ...(composer?.capabilities.compact
       ? [{ name: 'compact', description: 'Compact conversation context', enabled: snapshot.session.status === 'idle' && !composer.queue.items.length }]
@@ -244,6 +242,11 @@
   // The next message may go through a saved pipeline instead (ADR-040); after
   // that run starts, the chat talks to its own agent again.
   const pipelineId = $derived(chatPipelines.chats[sessionId]?.launchCommandId ?? '');
+  // Images alone are a message: the host takes no empty text, so they go with a short line that says what to look at.
+  const imageOnly = $derived(!text.trim() && attachments.images.length > 0 && !pipelineId);
+  const imageOnlyText = $derived($t(attachments.images.length === 1 ? 'See the attached image.' : 'See the attached images.'));
+  // A running turn shows Stop in the send button's place until there is something to send.
+  const showStop = $derived((running || stopping) && !dictating && !text.trim() && !imageOnly);
   const executor = $derived<Executor>(pipelineId ? { kind: 'pipeline', commandId: pipelineId } : { kind: 'direct', harness });
   const pendingResults = $derived(chatPipelines.pendingResults(sessionId).filter((run) => run.status === 'succeeded').length);
   let pipelineDetail = $state.raw<ChatPipelineDetail | undefined>();
@@ -505,7 +508,8 @@
   }
 
   async function send(): Promise<void> {
-    if (busy || !text.trim() || !composer) return;
+    if (busy || !composer || !(text.trim() || imageOnly)) return;
+    const onlyImages = imageOnly;
     // `/btw` also takes a question after it; the other commands are the whole message.
     const question = commands.some((command) => command.name === 'btw') ? btwQuestion(text) : undefined;
     if (question !== undefined) {
@@ -521,10 +525,13 @@
       return;
     }
     const typed = text;
-    // Finished runs of this chat reach its agent inside this message, labelled.
-    const handed = await chatPipelines.withResults(sessionId, expandMacros(typed, macros.list, skillSyntax));
-    const message = handed.text;
+    // What is sent is fixed here: the person can still remove an image while the results are read, and a
+    // message that says "see the attached image" must never leave without it.
     const imageIds = attachments.ids;
+    const placeholder = imageOnlyText;
+    // Finished runs of this chat reach its agent inside this message, labelled.
+    const handed = await chatPipelines.withResults(sessionId, onlyImages ? placeholder : expandMacros(typed, macros.list, skillSyntax));
+    const message = handed.text;
     // A message written during a turn waits in the queue; its "Send now" steers it into the turn.
     const effectiveMode = running ? 'follow-up' : 'prompt';
     // A durable request id prevents duplicate delivery if the reply is lost.
@@ -665,9 +672,11 @@
               <Button
                 size="sm"
                 variant="primary"
-                disabled={busy || !editText.trim()}
+                disabled={busy || !(editText.trim() || item.attachments?.length)}
                 onclick={async () => {
-                  if (await action({ type: 'edit', sessionId, requestId: item.id, text: editText })) closeEditor(item.id);
+                  // A queued message that carries images may lose its words, as a new one may be sent without any.
+                  const edited = editText.trim() ? editText : $t(item.attachments?.length === 1 ? 'See the attached image.' : 'See the attached images.');
+                  if (await action({ type: 'edit', sessionId, requestId: item.id, text: edited })) closeEditor(item.id);
                 }}>{$t('Save')}</Button
               >
             </div>
@@ -781,7 +790,7 @@
         aria-autocomplete="list"
         aria-controls={menu ? menuId : undefined}
         aria-activedescendant={menu && menu.items.length ? `${menuId}-${activeIndex}` : undefined}
-        placeholder={pipelineId ? $t('Describe the task for the pipeline…') : remoteMode ? $t('Message') : running ? $t('Queue a follow-up…') : $t('Reply, type / for commands or @ to mention a file…')}
+        placeholder={pipelineId ? $t('Describe the task for the pipeline…') : remoteMode ? $t('Message') : attachments.images.length ? imageOnlyText : running ? $t('Queue a follow-up…') : $t('Reply, type / for commands or @ to mention a file…')}
       />
       {#if macroTokens.length}
         <MacroLayer {input} {text} tokens={macroTokens} syntax={skillSyntax} quiet={Boolean(menu)} onEdit={onEditMacro ? (macro) => onEditMacro(macro.id) : undefined} />
@@ -832,7 +841,7 @@
             type="button"
             data-nano-composer="send"
             onclick={submit}
-            disabled={dictating ? busy : busy || !composer || !text.trim()}
+            disabled={dictating ? busy : busy || !composer || !(text.trim() || imageOnly)}
             aria-label={dictating ? $t('Stop dictation and send') : running ? $t('Add to queue') : $t('Send')}
           >
             {#if busy}<Spinner size={14} />{:else}<ArrowUp size={16} />{/if}

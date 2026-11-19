@@ -192,6 +192,46 @@ test("classifies native turn failures without forwarding raw provider details", 
   await adapter.dispose();
 });
 
+test("names the likely cause of a failed turn and keeps the provider text private", async () => {
+  for (const [scenario, expected] of [
+    ["err-quota", "The model provider reports no credits or quota left on this account."],
+    ["err-model-missing", "The selected Pi model is unavailable."],
+    ["err-model-not-supported", "The selected Pi model is unavailable."],
+    ["err-settings", "The selected Pi model rejected the request settings."],
+    ["err-context", "The request is too long for the selected Pi model."],
+    ["err-model-403", "The selected Pi model is unavailable."],
+    ["err-billing-timeout", "The Pi runtime could not reach the model provider."],
+    ["err-long", "The Pi turn failed."],
+  ]) {
+    const events = [];
+    const adapter = await createPiAdapter(config(), (event) => events.push(event));
+    try {
+      await runScenario(adapter, events, scenario);
+      assert.deepEqual(events.filter((event) => event.type === "error"), [{ type: "error", message: expected }], scenario);
+      assert.equal(events.find((event) => event.type === "turnCompleted").outcome, "failed");
+      assert.doesNotMatch(JSON.stringify(events), /SECRET-MUST-NOT-LEAK/);
+    } finally { await adapter.dispose(); }
+  }
+});
+
+test("Pi catalog lists the model Pi would run first, whatever the registry order", async () => {
+  const runtimeArgs = [fixture, "--catalog-only-fixture", "--catalog-many"];
+  const adapter = await createPiAdapter(config({ catalogOnly: true, runtimeArgs }), () => {});
+  try {
+    assert.deepEqual((await adapter.catalogModels()).map((model) => model.id), ["model", "alpha", "zeta"]);
+  } finally { await adapter.dispose(); }
+  // A Pi that cannot say its current model leaves the registry order alone.
+  const quiet = await createPiAdapter(config({ catalogOnly: true, runtimeArgs: [...runtimeArgs, "--fail-state"] }), () => {});
+  try {
+    assert.deepEqual((await quiet.catalogModels()).map((model) => model.id), ["alpha", "model", "zeta"]);
+  } finally { await quiet.dispose(); }
+  // A Pi that never answers get_state keeps its list, after a short wait.
+  const silent = await createPiAdapter(config({ catalogOnly: true, runtimeArgs: [...runtimeArgs, "--silent-state"] }), () => {});
+  try {
+    assert.deepEqual((await silent.catalogModels()).map((model) => model.id), ["alpha", "model", "zeta"]);
+  } finally { await silent.dispose(); }
+});
+
 test("accepts only exact Pi built-ins and gives read-only deny precedence", async () => {
   for (const invalid of [["read,bash"], ["read*"], ["workspace"], ["unknown"]]) {
     await assert.rejects(

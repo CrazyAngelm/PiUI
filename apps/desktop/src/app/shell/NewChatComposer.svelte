@@ -3,6 +3,7 @@
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import Zap from '@lucide/svelte/icons/zap';
   import Brain from '@lucide/svelte/icons/brain';
+  import Route from '@lucide/svelte/icons/route';
   import { onMount, tick, untrack } from 'svelte';
   import { SvelteMap, SvelteSet } from 'svelte/reactivity';
   import { t } from '../../features/locale/language';
@@ -41,7 +42,7 @@
   import type { AgentProfile, RunInputValue } from '../../host-api/orchestrationClient';
   import { useWorkspace } from './context';
   import { modelSelectionKey, resolveModelSelection } from '../../host-api/modelSelection';
-  import { choiceFor, executorOf, reconcileSelection, rememberedPipelineUsable, restoredSelection, startingExecutor, withChoice, withExecutorIn, type NewChatChoices, type NewChatSelection, type PipelineCandidate, type RememberedExecutor } from './newChatChoice';
+  import { CHOICE_KEY, LAST_CHOICE_KEY, choiceFor, executorOf, readChoices, reconcileSelection, rememberedPipelineUsable, restoredSelection, startingExecutor, withChoice, withExecutorIn, type NewChatChoices, type NewChatSelection, type PipelineCandidate, type RememberedExecutor } from './newChatChoice';
   import { teammates } from '../team/teammatesStore.svelte';
   import FusionModeBar from '../fusion/FusionModeBar.svelte';
   import { fusionErrorText, refusalCopy, roleLabel } from '../fusion/fusionPair';
@@ -60,24 +61,6 @@
   let { onTrust }: Props = $props();
   const store = useWorkspace();
   const DRAFT_KEY = 'new-chat';
-  const CHOICE_KEY = 'piui.shell.newchat.v1';
-  const LAST_CHOICE_KEY = 'piui.shell.newchat.last.v1';
-
-  function readChoices(): NewChatChoices {
-    const read = (key: string): unknown => {
-      try {
-        return JSON.parse(localStorage.getItem(key) ?? 'null');
-      } catch {
-        return null;
-      }
-    };
-    const projects = read(CHOICE_KEY);
-    const last = read(LAST_CHOICE_KEY);
-    return {
-      projects: projects && typeof projects === 'object' && !Array.isArray(projects) ? (projects as NewChatChoices['projects']) : {},
-      ...(last && typeof last === 'object' && !Array.isArray(last) ? { last: last as NonNullable<NewChatChoices['last']> } : {}),
-    };
-  }
   // Kept in memory too: a pick stays remembered for this composer even when storage refuses the write.
   let choices = readChoices();
 
@@ -413,6 +396,40 @@
       if (!code.libraries[id]) void code.loadLibrary(id).finally(() => librariesAsked.add(id));
     });
   });
+  // The "Start with a pipeline" row under the composer lists the project's saved pipelines, so their
+  // names are read when the project is shown (once per project and composer: the editor saves without
+  // telling this store), and the definitions of the first few, which decide whether each can be offered.
+  // Nothing here is tracked beyond the project: a refused read would otherwise ask again forever.
+  const MAX_ROW_PIPELINES = 3;
+  const MAX_ROW_CANDIDATES = 6;
+  const commandsAsked = new Set<string>();
+  $effect(() => {
+    const id = workspaceId;
+    const code = pipelines;
+    if (!id || !pipelinesAllowed || !code) return;
+    untrack(() => {
+      if (commandsAsked.has(id)) return;
+      commandsAsked.add(id);
+      void code.loadCommands(id);
+      void teammates.ensure(id);
+    });
+  });
+  // Each definition is read fresh once per composer (the editor may have changed it), then kept.
+  const detailsAsked = new Set<string>();
+  $effect(() => {
+    const id = workspaceId;
+    const code = pipelines;
+    const list = code?.commands[id];
+    if (!id || !pipelinesAllowed || !code || !list) return;
+    untrack(() => {
+      for (const command of list.slice(0, MAX_ROW_CANDIDATES)) {
+        const key = `${id}:${command.id}`;
+        if (detailsAsked.has(key)) continue;
+        detailsAsked.add(key);
+        void code.detail(id, command.id, true).catch(() => undefined);
+      }
+    });
+  });
   $effect(() => {
     void workspaceId;
     untrack(() => (executorPickedIn = undefined));
@@ -654,6 +671,31 @@
 
   const loadPipelineCode = (): void => void lazyPipelines.load().catch(() => undefined);
 
+  /** The picker, to open it on its pipelines tab from the row under the composer. */
+  let executorPicker = $state<{ show: (tab?: 'direct' | 'pipelines') => void } | undefined>();
+  /** Saved pipelines the row offers: the first few the picker itself would let the person choose (read, take a message, teammate on, agent installed). */
+  const rowPipelines = $derived.by(() => {
+    const code = pipelines;
+    if (!code) return [];
+    const teamKnown = teammates.teams[workspaceId] !== undefined;
+    const offered: { id: string; name: string }[] = [];
+    for (const command of (code.commands[workspaceId] ?? []).slice(0, MAX_ROW_CANDIDATES)) {
+      const detail = code.detailFor(workspaceId, command.id);
+      if (!detail) continue;
+      const usable = rememberedPipelineUsable({
+        candidate: { accepts: detail.accepts, ...(detail.reply ? { replyHarness: detail.reply.harness } : {}) },
+        teammate: teammates.byLaunchCommand(workspaceId, command.id),
+        teamKnown,
+        harnesses: executorHarnesses,
+      });
+      if (usable === true) offered.push({ id: command.id, name: command.name });
+      if (offered.length === MAX_ROW_PIPELINES) break;
+    }
+    return offered;
+  });
+  // No row, not even "More…", until at least one pipeline can really be chosen: a lone link to an empty tab is noise.
+  const showPipelineRow = $derived(pipelinesAllowed && !usesPipeline && !fusionMode && Boolean(workspaceId) && rowPipelines.length > 0);
+
   function managePipelines(): void {
     if (!workspaceId) return;
     store.selectWorkspace(workspaceId);
@@ -680,8 +722,11 @@
   const explicitModelReady = $derived(
     catalogFor === JSON.stringify([workspaceId, harness]) && modelsResolved && !modelsProvisional && Boolean(model),
   );
+  // Images alone are a message: the host takes no empty text, so they go with a short line that says what to look at.
+  const imageOnly = $derived(!text.trim() && attachments.images.length > 0 && !(usesPipeline && !fusionMode));
+  const imageOnlyText = $derived($t(attachments.images.length === 1 ? 'See the attached image.' : 'See the attached images.'));
   const canSend = $derived(
-    Boolean(text.trim()) &&
+    (Boolean(text.trim()) || imageOnly) &&
       Boolean(workspaceId) &&
       !busy &&
       !store.safeMode &&
@@ -869,10 +914,10 @@
     // Capture the whole request before the lazy import yields: the person may
     // pick another project or edit the text while the module loads.
     const targetId = workspaceId;
-    const typed = text;
+    const typed = imageOnly ? imageOnlyText : text;
     const known = macros.list;
     const syntax = skillSyntax;
-    const title = chatTitle(typed);
+    const title = chatTitle(text);
     const images = attachments.images;
     const acknowledgeDraft = captureDraftAcknowledgement();
     busy = true;
@@ -919,7 +964,7 @@
     // A direct start that was forced (no pipelines here, or their code did not load) is not a choice: the project keeps what it remembered.
     remember(pipelinesAllowed ? executorMemory(workspaceId, '') : undefined);
     // Started now, with the text as it is: the macro rules may still be loading when the chat is created.
-    const message = expanded(text, macros.list, skillSyntax);
+    const message = expanded(imageOnly ? imageOnlyText : text, macros.list, skillSyntax);
     const title = chatTitle(text);
     // The images move to the new chat: to its queued message, or to its draft if sending fails.
     const images = attachments.images;
@@ -1093,7 +1138,7 @@
       onpaste={pasted}
       minRows={3}
       maxRows={14}
-      placeholder={usesPipeline ? $t('Describe the task for the pipeline…') : remoteMode ? $t('Message') : $t('Describe a task, ask a question or @mention a file…')}
+      placeholder={usesPipeline ? $t('Describe the task for the pipeline…') : remoteMode ? $t('Message') : attachments.images.length ? imageOnlyText : $t('Describe a task, ask a question or @mention a file…')}
       aria-label={$t('Message')}
       aria-autocomplete="list"
       aria-controls={menu ? 'new-chat-menu' : undefined}
@@ -1121,6 +1166,7 @@
       {#if lazyPipelines.code}
         {@const ExecutorPicker = lazyPipelines.code.ExecutorPicker}
         <ExecutorPicker
+          bind:this={executorPicker}
           {workspaceId}
           value={executor}
           harnesses={executorHarnesses}
@@ -1211,6 +1257,20 @@
     <div class="composer__drop" aria-hidden="true">{$t('Drop images or files to attach')}</div>
   {/if}
 </div>
+{#if showPipelineRow}
+  <div class="pipeline-row" role="group" aria-label={$t('Start with a pipeline')}>
+    <Route size={13} aria-hidden="true" />
+    <span>{$t('Start with a pipeline')}:</span>
+    {#each rowPipelines as command (command.id)}
+      <button type="button" class="pipeline-row__chip" onclick={() => {
+        chooseExecutor({ kind: 'pipeline', commandId: command.id });
+        // The row leaves with the choice, and the focus must not leave with it.
+        textarea?.focus();
+      }}>{command.name || $t('Untitled pipeline')}</button>
+    {/each}
+    <button type="button" class="pipeline-row__chip" onclick={() => executorPicker?.show('pipelines')}>{$t('More…')}</button>
+  </div>
+{/if}
 {#if templateChoice && !fusionMode && !draftLoading}
   <p class="notice">{$t('Sending saves this template as a pipeline in this project.')}</p>
 {/if}
@@ -1332,6 +1392,35 @@
   }
   .notice--error {
     color: var(--piui-danger);
+  }
+  .pipeline-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 6px;
+    margin: var(--piui-space-2) 4px 0;
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
+  }
+  .pipeline-row__chip {
+    max-width: 220px;
+    overflow: hidden;
+    padding: 2px 8px;
+    border: 1px solid var(--piui-border-subtle);
+    border-radius: var(--piui-radius-sm);
+    background: transparent;
+    color: var(--piui-text-muted);
+    font: inherit;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pipeline-row__chip:hover {
+    background: var(--piui-hover);
+    color: var(--piui-text);
+  }
+  .pipeline-row__chip:focus-visible {
+    outline: 2px solid var(--piui-focus);
+    outline-offset: 1px;
   }
   .link {
     padding: 0;

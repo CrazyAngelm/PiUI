@@ -895,6 +895,35 @@ struct LiveState {
     sessions_admitted: bool,
     /// Non-fatal notices (host-decided or reported by the adapter).
     notices: Mutex<Vec<NativeNoticeCode>>,
+    /// The adapter vets the text of its turn errors (fixed summaries, never
+    /// provider or protocol text), so only such a harness feeds `turn_cause`.
+    reports_turn_cause: bool,
+    turn_cause: Mutex<TurnCause>,
+}
+
+/// Why a turn failed, in the adapter's own fixed words. An error event waits
+/// in `pending` until the turn it belongs to ends; that outcome then moves it
+/// to `failed` (a turn that ended any other way owns none), so a reader of the
+/// outcome never sees the cause of another turn or event.
+#[derive(Default)]
+struct TurnCause {
+    pending: Option<String>,
+    failed: Option<String>,
+}
+
+impl TurnCause {
+    fn error_reported(&mut self, message: String) {
+        self.pending = Some(message);
+    }
+
+    fn turn_ended(&mut self, outcome: TurnOutcome) {
+        let said = self.pending.take();
+        self.failed = if outcome == TurnOutcome::Failed {
+            said
+        } else {
+            None
+        };
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -953,6 +982,18 @@ impl WorkspaceRuntimeHandle {
 
     pub async fn snapshot(&self) -> Result<SessionSnapshot, WorkspaceError> {
         self.host.snapshot(&self.session_id).await
+    }
+
+    /// Why the last turn failed, in the adapter's own fixed summary (the text
+    /// the chat shows). `None` when the harness does not vet its error text
+    /// or reported no cause for that turn.
+    pub fn turn_error(&self) -> Option<String> {
+        let (_, state) = self.host.live_runtime(&self.session_id).ok().flatten()?;
+        state
+            .turn_cause
+            .lock()
+            .ok()
+            .and_then(|cause| cause.failed.clone())
     }
 
     pub async fn final_result(
@@ -2516,6 +2557,8 @@ impl WorkspaceHost {
             orchestrated,
             sessions_admitted,
             notices: Mutex::new(notices),
+            reports_turn_cause: matches!(record.harness, HarnessKind::Pi | HarnessKind::Nano),
+            turn_cause: Mutex::new(TurnCause::default()),
         });
         let instance_id = Uuid::new_v4();
         let forwarding = spawn_event_forwarder(EventForwarding {
@@ -5410,6 +5453,15 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                         }
                         .pause_queue(&session_id);
                     }
+                    // The adapter reports the error just before the failed
+                    // outcome; it is recorded with this turn before observers
+                    // see the outcome, and a turn that ended any other way
+                    // owns no error.
+                    if state.reports_turn_cause
+                        && let Ok(mut cause) = state.turn_cause.lock()
+                    {
+                        cause.turn_ended(outcome);
+                    }
                     // A finished turn's usage is durable before any observer
                     // (such as the run scheduler) sees the outcome.
                     if usage_persist_at.take().is_some() {
@@ -5668,9 +5720,13 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                         inner: inner.clone(),
                     }
                     .pause_queue(&session_id);
-                    WorkspaceEventPayload::Error {
-                        message: safe_runtime_message(&message),
+                    let message = safe_runtime_message(&message);
+                    if state.reports_turn_cause
+                        && let Ok(mut cause) = state.turn_cause.lock()
+                    {
+                        cause.error_reported(message.clone());
                     }
+                    WorkspaceEventPayload::Error { message }
                 }
             };
             publish(&publisher, &state, &session_id, payload);
@@ -6195,6 +6251,33 @@ fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, WorkspaceError> {
 
 #[cfg(test)]
 mod tests {
+    use super::TurnCause;
+
+    #[test]
+    fn a_turns_cause_belongs_to_the_turn_that_failed_and_never_leaks_to_the_next() {
+        let mut cause = TurnCause::default();
+        cause.error_reported("The selected Pi model is unavailable.".into());
+        cause.turn_ended(TurnOutcome::Failed);
+        assert_eq!(
+            cause.failed.as_deref(),
+            Some("The selected Pi model is unavailable.")
+        );
+        // A later turn that fails without saying why owns no cause.
+        cause.turn_ended(TurnOutcome::Failed);
+        assert_eq!(cause.failed, None);
+        // A turn that ended any other way drops an error reported before it.
+        cause.error_reported("The Pi turn failed.".into());
+        cause.turn_ended(TurnOutcome::Succeeded);
+        assert_eq!(cause.failed, None);
+        cause.turn_ended(TurnOutcome::Failed);
+        assert_eq!(cause.failed, None);
+        // The last error before the outcome wins over an earlier one.
+        cause.error_reported("Context compaction failed.".into());
+        cause.error_reported("The Pi turn failed.".into());
+        cause.turn_ended(TurnOutcome::Failed);
+        assert_eq!(cause.failed.as_deref(), Some("The Pi turn failed."));
+    }
+
     #[test]
     fn the_board_block_follows_the_sessions_own_instructions() {
         assert_eq!(

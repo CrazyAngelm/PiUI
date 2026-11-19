@@ -61,9 +61,23 @@
         : '',
   );
 
+  /** A tab asked for by `show`; the next opening uses it once, else the tab of the current executor. */
+  let requestedTab: Tab | undefined;
+
+  /** Opens the picker on a tab, for a control outside it (the new chat's "Start with a pipeline" row). */
+  export function show(next: Tab = 'pipelines'): void {
+    requestedTab = next;
+    open = true;
+  }
+
   // The picker opens on the tab of the current executor.
   $effect.pre(() => {
-    if (open) untrack(() => (tab = value.kind === 'direct' ? 'direct' : 'pipelines'));
+    if (open) {
+      untrack(() => {
+        tab = requestedTab ?? (value.kind === 'direct' ? 'direct' : 'pipelines');
+        requestedTab = undefined;
+      });
+    }
   });
 
   // Pipelines load when the picker first opens (and again for another project). The load runs untracked:

@@ -312,6 +312,40 @@ test.describe('attachments', () => {
     await expect(transcript.getByRole('list', { name: 'Attached images' }).last()).toContainText('Image');
     await expect(page.getByRole('list', { name: 'Attached images' }).getByText('diagram.png')).toHaveCount(0);
   });
+
+  test('a pasted image alone can be sent from an open chat', async ({ lab, page }) => {
+    await lab.open();
+    const message = await openChat(lab, /Route host calls through one transport/);
+    const send = page.getByRole('button', { name: 'Send', exact: true });
+    await expect(message).toHaveValue('');
+    await expect(send).toBeDisabled();
+    await deliverImage(page, 'paste', 'alone.png');
+    await expect(page.getByRole('list', { name: 'Attached images' }).getByText('alone.png')).toBeVisible();
+    // The send button wakes up and the field shows the line that goes with the image.
+    await expect(send).toBeEnabled();
+    await expect(message).toHaveAttribute('placeholder', 'See the attached image.');
+    await send.click();
+    const transcript = page.getByRole('region', { name: 'Conversation messages' });
+    await expect(transcript.getByText('See the attached image.')).toBeVisible({ timeout: 15_000 });
+    await expect(transcript.getByRole('list', { name: 'Attached images' }).last()).toContainText('Image');
+    await expect(page.getByRole('list', { name: 'Attached images' }).getByText('alone.png')).toHaveCount(0);
+  });
+
+  test('a pasted image alone starts a new chat', async ({ lab, page }) => {
+    await lab.open();
+    const composer = home(page);
+    const start = composer.getByRole('button', { name: 'Start chat' });
+    await expect(start).toBeDisabled();
+    // A paste before the first catalog selection has no project to attach to.
+    await expect(composer.getByRole('button', { name: 'Project and permissions: piui', exact: true })).toBeVisible();
+    await expect(composer.getByRole('button', { name: 'Pi', exact: true })).toBeEnabled();
+    await deliverImage(page, 'paste', 'first.png');
+    await expect(composer.getByText('first.png')).toBeVisible();
+    await expect(start).toBeEnabled();
+    await start.click();
+    const transcript = page.getByRole('region', { name: 'Conversation messages' });
+    await expect(transcript.getByText('See the attached image.')).toBeVisible({ timeout: 15_000 });
+  });
 });
 
 test.describe('mentions', () => {

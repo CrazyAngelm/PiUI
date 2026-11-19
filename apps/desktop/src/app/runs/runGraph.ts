@@ -145,6 +145,26 @@ export const TASK_STATUS_LABEL: Record<TaskRecord['status'], string> = {
   uncertain: 'Needs checking',
 };
 
+/**
+ * What to do about a failed native turn, chosen by the adapter's own summary
+ * of why it failed (the text the chat shows). Other codes and summaries get no
+ * advice, except the pointer to the step's chat for a native turn.
+ */
+export function failureAdvice(code: string, detail: string | undefined): string | undefined {
+  if (code !== 'native-turn-failed') return undefined;
+  const bySummary: Record<string, string> = {
+    'The selected Pi model is unavailable.': 'This agent’s model or provider is not available in Pi. Open Edit pipeline and choose the model and provider that work in a Pi chat.',
+    'The Pi runtime could not authenticate the selected model.': 'Sign in to this model’s provider in Pi, or choose a model that is already signed in, then run this step again.',
+    'The selected Pi model rejected the request settings.': 'Set this agent’s reasoning to Model default, or choose another model.',
+    'The request is too long for the selected Pi model.': 'Shorten the inputs or choose a model with a larger context.',
+    'The model provider reports no credits or quota left on this account.': 'Add credits with the provider or choose another model, then run this step again.',
+    'The Pi model provider is temporarily unavailable.': 'Try again in a minute. If it keeps failing, choose another model.',
+    'The Pi runtime could not reach the model provider.': 'Try again in a minute. If it keeps failing, choose another model.',
+  };
+  // Own keys only: the detail is text from outside, and "constructor" must not find a function.
+  return (detail !== undefined && Object.hasOwn(bySummary, detail) ? bySummary[detail] : undefined) ?? 'Open the agent history of this step to see everything the agent reported.';
+}
+
 /** Human wording for stable failure codes; unknown codes stay visible verbatim. */
 export function failureText(code: string): string {
   const known: Record<string, string> = {

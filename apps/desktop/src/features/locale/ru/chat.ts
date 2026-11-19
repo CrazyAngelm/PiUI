@@ -30,6 +30,8 @@ export const chatRu: Readonly<Record<string, string>> = {
   'Image': 'Изображение',
   'Drop images or files to attach': 'Перетащите изображения или файлы, чтобы прикрепить',
   'Remove the images to send this message.': 'Уберите изображения, чтобы отправить сообщение.',
+  'See the attached image.': 'Посмотри приложенное изображение.',
+  'See the attached images.': 'Посмотри приложенные изображения.',
   'This harness does not accept images in Nano Desktop.': 'Этот агент не принимает изображения в Nano Desktop.',
   'The current model does not accept images.': 'Текущая модель не принимает изображения.',
   'Codex sends images to models that accept image input.': 'Codex передаёт изображения моделям, которые их принимают.',

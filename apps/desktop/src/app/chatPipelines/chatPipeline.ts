@@ -4,6 +4,7 @@
  * that hands a finished run's result to the chat's own harness. Nothing here
  * reads or writes native history; the host stays the authority for inputs.
  */
+import type { HarnessKind, WorkspaceModel } from '../../../../../contracts/workspace-v15';
 import type { OrchestrationRunV6, PipelineInput, PipelineStep, RunInputValue, TaskRecord } from '../../host-api/orchestrationClient';
 
 /** The name of the run input a pipeline adds to accept chat messages. */
@@ -75,6 +76,35 @@ export function finalSteps(steps: readonly PipelineStep[]): PipelineStep[] {
 export function replyStep(steps: readonly PipelineStep[]): PipelineStep | undefined {
   const final = finalSteps(steps).filter(answers);
   return final.at(-1) ?? steps.filter(answers).at(-1);
+}
+
+/** The agent that answers a run and so continues a chat about it. */
+export interface RunReply {
+  readonly stepName: string;
+  readonly harness: HarnessKind;
+  readonly model?: WorkspaceModel;
+}
+
+/**
+ * Who continues a chat about this run, read from the run's frozen definition (its team and profiles
+ * as they were when it started), so a later edit or deletion of the saved pipeline changes nothing.
+ * Undefined when the pipeline has no agent step.
+ */
+export function runReply(run: Pick<OrchestrationRunV6, 'definition' | 'tasks'>): RunReply | undefined {
+  const { pipeline, team, profiles } = run.definition;
+  // The agent that supplied the result (a router may have skipped the last step); a run without a
+  // result, or one answered by a script, continues with the pipeline's answering agent.
+  const answered = answerTask(run)?.step;
+  const step = answered && answers(answered) ? answered : replyStep(pipeline.steps);
+  const member = step ? team.members.find((item) => item.id === step.assignedMemberId) : undefined;
+  const profile = member ? profiles.find((item) => item.id === member.profileId) : undefined;
+  if (!step || !profile) return undefined;
+  const model = profile.model.trim();
+  return {
+    stepName: step.name || step.id,
+    harness: profile.harness as HarnessKind,
+    ...(model ? { model: { id: model, name: model, ...(profile.modelProvider ? { provider: profile.modelProvider } : {}) } } : {}),
+  };
 }
 
 /**

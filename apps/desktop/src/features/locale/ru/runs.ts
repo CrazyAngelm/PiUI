@@ -111,4 +111,14 @@ export const runsRu: Readonly<Record<string, string>> = {
     'Не удалось прочитать историю агента, поэтому его результат нельзя закрепить.',
   'Nano Desktop could not save this change. Nothing was changed.': 'Nano Desktop не смог сохранить изменение. Ничего не изменено.',
   'The operation could not be completed. Nothing was changed.': 'Операцию не удалось выполнить. Ничего не изменено.',
+  // Continuing a run in a chat (ADR-078).
+  'Open agent history': 'Открыть историю агента',
+  'Talk to the agent about this run': 'Разговор с агентом об этом запуске',
+  'This run belongs to a chat with its agent.': 'Этот запуск относится к чату с его агентом.',
+  'Not quite right? Ask the agent to change the result.': 'Результат не устроил? Попросите агента его поправить.',
+  'Talk it over with the agent that answers this pipeline.': 'Обсудите запуск с агентом, который отвечает в этом конвейере.',
+  'Back to the chat': 'Вернуться в чат',
+  'Continue in a chat': 'Продолжить в чате',
+  'Could not continue the run': 'Не удалось продолжить запуск',
+  'No agent is available.': 'Нет доступного агента.',
 };

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CHOICE_KEY, LAST_CHOICE_KEY, newChatPermission, readChoices,
   choiceFor, executorOf, reconcileSelection, rememberedPipelineUsable, restoredSelection, startingExecutor, withChoice, withExecutorIn,
   type ExecutorFacts, type NewChatSelection, type PipelineEligibility,
 } from './newChatChoice';
@@ -247,5 +248,27 @@ describe('remembering the executor after a delay', () => {
 
   it('works without any latest choice', () => {
     expect(withExecutorIn({ projects: {} }, { projects: {} }, 'a', executor)).toEqual({ projects: { a: { executor } } });
+  });
+});
+
+describe('stored choices and the permission of a continued run', () => {
+  const store = (values: Record<string, unknown>) => ({ getItem: (key: string) => (key in values ? JSON.stringify(values[key]) : null) });
+
+  it('reads the stored choices, and treats a missing or malformed value as none', () => {
+    expect(readChoices(store({}))).toEqual({ projects: {} });
+    expect(readChoices({ getItem: () => '{broken' })).toEqual({ projects: {} });
+    expect(readChoices(store({ [CHOICE_KEY]: [1], [LAST_CHOICE_KEY]: 'x' }))).toEqual({ projects: {} });
+    const read = readChoices(store({ [CHOICE_KEY]: { ws: { permissionMode: 'read-only' } }, [LAST_CHOICE_KEY]: { permissionMode: 'full-access' } }));
+    expect(read.projects.ws?.permissionMode).toBe('read-only');
+    expect(read.last?.permissionMode).toBe('full-access');
+  });
+
+  it('gives a continued run the project’s own remembered permission, else the harness default, never another project’s', () => {
+    const choices = { projects: { ws: { permissionMode: 'read-only' as const } }, last: { permissionMode: 'full-access' as const } };
+    expect(newChatPermission(choices, 'ws')).toBe('read-only');
+    expect(newChatPermission(choices, 'other')).toBe('native');
+    expect(newChatPermission({ projects: {} }, 'ws')).toBe('native');
+    // A hand-edited value is not a permission.
+    expect(newChatPermission({ projects: { ws: { permissionMode: 'root' as never } } }, 'ws')).toBe('native');
   });
 });

@@ -16,6 +16,26 @@ export interface RememberedExecutor {
   chatDefault?: string;
 }
 
+export const CHOICE_KEY = 'piui.shell.newchat.v1';
+export const LAST_CHOICE_KEY = 'piui.shell.newchat.last.v1';
+
+/** The stored choices; a missing, unreadable or malformed value (the storage is editable) counts as none. */
+export function readChoices(storage: Pick<Storage, 'getItem'> | undefined = undefined): NewChatChoices {
+  const read = (key: string): unknown => {
+    try {
+      return JSON.parse((storage ?? localStorage).getItem(key) ?? 'null');
+    } catch {
+      return null;
+    }
+  };
+  const projects = read(CHOICE_KEY);
+  const last = read(LAST_CHOICE_KEY);
+  return {
+    projects: projects && typeof projects === 'object' && !Array.isArray(projects) ? (projects as NewChatChoices['projects']) : {},
+    ...(last && typeof last === 'object' && !Array.isArray(last) ? { last: last as NonNullable<NewChatChoices['last']> } : {}),
+  };
+}
+
 /** What the new-chat composer remembers per project (local UI metadata). */
 export interface NewChatChoice {
   harness?: HarnessKind;
@@ -56,6 +76,16 @@ export function executorOf(choice: NewChatChoice | undefined): RememberedExecuto
 
 export function withChoice(choices: NewChatChoices, workspaceId: string, choice: NewChatChoice): NewChatChoices {
   return { projects: { ...choices.projects, [workspaceId]: choice }, last: choice };
+}
+
+/**
+ * The permission a chat started for this project gets: the one the person picked for new chats in
+ * this very project, else the harness default. Never the rights of a pipeline step, and never
+ * another project's pick (a continued run must not inherit Full access chosen elsewhere).
+ */
+export function newChatPermission(choices: NewChatChoices, workspaceId: string): PermissionMode {
+  const value: unknown = choices.projects[workspaceId]?.permissionMode;
+  return value === 'native' || value === 'read-only' || value === 'workspace-write' || value === 'full-access' ? value : 'native';
 }
 
 /** The composer's current picks. */

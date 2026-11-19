@@ -98,7 +98,12 @@ test.describe('pipelines', () => {
     await developer.click();
     const panel = page.getByRole('complementary', { name: /Developer/ });
     await expect(panel).toContainText('The agent’s turn failed in the harness.');
-    await expect(panel.getByRole('button', { name: 'Open chat' })).toBeVisible();
+    // A Codex step names no cause (only Pi's bridge maps provider text to a fixed summary), so the panel
+    // points to the step's own history and shows the model that was used.
+    await expect(panel).not.toContainText('The selected Pi model is unavailable.');
+    await expect(panel).toContainText('Open the agent history of this step to see everything the agent reported.');
+    await expect(panel).toContainText('Model: openai-lab / gpt-lab-5-codex');
+    await expect(panel.getByRole('button', { name: 'Open agent history' })).toBeVisible();
     // Repeating is an explicit decision; keeping the results changes nothing.
     await panel.getByRole('button', { name: 'Run again from here' }).click();
     const confirm = page.getByRole('dialog', { name: 'Run again from this step?' });

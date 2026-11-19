@@ -9,7 +9,7 @@ import { TranscriptBuilder } from '../transcriptBuilder';
 import { LIVE_COMMANDS, LIVE_THINKING } from '../transcriptSamples';
 import { taskContinuation } from '../turnScripts';
 import {
-  advanceProgramRouters, completeTask, dispatchTask, leaseTask, newRun, profileForStep, readyTaskIds, stepOf,
+  advanceProgramRouters, completeTask, dispatchTask, failedTurn, leaseTask, newRun, profileForStep, readyTaskIds, stepOf,
   type LabRun,
 } from '../orchestration/runEngine';
 import { taskPrompt, taskResultText } from '../orchestration/taskContent';
@@ -331,7 +331,7 @@ function seedRun(
         reference: { sessionId, blockId: answer.id, contentHash: sha256Hex(answer.text) },
       });
     } else if (outcome === 'failed') {
-      completeTask(run, stepId, sessionId, { status: 'failed', code: 'native-turn-failed' });
+      completeTask(run, stepId, sessionId, failedTurn(agent.harness));
     } else {
       record.turnSerial = 1;
       const context = { harness: agent.harness, sessionId, turn: 1, permissionMode: agent.permissionMode, cwd: folder };
