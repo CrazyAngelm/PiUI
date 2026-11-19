@@ -215,10 +215,34 @@ describe('session tools lab fake', () => {
     expect(listed.type === 'placements' && listed.placements.find((item) => item.sessionId === end.snapshot.session.id)?.branch).toBe('native');
   });
 
+  it('branches a Pi chat natively: the copy shows what the source showed up to the cut, and the source is unchanged', async () => {
+    const pi = demoSessionId('compaction');
+    const source = await snapshotOf(host, pi);
+    const lastUser = source.blocks.filter((block) => block.kind === 'user').at(-1);
+    if (lastUser === undefined || source.blocks.length === 0) throw new Error('expected a Pi demo chat with a user message');
+    const cutIndex = source.blocks.findIndex((block) => block.id === lastUser.id);
+    const base = { type: 'createChat', workspaceId: DEMO_PROJECTS.piui, harness: 'pi', permissionMode: 'native', continuedFrom: pi };
+
+    const before = await placement(host, { ...base, branch: { mode: 'native', at: 'before', blockId: lastUser.id } });
+    if (before.type !== 'created') throw new Error('expected a created chat');
+    expect(before.snapshot.blocks.map((block) => block.id)).toEqual(source.blocks.slice(0, cutIndex).map((block) => block.id));
+    expect(before.placement).toMatchObject({ continuedFrom: pi, branch: 'native' });
+
+    const end = await placement(host, { ...base, branch: { mode: 'native', at: 'end' } });
+    if (end.type !== 'created') throw new Error('expected a created chat');
+    expect(end.snapshot.blocks.map((block) => block.id)).toEqual(source.blocks.map((block) => block.id));
+    expect((await snapshotOf(host, pi)).blocks).toHaveLength(source.blocks.length);
+  });
+
   it('refuses a native branch it cannot make and does not create a chat', async () => {
     const source = await snapshotOf(host, TRANSPORT_CHAT);
     const answer = source.blocks.find((block) => block.kind === 'assistant');
     const chatCount = async () => (await host.invoke<{ catalog: { sessions: unknown[] } }>('workspace_command_v15', { command: { type: 'catalog' } })).catalog.sessions.length;
+    // A chat with no history has nothing native to branch from, whatever its agent.
+    const empty = await placement(host, {
+      type: 'createChat', workspaceId: DEMO_PROJECTS.piui, harness: 'pi', permissionMode: 'native', continuedFrom: TRANSPORT_CHAT, branch: { mode: 'linked' },
+    });
+    if (empty.type !== 'created') throw new Error('expected a created chat');
     const before = await chatCount();
     const base = { type: 'createChat', workspaceId: DEMO_PROJECTS.piui, permissionMode: 'native' };
     const refused = (command: Record<string, unknown>) => host.invoke('workspace_placement_v1', { command: { ...base, ...command } });
@@ -226,7 +250,7 @@ describe('session tools lab fake', () => {
       .rejects.toMatchObject({ code: 'BRANCH_POINT_NOT_FOUND' });
     await expect(refused({ harness: 'codex', continuedFrom: TRANSPORT_CHAT, branch: { mode: 'native', at: 'before', blockId: 'missing' } }))
       .rejects.toMatchObject({ code: 'BRANCH_POINT_NOT_FOUND' });
-    await expect(refused({ harness: 'pi', continuedFrom: demoSessionId('compaction'), branch: { mode: 'native', at: 'end' } }))
+    await expect(refused({ harness: 'pi', continuedFrom: empty.snapshot.session.id, branch: { mode: 'native', at: 'end' } }))
       .rejects.toMatchObject({ code: 'BRANCH_UNSUPPORTED' });
     await expect(refused({ harness: 'codex', branch: { mode: 'native', at: 'end' }, worktree: { type: 'shared', sessionId: DEMO_WORKTREE_SESSION } }))
       .rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });

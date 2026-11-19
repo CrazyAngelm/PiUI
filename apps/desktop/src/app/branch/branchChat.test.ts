@@ -108,7 +108,7 @@ describe('startBranch', () => {
 
   it('falls back to a linked branch with a digest when the agent cannot branch natively', async () => {
     const { store, createChat, updateDraft } = fakeStore(unsupportedNatively);
-    const result = await startBranch(store, snapshot('pi'), { at: 'before', blockId: 'u2' }, { prompt: 'and now?', open: 'here' }, deps());
+    const result = await startBranch(store, snapshot('prime-agent'), { at: 'before', blockId: 'u2' }, { prompt: 'and now?', open: 'here' }, deps());
     expect(result).toEqual({ ok: true, sessionId: 'child', title: 'Cache sizing (branch)', mode: 'linked' });
     expect(createChat).toHaveBeenCalledTimes(2);
     const linked = createChat.mock.calls[1]?.[0];
@@ -122,32 +122,32 @@ describe('startBranch', () => {
 
   it('skips the digest of a linked branch cut before the first message', async () => {
     const withPrompt = fakeStore(unsupportedNatively);
-    const result = await startBranch(withPrompt.store, snapshot('pi'), { at: 'before', blockId: 'u1' }, { prompt: 'a fresh start', open: 'none' }, deps());
+    const result = await startBranch(withPrompt.store, snapshot('prime-agent'), { at: 'before', blockId: 'u1' }, { prompt: 'a fresh start', open: 'none' }, deps());
     expect(result).toMatchObject({ ok: true, mode: 'linked', empty: true });
     expect(withPrompt.createChat.mock.calls[1]?.[0].text).toBe('a fresh start');
 
     const withDraft = fakeStore(unsupportedNatively);
-    await startBranch(withDraft.store, snapshot('pi'), { at: 'before', blockId: 'u1' }, { draft: 'First question', open: 'none' }, deps());
+    await startBranch(withDraft.store, snapshot('prime-agent'), { at: 'before', blockId: 'u1' }, { draft: 'First question', open: 'none' }, deps());
     expect(withDraft.createChat.mock.calls[1]?.[0].text).toBe('');
     expect(withDraft.updateDraft).toHaveBeenCalledWith('child', 'First question');
 
     const neither = fakeStore(unsupportedNatively);
-    await startBranch(neither.store, snapshot('pi'), { at: 'before', blockId: 'u1' }, { open: 'none' }, deps());
+    await startBranch(neither.store, snapshot('prime-agent'), { at: 'before', blockId: 'u1' }, { open: 'none' }, deps());
     expect(neither.updateDraft).not.toHaveBeenCalled();
-    const later = await startBranch(fakeStore(unsupportedNatively).store, snapshot('pi'), { at: 'before', blockId: 'u2' }, { open: 'none' }, deps());
+    const later = await startBranch(fakeStore(unsupportedNatively).store, snapshot('prime-agent'), { at: 'before', blockId: 'u2' }, { open: 'none' }, deps());
     expect(later).not.toHaveProperty('empty');
   });
 
   it('shares the worktree of a source that has one ready, in linked mode only', async () => {
     const { store, createChat } = fakeStore(unsupportedNatively);
-    await startBranch(store, snapshot('pi'), { at: 'end' }, { open: 'none' }, deps({ worktreeReady: () => true }));
+    await startBranch(store, snapshot('prime-agent'), { at: 'end' }, { open: 'none' }, deps({ worktreeReady: () => true }));
     expect(createChat.mock.calls[0]?.[0].placement).not.toHaveProperty('worktree');
     expect(createChat.mock.calls[1]?.[0].placement?.worktree).toEqual({ type: 'shared', sessionId: 'source' });
   });
 
   it('leaves the digest in the composer for the person to finish when there is no prompt', async () => {
     const { store, createChat, updateDraft } = fakeStore(unsupportedNatively);
-    await startBranch(store, snapshot('pi'), { at: 'before', blockId: 'u2' }, { draft: 'Second question', open: 'none' }, deps());
+    await startBranch(store, snapshot('prime-agent'), { at: 'before', blockId: 'u2' }, { draft: 'Second question', open: 'none' }, deps());
     expect(createChat.mock.calls[1]?.[0].text).toBe('');
     const draft = updateDraft.mock.calls[0]?.[1] as string;
     expect(draft).toContain('First answer');
@@ -180,7 +180,7 @@ describe('startBranch', () => {
     const failing = fakeStore(async () => {
       throw refusal('BRANCH_UNSUPPORTED');
     });
-    expect(await startBranch(failing.store, snapshot('pi'), { at: 'end' }, { open: 'here' }, deps())).toMatchObject({ ok: false });
+    expect(await startBranch(failing.store, snapshot('prime-agent'), { at: 'end' }, { open: 'here' }, deps())).toMatchObject({ ok: false });
     expect(failing.createChat).toHaveBeenCalledTimes(2);
   });
 

@@ -58,6 +58,29 @@ test.describe('message actions', () => {
     lab.expectNoErrors();
   });
 
+  // ADR-079: a Pi chat branches natively too, so the branch shows the earlier messages instead of a digest in the composer.
+  test('branching a Pi chat shows the earlier messages and leaves the composer empty', async ({ lab, page }) => {
+    const PI_SOURCE = 'Plan a weekend in Lisbon';
+    const PI_FIRST_PROMPT = 'Plan a relaxed two-day weekend in Lisbon for two people.';
+    const PI_SECOND_PROMPT = 'Make Sunday even more relaxed and add a rainy-day backup.';
+    await lab.open();
+    await lab.chat(new RegExp(PI_SOURCE)).click();
+    await expect(transcript(page)).toContainText(PI_SECOND_PROMPT);
+    await page.getByRole('button', { name: 'Branch into a new chat', exact: true }).first().click();
+    await expect(page.getByRole('heading', { level: 1, name: `${PI_SOURCE} (branch)` })).toBeVisible();
+    await expect(transcript(page)).toContainText(PI_FIRST_PROMPT);
+    await expect(transcript(page)).toContainText('Lisbon in two days');
+    // The cut is after the first answer: the later turns stay in the source only.
+    await expect(transcript(page)).not.toContainText(PI_SECOND_PROMPT);
+    await expect(transcript(page)).not.toContainText('No messages yet');
+    await expect(page.getByRole('textbox', { name: 'Message' })).toHaveValue('');
+    await expect(page.getByText(/I am continuing work from a Pi chat/)).toHaveCount(0);
+    await page.getByRole('button', { name: 'Details' }).click();
+    await expect(page.getByRole('heading', { name: 'Branch of' })).toBeVisible();
+    await expect(page.getByText('A linked branch: the history was not copied.')).toHaveCount(0);
+    lab.expectNoErrors();
+  });
+
   test('edit and send again opens a chat without that message and with its text in the composer', async ({ lab, page }) => {
     await openSource(lab);
     await page.getByRole('button', { name: 'Edit and send again', exact: true }).last().click();

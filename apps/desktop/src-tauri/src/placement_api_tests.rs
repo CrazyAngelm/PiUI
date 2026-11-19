@@ -949,8 +949,8 @@ async fn branch_native_validation_refuses_before_any_start_or_origin_is_created(
             false,
         ),
         (
-            HarnessKind::Pi,
-            HarnessKind::Pi,
+            HarnessKind::PrimeAgent,
+            HarnessKind::PrimeAgent,
             Some(valid_id.clone()),
             None,
             false,
@@ -1088,6 +1088,73 @@ async fn branch_native_validation_refuses_before_any_start_or_origin_is_created(
             .iter()
             .all(|placement| placement.session_id == source)
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn branch_native_on_pi_needs_the_session_file_of_its_source() {
+    let (fixture, _, project) = setup("branch-pi");
+    let starts = record_starts(&fixture);
+    let source = fixture.chat(&project);
+    fixture
+        .state
+        .workspace
+        .configure_branch_source_for_test(
+            &source,
+            HarnessKind::Pi,
+            Some(uuid::Uuid::new_v4().to_string()),
+            None,
+            false,
+        )
+        .expect("pi source");
+    let hooks = branch_hooks(&fixture);
+    let native = |before_block_id: Option<String>| ChatBranchV1::Native { before_block_id };
+    // Pi names its session by file: without one there is nothing to copy, and
+    // the interface falls back to a linked branch.
+    let error = run(
+        &fixture,
+        branch_command(&project, &source, HarnessKind::Pi, native(None)),
+    )
+    .await
+    .expect_err("no session file");
+    assert_eq!(error.code, "BRANCH_UNSUPPORTED");
+    assert!(starts.lock().expect("starts").is_empty());
+    assert!(hooks.origins.lock().expect("origins").is_empty());
+    fixture
+        .state
+        .workspace
+        .configure_native_path_for_test(&source, &std::env::temp_dir().join("piui-pi-source.jsonl"))
+        .expect("session file");
+    for before in [None, Some("pi-entry-cut".to_owned())] {
+        let PlacementResultV1::Created {
+            snapshot,
+            placement,
+            ..
+        } = run(
+            &fixture,
+            branch_command(&project, &source, HarnessKind::Pi, native(before)),
+        )
+        .await
+        .expect("a Pi branch with its source file")
+        else {
+            panic!("created");
+        };
+        assert_eq!(placement.branch, Some(BranchMode::Native));
+        assert_eq!(
+            hooks.origins.lock().expect("origins")[&snapshot.session.id].mode,
+            BranchMode::Native
+        );
+    }
+    // A Pi source cannot seed another agent's native fork, and Nano keeps linked branches.
+    for requested in [HarnessKind::Codex, HarnessKind::Nano] {
+        let error = run(
+            &fixture,
+            branch_command(&project, &source, requested, native(None)),
+        )
+        .await
+        .expect_err("a native branch stays on its own agent");
+        assert_eq!(error.code, "BRANCH_UNSUPPORTED");
+    }
+    fixture.state.workspace.shutdown_all().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

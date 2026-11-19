@@ -1,6 +1,6 @@
 # ADR-070 — Chat branches through native forks and linked-chat metadata
 
-Status: accepted, 2026-11-16.
+Status: accepted, 2026-11-16. Amended by ADR-079: Pi also branches natively.
 
 ## Context
 
@@ -31,8 +31,9 @@ writer or a second chat format.
   replaced with an empty chat. A branch taken while the source runs holds
   finished turns only; it is not a snapshot of an unfinished generation.
 - **Linked branches** create an ordinary chat on any supported harness and
-  record its origin. No history is translated or imported. Pi, Prime Agent,
-  Hermes and ACP agents support linked branches only.
+  record its origin. No history is translated or imported. Prime Agent, Hermes,
+  ACP agents and Nano support linked branches only (Pi joined the native ones
+  in ADR-079).
 - **Branch origins live in the linked-chat store.** Each child's optional
   origin stores its source, native/linked mode and optional cut block id.
   Documents without an origin remain readable, and an origin without any link

@@ -1067,6 +1067,19 @@ Branch `feat/workbench-1116`. Decisions: ADR-064 to ADR-071.
   Not done: the run graph as a chat's side panel and the assistant on the
   shared transcript (ADR-078 lists them as later steps).
 
+## 2026-11-20 — tester feedback: Pi branches are copies, not digests
+
+- **Pi branch (ADR-079).** Branching a Pi chat used to open an empty chat with a
+  text digest in its composer; Claude Code and Codex opened a copy of the
+  conversation. Pi now forks its own session: `--fork` for the whole chat, and
+  for a cut before a message the RPC `fork` on a source opened without any
+  writing flag. The host falls back to the linked branch when the source has no
+  session file; Nano and the other agents are unchanged.
+- **Evidence.** Pi 1.4.0 through the real bridge on hand-built sessions, no model
+  turn: whole-chat and cut forks, the first-message cut, refusals, and the
+  source file's hash unchanged. Bridge, Rust and Lab tests are synthetic. Not
+  run: the installed application, a model turn inside a branch.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

@@ -43,7 +43,7 @@ Runner request LF JSON: `{id:string,method:'initialize'|'snapshot'|'prompt'|'int
 
 Fixtures may inject fake adapters/transport only via separate test module imports; never production env switches. Runtime proofs use native installed harness with synthetic provider where supported, not a replacement agent loop. Missing package/auth/platform behavior is explicit.
 
-## Native branches (Claude Code and Codex)
+## Native branches (Claude Code, Codex and Pi)
 
 The host-private `fork` reference is distinct from resuming an existing child.
 It accepts only `nativeId`, optional string `nativePath`, and optional
@@ -104,6 +104,25 @@ source history and unsupported native fork operations yield
 references fail with `invalid-session` before launching a native child. Native
 error details never reach the host-facing error message.
 
+
+### Pi
+
+Pi copies its own session (ADR-079, Pi 1.4.0). The fork reference must carry an
+absolute `nativePath` (a missing one, a missing file or the Nano lane yields
+`branch-unsupported`; a malformed reference, a top-level `nativeId` or
+`nativePath`, a catalog or coordinator start yields `invalid-session`). A whole
+chat launches `--fork <nativePath> --session-id <new UUID>` with the child's own
+`--session-dir`; the first snapshot already holds the copy. A cut launches
+`--session <nativePath>` with no `--name`, `--provider`, `--model` or
+`--thinking` (nothing may write to the source), reads `get_entries`, finds the
+user entry of the active branch whose block id (`pi-entry-` + the entry id's
+opaque hash) equals `beforeBlockId`, and sends `fork {entryId}`. Pi writes the
+copy into the child directory and switches to it; `binding` then reports the
+copy's id and file, and the title is set with `set_session_name`. A cut that is
+not found or not a user message yields `branch-point-not-found`; an unreadable
+entry list, a rejected or cancelled fork yield `branch-unsupported`, and the
+process opened on the source is killed. A cut before the first message leaves
+the copy unwritten until its first answer (`materialized: false`).
 
 ## History pages (Codex resume and fork)
 

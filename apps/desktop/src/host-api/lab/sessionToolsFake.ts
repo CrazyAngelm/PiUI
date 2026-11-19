@@ -93,7 +93,7 @@ const NOT_A_REPOSITORY = failure('NOT_A_REPOSITORY', 'This folder is not a git r
 const BRANCH_UNSUPPORTED = failure('BRANCH_UNSUPPORTED', 'This chat cannot be branched natively.');
 const BRANCH_POINT_NOT_FOUND = failure('BRANCH_POINT_NOT_FOUND', 'That message is no longer in this chat. Refresh and try again.');
 /** The agents the fake branches natively, like the host. */
-const NATIVE_BRANCH_HARNESSES: readonly string[] = ['claude-code', 'codex'];
+const NATIVE_BRANCH_HARNESSES: readonly string[] = ['claude-code', 'codex', 'pi'];
 const WORKTREE_REMOVED = failure(
   'WORKTREE_REMOVED',
   "This chat's worktree was removed. Its history stays readable; start a new chat to keep working.",

@@ -60,6 +60,18 @@ const richHistory = {
     { id: "e-answer", parentId: "e-compaction", type: "message", message: { role: "assistant", timestamp: 1790000001000, stopReason: "stop", content: [{ type: "text", text: "Done." }] } },
   ],
 };
+// Two finished turns for branching. `--history-two-turns` serves them, and a
+// successful `fork` request on a user message leaves the session as Pi would:
+// a new session holding what came before that message.
+const twoTurns = process.argv.includes("--history-two-turns");
+const twoTurnEntries = [
+  { id: "t-user-1", parentId: null, type: "message", message: { role: "user", content: "first question", timestamp: 1790000100000 } },
+  { id: "t-answer-1", parentId: "t-user-1", type: "message", message: { role: "assistant", timestamp: 1790000100100, stopReason: "stop", content: [{ type: "text", text: "first answer" }] } },
+  { id: "t-user-2", parentId: "t-answer-1", type: "message", message: { role: "user", content: "second question", timestamp: 1790000100200 } },
+  { id: "t-answer-2", parentId: "t-user-2", type: "message", message: { role: "assistant", timestamp: 1790000100300, stopReason: "stop", content: [{ type: "text", text: "second answer" }] } },
+];
+let branchedBefore;
+const keptEntries = () => (branchedBefore === undefined ? twoTurnEntries : twoTurnEntries.slice(0, twoTurnEntries.findIndex((entry) => entry.id === branchedBefore)));
 const assistantText = (text) =>({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text } });
 // error -> agent_end(willRetry) -> retry succeeds -> final agent_end.
 function retryRuns() {
@@ -363,7 +375,7 @@ process.stdin.on("data", (chunk) => {
       sessionName = `images:${request.type}:${request.images.map((image) => `${image.type}/${image.mimeType}/${image.data}`).join(",")}`;
       write({ type: "message_start", message: { id: `user-${request.id}`, role: "user", content: [{ type: "text", text: request.message }, ...request.images] } });
     }
-    if (request.type === "get_state") write({ id: request.id, type: "response", command: request.type, success: true, data: { sessionId: "native-fixture", sessionFile: "host/private.jsonl", sessionName, isStreaming: busyNow(), isCompacting: false, pendingMessageCount: 0, thinkingLevel: "medium", model: chosenModel ?? (restoredNano ? { provider: "nano", id: "smart", name: "Smart", input: ["text"] } : { provider: "fixture", id: "model", name: "Fixture Model", input: textOnly ? ["text"] : ["text", "image"] }) } }, true);
+    if (request.type === "get_state") write({ id: request.id, type: "response", command: request.type, success: true, data: { sessionId: branchedBefore === undefined ? "native-fixture" : "native-branch", sessionFile: branchedBefore === undefined ? "host/private.jsonl" : "host/branch.jsonl", sessionName, isStreaming: busyNow(), isCompacting: false, pendingMessageCount: 0, thinkingLevel: "medium", model: chosenModel ?? (restoredNano ? { provider: "nano", id: "smart", name: "Smart", input: ["text"] } : { provider: "fixture", id: "model", name: "Fixture Model", input: textOnly ? ["text"] : ["text", "image"] }) } }, true);
     else if (request.type === "get_commands") write({ id: request.id, type: "response", command: request.type, success: true, data: { commands: [
       { name: "skill:review", description: "Review a diff", source: "skill", location: "user", path: "/home/SECRET-MUST-NOT-LEAK/skills/review/SKILL.md" },
       { name: "fix-tests", description: "Fix failing tests", source: "prompt", location: "project", path: "/home/SECRET-MUST-NOT-LEAK/prompts/fix-tests.md" },
@@ -373,6 +385,16 @@ process.stdin.on("data", (chunk) => {
     else if (request.type === "get_available_models") write({ id: request.id, type: "response", command: request.type, success: true, data: { models: process.argv.includes("--catalog-many")
       ? [{ provider: "fixture", id: "alpha", name: "Alpha" }, { provider: "fixture", id: "model", name: "Fixture Model" }, { provider: "fixture", id: "zeta", name: "Zeta" }]
       : [{ provider: "fixture", id: "model", name: "Fixture Model" }] } });
+    else if (request.type === "get_entries" && twoTurns) {
+      const entries = keptEntries();
+      write({ id: request.id, type: "response", command: request.type, success: true, data: { entries, leafId: entries.at(-1)?.id ?? null } });
+    }
+    else if (request.type === "fork") {
+      const entry = twoTurnEntries.find((candidate) => candidate.id === request.entryId && candidate.message.role === "user");
+      if (!twoTurns || !entry || process.argv.includes("--fork-rejects")) write({ id: request.id, type: "response", command: request.type, success: false, error: "Invalid entry ID for forking SECRET-MUST-NOT-LEAK" });
+      else if (process.argv.includes("--fork-cancelled")) write({ id: request.id, type: "response", command: request.type, success: true, data: { cancelled: true } });
+      else { branchedBefore = entry.id; write({ id: request.id, type: "response", command: request.type, success: true, data: { text: entry.message.content, cancelled: false } }); }
+    }
     else if (request.type === "get_entries" && process.argv.includes("--history-rich")) write({ id: request.id, type: "response", command: request.type, success: true, data: richHistory });
     else if (request.type === "get_entries") write({ id: request.id, type: "response", command: request.type, success: true, data: { entries: [
       { id: "entry-private", type: "message", message: { role: "user", content: "hello" } },

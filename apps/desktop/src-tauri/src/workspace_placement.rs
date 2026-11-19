@@ -117,10 +117,13 @@ impl WorkspaceHost {
         model: Option<&super::WorkspaceModel>,
     ) -> Result<(), WorkspaceError> {
         let record = self.record(source)?;
+        let binding = super::resume_binding(&record)?;
         if record.harness != harness
             || !harness.supports_native_branch()
             || record.run_id.is_some()
-            || super::resume_binding(&record)?.0.is_none()
+            || binding.0.is_none()
+            // Pi copies a session file, so the source must name it.
+            || (harness == HarnessKind::Pi && binding.1.is_none())
             || (super::supports_nano_connector(harness) && super::is_nano_model(harness, model))
                 != record.nano_connector
         {
@@ -130,6 +133,17 @@ impl WorkspaceHost {
             ));
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn configure_native_path_for_test(
+        &self,
+        source: &str,
+        path: &std::path::Path,
+    ) -> Result<(), WorkspaceError> {
+        self.update_record(source, |record| {
+            record.native_path = Some(path.to_string_lossy().into_owned());
+        })
     }
 
     /// Only a newly generated branch id reaches this cleanup. Native history

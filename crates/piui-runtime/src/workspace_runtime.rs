@@ -266,9 +266,11 @@ impl HarnessKind {
     }
 
     /// A new session can fork native history without translating its chat format.
+    /// Pi copies its own session file (`--fork`, or RPC `fork` for a cut), so a
+    /// Pi branch also needs the source's file path; Nano keeps linked branches.
     #[must_use]
     pub const fn supports_native_branch(self) -> bool {
-        matches!(self, Self::ClaudeCode | Self::Codex)
+        matches!(self, Self::ClaudeCode | Self::Codex | Self::Pi)
     }
 
     /// Linked chats use the same per-session host-tool transport as the board.
@@ -3117,6 +3119,7 @@ fn validate_config(config: &NativeRuntimeConfig) -> Result<(), NativeRuntimeErro
                 .native_path
                 .as_ref()
                 .is_some_and(|path| !path.is_absolute())
+            || (config.harness == HarnessKind::Pi && fork.native_path.is_none())
             || fork.before_block_id.as_ref().is_some_and(|id| {
                 id.is_empty() || id.chars().count() > 256 || id.chars().any(char::is_control)
             }))
@@ -4745,7 +4748,7 @@ mod tests {
     }
 
     #[test]
-    fn fork_validation_allows_only_unbound_standalone_claude_and_codex() {
+    fn fork_validation_allows_only_unbound_standalone_claude_codex_and_pi() {
         let mut config = test_config();
         config.fork = Some(NativeFork {
             native_id: "source-id".into(),
@@ -4776,8 +4779,27 @@ mod tests {
             );
             config.coordination = false;
         }
+        // Pi copies a session file, so its fork must name one.
+        config.harness = HarnessKind::Pi;
+        assert!(HarnessKind::Pi.supports_native_branch());
+        assert_eq!(
+            validate_config(&config),
+            Err(NativeRuntimeError::InvalidConfiguration),
+            "a Pi fork without its source file"
+        );
+        config.fork.as_mut().expect("fork").native_path = Some(config.cwd.join("source.jsonl"));
+        assert_eq!(validate_config(&config), Ok(()));
+        config.fork.as_mut().expect("fork").before_block_id = Some("pi-entry-cut".into());
+        assert_eq!(validate_config(&config), Ok(()));
+        config.native_id = Some("already-bound".into());
+        assert_eq!(
+            validate_config(&config),
+            Err(NativeRuntimeError::InvalidConfiguration)
+        );
+        config.native_id = None;
+        config.fork.as_mut().expect("fork").native_path = None;
+        config.fork.as_mut().expect("fork").before_block_id = None;
         for harness in [
-            HarnessKind::Pi,
             HarnessKind::Nano,
             HarnessKind::PrimeAgent,
             HarnessKind::Hermes,

@@ -1,6 +1,6 @@
 export async function createPiAdapter(config, emit) {
   const { spawn } = await import("node:child_process");
-  const { createHash } = await import("node:crypto");
+  const { createHash, randomUUID } = await import("node:crypto");
   const { stat, mkdtemp, writeFile, rm } = await import("node:fs/promises");
   const { join, resolve: resolvePath, isAbsolute: isAbsolutePath } = await import("node:path");
 
@@ -137,6 +137,31 @@ export async function createPiAdapter(config, emit) {
     : config.permissionMode === "read-only" ? [...readOnlyTools] : undefined;
 
   const catalogOnly = !nano && config.catalogOnly === true;
+  // A host-private native branch (ADR-070, ADR-079). Pi copies its own session:
+  // `--fork` for the whole chat, and for a cut before a user message the RPC
+  // `fork` command on a process that has only opened the source. The source file
+  // is read and never written by this adapter; the copy is Pi's own JSONL in the
+  // new chat's private session directory.
+  const fork = config.fork;
+  const cut = fork?.beforeBlockId;
+  if (fork !== undefined) {
+    const shaped = typeof fork === "object" && fork !== null && !Array.isArray(fork);
+    if (!shaped || Object.keys(fork).some((key) => !["nativeId", "nativePath", "beforeBlockId"].includes(key))
+      || typeof fork.nativeId !== "string" || fork.nativeId.length < 1 || fork.nativeId.length > 200
+      || (fork.nativePath !== undefined && (typeof fork.nativePath !== "string" || fork.nativePath.includes("\0") || !isAbsolutePath(fork.nativePath)))
+      || (cut !== undefined && (typeof cut !== "string" || cut.length < 1 || cut.length > 256))
+      || config.nativeId != null || config.nativePath != null || catalogOnly || config.coordination === true) {
+      throw fail("invalid-session", "The Pi branch reference is invalid.");
+    }
+    // Pi names its source by file. Without one, or with the Nano lane's private
+    // history, there is nothing to copy: the host falls back to a linked branch.
+    if (nano || fork.nativePath === undefined || !await isMaterialized(fork.nativePath)) {
+      throw fail("branch-unsupported", "This chat cannot be branched natively.");
+    }
+  }
+  // A cut opens the source itself and branches over RPC, so every flag that could
+  // write to it (a name, a model or reasoning change) waits until the copy exists.
+  const cutFork = fork !== undefined && cut !== undefined;
   // Nano never passes `--approve`: project `.pi` resources stay untrusted.
   const bundledDir = nano ? join(config.nano.agentDir, "bundled") : undefined;
   const commandArgs = [
@@ -146,13 +171,17 @@ export async function createPiAdapter(config, emit) {
   if (catalogOnly) {
     commandArgs.push("--no-session");
   } else {
-    if (config.nativePath) commandArgs.push("--session", config.nativePath);
+    if (fork !== undefined) {
+      if (cutFork) commandArgs.push("--session", fork.nativePath);
+      else commandArgs.push("--fork", fork.nativePath, "--session-id", randomUUID());
+    } else if (config.nativePath) commandArgs.push("--session", config.nativePath);
     else if (config.nativeId) commandArgs.push("--session-id", config.nativeId);
-    if (config.title) commandArgs.push("--name", config.title);
+    if (config.title && !cutFork) commandArgs.push("--name", config.title);
   }
   // Pi 1.4.0 exits when `--provider` comes without `--model`, so a Nano start
   // without a model passes neither and lets Pi restore the session's model.
-  if (nano) { if (config.model) commandArgs.push("--provider", nanoProvider, "--model", config.model.id); }
+  if (cutFork) { /* The copy keeps the model and reasoning level of the history it inherits. */ }
+  else if (nano) { if (config.model) commandArgs.push("--provider", nanoProvider, "--model", config.model.id); }
   else {
     if (config.model?.provider) commandArgs.push("--provider", config.model.provider);
     if (config.model?.id) commandArgs.push("--model", config.model.id);
@@ -940,6 +969,20 @@ export async function createPiAdapter(config, emit) {
   child.on("exit", cleanupInstructions);
   child.on("error", cleanupInstructions);
 
+  if (cutFork) {
+    const abandon = (code, safeMessage) => { disposing = true; try { child.kill(); } catch {} return fail(code, safeMessage); };
+    // The source is open and nothing has been added to it: find the user message
+    // the cut names on the branch Pi is on, then let Pi branch before it.
+    const opened = await request("get_entries").catch(() => undefined);
+    if (!Array.isArray(opened?.entries)) throw abandon("branch-unsupported", "This chat cannot be branched natively.");
+    const point = activeBranch(opened.entries, opened.leafId)
+      .find((entry) => entry?.type === "message" && entry.message?.role === "user" && typeof entry.id === "string" && opaque("pi-entry", entry.id) === cut);
+    if (!point) throw abandon("branch-point-not-found", "That message is no longer in the chat this one branches from.");
+    // An extension that cancels the fork, or an entry Pi will not fork from, leaves the source as it was.
+    const forked = await request("fork", { entryId: point.id }).catch(() => undefined);
+    if (forked?.cancelled !== false) throw abandon("branch-unsupported", "This chat cannot be branched natively.");
+    if (config.title) await request("set_session_name", { name: config.title }).catch(() => {});
+  }
   if (!catalogOnly) {
     state = await request("get_state");
     // Without a requested model Pi restored the session's own (or the private

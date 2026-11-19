@@ -12,7 +12,7 @@ import { openBesideChat } from './openBeside';
 /**
  * A branch of a chat: a new chat on the same agent, model, permission mode and
  * project. The host opens it with the source's own history when the agent can
- * branch natively (Claude Code, Codex). Otherwise it is an ordinary chat
+ * branch natively (Claude Code, Codex, Pi). Otherwise it is an ordinary chat
  * that is only recorded as a branch and starts from a text digest of what the
  * source showed, as "Continue in another harness" does. The source is never
  * changed and no history is converted.
