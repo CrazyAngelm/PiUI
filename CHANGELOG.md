@@ -4,7 +4,7 @@ All notable changes to Nano Desktop (formerly PiUI) are documented here.
 
 Nano Desktop is currently a developer preview. Versions before 1.0 may change without a stable migration promise; changes to typed host contracts remain versioned under `contracts/`.
 
-## [Unreleased]
+## [0.3.8] - 2026-11-19
 
 ### Added
 
@@ -12,6 +12,7 @@ Nano Desktop is currently a developer preview. Versions before 1.0 may change wi
 
 ### Fixed
 
+- Macro names in the list, the hover card and Settings no longer carry the `//`; the inserted text is still `//name`.
 - A long list of macros scrolls inside its menu, follows the arrow keys and no longer runs off the top of the window. The new-chat screen sits lower, so the list has room above the composer.
 
 ## [0.3.7] - 2026-11-18
