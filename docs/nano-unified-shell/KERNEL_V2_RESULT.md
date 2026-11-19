@@ -224,8 +224,8 @@ no coordinator `wait` operation; none was invented.
 
 ## Proof
 
-The commands ran with `CARGO_HOME=D:/Users/redmi/CacheData/cargo`,
-`CARGO_TARGET_DIR=D:/Users/redmi/CacheData/nano-unified-shell-kernel-target`
+The commands ran with `CARGO_HOME=<cache>/cargo`,
+`CARGO_TARGET_DIR=<cache>/nano-unified-shell-kernel-target`
 and `--offline --locked`, scoped to the owned crates. The counts include the
 remediation:
 
@@ -450,7 +450,7 @@ That folder also holds:
 - the proof scripts.
 
 Scratch is
-`D:/Users/redmi/CacheData/nano-unified-shell-20261115/kernel-v2-cli`. It
+`<cache>/nano-unified-shell-20261115/kernel-v2-cli`. It
 includes the artifacts that predate `validate`, moved aside.
 
 The remediation report is
