@@ -221,7 +221,7 @@
     class="macro-card"
     role="group"
     aria-live="polite"
-    aria-label={`//${hovered.macro.name}`}
+    aria-label={hovered.macro.name}
     style:--macro-x={`${hovered.x}px`}
     style:--macro-y={`${hovered.y}px`}
     onmouseenter={cancelClose}
@@ -231,7 +231,7 @@
     onmousedown={(event) => event.preventDefault()}
   >
     <div class="macro-card__head">
-      <code class="macro-card__name">//{hovered.macro.name}</code>
+      <code class="macro-card__name">{hovered.macro.name}</code>
       {#if onEdit}<IconButton size="sm" label={$t('Edit macro')} shortcut="F2" onclick={edit}><Pencil /></IconButton>{/if}
     </div>
     {#if hovered.macro.description}<p class="macro-card__description">{hovered.macro.description}</p>{/if}

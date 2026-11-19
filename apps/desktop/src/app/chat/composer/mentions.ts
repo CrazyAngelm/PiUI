@@ -71,6 +71,15 @@ export function activeMention(text: string, caret: number, triggers: MentionTrig
   return undefined;
 }
 
+/**
+ * Whether digits and a macro's own key may pick from the macro list: the space
+ * stands alone, with no name typed before the caret or left after it, so a pick
+ * cannot replace a word the person has written.
+ */
+export function macroKeysOpen(mention: ActiveMention | undefined): boolean {
+  return mention?.trigger === 'space' && mention.query === '' && mention.end === mention.start + 1;
+}
+
 /** Replaces the mention token with `replacement` plus a space; returns the new text and caret. */
 export function replaceMention(text: string, mention: ActiveMention, replacement: string): { text: string; caret: number } {
   const after = text.slice(mention.end);

@@ -4,6 +4,16 @@ All notable changes to Nano Desktop (formerly PiUI) are documented here.
 
 Nano Desktop is currently a developer preview. Versions before 1.0 may change without a stable migration promise; changes to typed host contracts remain versioned under `contracts/`.
 
+## [Unreleased]
+
+### Added
+
+- **Macro keys.** In the list a space opens, the first nine macros carry the digits 1 to 9: press one to insert that macro. In Settings → Macros each macro can also get a **Key**, one letter that inserts it at once from the same list.
+
+### Fixed
+
+- A long list of macros scrolls inside its menu, follows the arrow keys and no longer runs off the top of the window. The new-chat screen sits lower, so the list has room above the composer.
+
 ## [0.3.7] - 2026-11-18
 
 ### Added

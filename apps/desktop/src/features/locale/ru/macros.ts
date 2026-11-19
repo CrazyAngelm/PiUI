@@ -21,4 +21,8 @@ export const macrosRu: Readonly<Record<string, string>> = {
   'Skill names use letters, digits, dots, colons, hyphens and underscores.': 'В именах навыков допустимы буквы, цифры, точки, двоеточия, дефисы и подчёркивания.',
   'Add a prompt or at least one skill.': 'Добавьте промпт или хотя бы один навык.',
   'The prompt is too long.': 'Промпт слишком длинный.',
+  'Key': 'Клавиша',
+  'One letter. In the list a space opens, this key picks the macro at once; digits 1–9 pick the first nine rows.': 'Одна буква. В списке, который открывает пробел, эта клавиша сразу выбирает макрос; цифры 1–9 выбирают первые девять строк.',
+  'Use one letter.': 'Введите одну букву.',
+  'Another macro already uses this key.': 'Эта клавиша уже занята другим макросом.',
 };

@@ -15,4 +15,8 @@ export interface ComposerMenuItem {
   readonly group?: string;
   /** A teammate's avatar (one emoji or initials) and color. */
   readonly avatar?: { readonly avatar: string; readonly color: string };
+  /** The digit (1-9) that picks this row; shown to its left. */
+  readonly number?: number;
+  /** The letter that picks this row, as the person set it in Settings. */
+  readonly accelerator?: string;
 }

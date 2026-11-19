@@ -34,9 +34,17 @@ it('shows saved rows with summaries and labelled edit and delete controls', () =
   const body = html();
   expect(body).toContain('role="list"');
   expect(body.match(/role="listitem"/g)).toHaveLength(2);
-  for (const text of ['//review', 'Review changes', 'test-runner', 'Edit //review', 'Delete //review']) expect(body).toContain(text);
+  for (const text of ['>review</code>', 'Review changes', 'test-runner', 'Edit //review', 'Delete //review']) expect(body).toContain(text);
   expect(body).not.toContain('No macros yet');
   expect(body).not.toContain('<script>hidden');
+});
+
+it('shows the key of a macro that has one', () => {
+  macros.list = [
+    { id: 'review', name: 'review', description: '', prompt: 'Check.', skills: [], key: 'r' },
+    { id: 'test', name: 'test', description: '', prompt: 'Run.', skills: [] },
+  ];
+  expect(html().match(/aria-label="R"/g)).toHaveLength(1);
 });
 
 it('reports when edits only last for this session', () => {

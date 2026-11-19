@@ -31,12 +31,12 @@
   import MacroLayer from './composer/MacroLayer.svelte';
   import { macros } from '../macros/macros.svelte';
   import { expandMacros, type SkillSyntax } from '../macros/expand';
-  import { findMacroTokens, macroSummary, macroTokenAt } from '../macros/macro';
+  import { findMacroTokens, MACRO_DIGIT_ROWS, MACRO_LIMITS, macroShortcutIndex, macroSummary, macroTokenAt, type Macro } from '../macros/macro';
   import ReferenceDialog from './composer/ReferenceDialog.svelte';
   import { ComposerAttachments } from './composer/composerAttachments.svelte';
   import { FileMentions, loadComposerCatalog, type NativeEntries } from './composer/composerLookups.svelte';
   import { composerDropTargets } from './composer/dropTargets.svelte';
-  import { activeMention, fileMention, type ActiveMention, rankFiles, rankNamed, replaceMention } from './composer/mentions';
+  import { activeMention, fileMention, macroKeysOpen, type ActiveMention, rankFiles, rankNamed, replaceMention } from './composer/mentions';
   import type { ComposerMenuItem } from './composer/menuItems';
   import HandoffChips from '../board/HandoffChips.svelte';
   import { boards } from '../board/boardStore.svelte';
@@ -93,6 +93,8 @@
     field.setSelectionRange(field.value.length, field.value.length);
   });
   let menuIndex = $state(0);
+  /** The key that last picked a macro, while it may still repeat. */
+  let shortcutHeld: string | undefined;
   let menuDismissed = $state(false);
   /** The macro space Escape turned into an ordinary space: it stays closed while the text before it is unchanged. */
   let dismissedSpace = $state<string | undefined>();
@@ -159,21 +161,30 @@
 
   type Menu =
     | { kind: 'slash'; items: ComposerMenuItem[] }
-    | { kind: 'macro'; items: ComposerMenuItem[]; names: string[] }
+    | { kind: 'macro'; items: ComposerMenuItem[]; names: string[]; found: readonly Macro[] }
     | { kind: 'file'; items: ComposerMenuItem[]; paths: string[]; handles: string[] }
     | { kind: 'skill'; items: ComposerMenuItem[]; mentions: string[] };
   const menu = $derived.by((): Menu | undefined => {
     if (!mention) return undefined;
     if (mention.trigger === 'space') {
-      const found = rankNamed(macros.list, mention.query);
+      const found = rankNamed(macros.list, mention.query, MACRO_LIMITS.macros);
       // A space that names no macro is an ordinary space.
       if (found.length === 0) return undefined;
+      // Until a name is typed, a digit or a macro's own letter picks a row: the keys are shown on the rows.
+      const keyed = macroKeysOpen(mention);
       return {
         kind: 'macro',
         names: found.map((macro) => macro.name),
-        items: found.map((macro): ComposerMenuItem => {
+        found,
+        items: found.map((macro, row): ComposerMenuItem => {
           const detail = macroSummary(macro);
-          return { key: `macro:${macro.id}`, title: `//${macro.name}`, ...(detail ? { detail } : {}) };
+          return {
+            key: `macro:${macro.id}`,
+            title: macro.name,
+            ...(detail ? { detail } : {}),
+            ...(keyed && row < MACRO_DIGIT_ROWS ? { number: row + 1 } : {}),
+            ...(keyed && macro.key ? { accelerator: macro.key } : {}),
+          };
         }),
       };
     }
@@ -590,6 +601,22 @@
       if (token) {
         event.preventDefault();
         onEditMacro(token.macro.id);
+        return;
+      }
+    }
+    // A key held down after it picked a macro must not type itself into the message.
+    if (event.repeat && shortcutHeld === event.key) {
+      event.preventDefault();
+      return;
+    }
+    if (!event.repeat) shortcutHeld = undefined;
+    // Right after the space, a digit or a macro's own letter picks that macro; once a name is typed, keys type.
+    if (menu?.kind === 'macro' && macroKeysOpen(mention)) {
+      const picked = macroShortcutIndex(event, menu.found);
+      if (picked >= 0) {
+        event.preventDefault();
+        shortcutHeld = event.key;
+        choose(picked, 'Enter');
         return;
       }
     }

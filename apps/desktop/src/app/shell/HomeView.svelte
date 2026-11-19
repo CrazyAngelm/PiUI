@@ -58,7 +58,12 @@
   .home__inner {
     width: min(760px, calc(100% - 48px));
     margin: 0 auto;
-    padding: clamp(40px, 14vh, 140px) 0 var(--piui-space-12);
+    /* Low enough that the list a space opens (up to 360px) fits above the composer. */
+    padding: clamp(40px, 34vh, 360px) 0 var(--piui-space-12);
+  }
+  /* A short window has no room to spare: the menu then shrinks or opens below the composer. */
+  @media (max-height: 520px) {
+    .home__inner { padding-top: clamp(24px, 14vh, 140px); }
   }
   @media (max-width: 640px) {
     .home--remote .home__inner { width: calc(100% - 24px); padding-block: clamp(24px, 9dvh, 72px) var(--piui-space-6); }

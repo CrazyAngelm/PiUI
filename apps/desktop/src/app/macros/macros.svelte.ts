@@ -39,7 +39,7 @@ export class MacroStore {
     return { macro };
   }
 
-  /** Deletes a macro. The returned function puts it back in its place, unless its name was taken meanwhile. */
+  /** Deletes a macro. The returned function puts it back in its place, unless its name was taken meanwhile; a key taken meanwhile stays with its new macro. */
   remove(id: string): (() => void) | undefined {
     const index = this.list.findIndex((item) => item.id === id);
     const removed = this.list[index];
@@ -47,8 +47,11 @@ export class MacroStore {
     this.write(this.list.filter((item) => item.id !== id));
     return () => {
       if (this.list.some((item) => item.id === removed.id || item.name === removed.name)) return;
+      // The key may have been given to another macro meanwhile: the restored macro comes back without it.
+      const { key, ...plain } = removed;
+      const restored: Macro = key && this.list.some((item) => item.key === key) ? plain : removed;
       const next = [...this.list];
-      next.splice(Math.min(index, next.length), 0, removed);
+      next.splice(Math.min(index, next.length), 0, restored);
       this.write(next);
     };
   }

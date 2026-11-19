@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeMention, fileMention, rankFiles, rankNamed, replaceMention, splitImageMarkers } from './mentions';
+import { activeMention, fileMention, macroKeysOpen, rankFiles, rankNamed, replaceMention, splitImageMarkers } from './mentions';
 
 const ALL = { slash: true, at: true, dollar: true } as const;
 
@@ -19,6 +19,17 @@ describe('composer mentions', () => {
     // A name ends at whitespace; other characters make it no macro name.
     expect(activeMention(' re.md', 3, on)).toBeUndefined();
     expect(activeMention('//re', 4, on)).toEqual({ trigger: '/', query: '/re', start: 0, end: 4 });
+  });
+
+  it('lets digits and macro keys pick only while the space stands alone', () => {
+    const on = { ...ALL, macros: true };
+    expect(macroKeysOpen(activeMention(' ', 1, on))).toBe(true);
+    expect(macroKeysOpen(activeMention('fix  ', 5, on))).toBe(true);
+    // A name typed before the caret, or a word left after it that a pick would replace, turns them off.
+    expect(macroKeysOpen(activeMention(' re', 3, on))).toBe(false);
+    expect(macroKeysOpen(activeMention(' alpha', 1, on))).toBe(false);
+    expect(macroKeysOpen(activeMention('/rev', 4, ALL))).toBe(false);
+    expect(macroKeysOpen(undefined)).toBe(false);
   });
 
   it('replaces the macro space with the chosen token', () => {

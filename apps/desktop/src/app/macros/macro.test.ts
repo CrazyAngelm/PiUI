@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MACRO_LIMITS, findMacroTokens, macroErrors, macroFromDraft, macroSummary,
-  macroTokenAt, normalizeMacroName, parseMacros, parseSkillNames, type Macro, type MacroDraft,
+  MACRO_LIMITS, findMacroTokens, macroErrors, macroFromDraft, macroShortcutIndex, macroSummary,
+  macroTokenAt, normalizeMacroKey, normalizeMacroName, parseMacros, parseSkillNames, type Macro, type MacroDraft,
 } from './macro';
 
 const review: Macro = { id: 'review', name: 'review', description: '', prompt: 'Review carefully.', skills: ['test-runner'] };
@@ -87,5 +87,59 @@ describe('macro summary', () => {
     expect(macroSummary({ ...review, prompt: ' first\nsecond ' })).toBe('first');
     expect(macroSummary({ ...review, prompt: '' })).toBe('test-runner');
     expect(macroSummary({ ...other, prompt: '' })).toBe('');
+  });
+});
+
+describe('macro keys', () => {
+  it('stores one lower-case letter, or none', () => {
+    expect(normalizeMacroKey(' A ')).toBe('a');
+    expect(normalizeMacroKey(undefined)).toBe('');
+    expect(macroFromDraft({ ...draft, key: 'Ф' }, 'x').key).toBe('ф');
+    expect('key' in macroFromDraft({ ...draft, key: '  ' }, 'x')).toBe(false);
+  });
+  it.each(['1', 'ab', '+', ' a b '])('rejects the key %j', (key) => {
+    expect(macroErrors({ ...draft, name: 'fresh', key }, [])).toEqual({ key: 'Use one letter.' });
+  });
+  it('rejects a key another macro holds, but not the macro own key', () => {
+    const held: Macro = { ...review, key: 'r' };
+    expect(macroErrors({ ...draft, name: 'fresh', key: 'R' }, [held])).toEqual({ key: 'Another macro already uses this key.' });
+    expect(macroErrors({ ...draft, id: 'review', key: 'r' }, [held])).toEqual({});
+  });
+  it('drops only the key of a stored macro whose key is bad or taken', () => {
+    const stored = JSON.stringify([
+      { ...review, key: 'r' },
+      { ...other, key: 'R' },
+      { ...other, id: 'third', name: 'third', key: '7' },
+      { ...other, id: 'fourth', name: 'fourth', key: 5 },
+    ]);
+    expect(parseMacros(stored).map((macro) => [macro.name, macro.key])).toEqual([['review', 'r'], ['other', undefined], ['third', undefined], ['fourth', undefined]]);
+  });
+});
+
+describe('macro list shortcuts', () => {
+  const shown: Macro[] = [{ ...review, key: 'a' }, other, { ...other, id: 'ru', name: 'ru', key: 'ы' }];
+  const press = (key: string, extra: { code?: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) => macroShortcutIndex({ key, ...extra }, shown);
+  it('picks the row a digit names, and nothing past the list', () => {
+    expect([press('1'), press('2'), press('3'), press('4'), press('9')]).toEqual([0, 1, 2, -1, -1]);
+    expect(press('0')).toBe(-1);
+  });
+  it('picks the macro that holds the letter, in any case', () => {
+    expect([press('a'), press('A'), press('ы'), press('b')]).toEqual([0, 0, 2, -1]);
+  });
+  it('reads a letter typed on another layout as the Latin key on the same place', () => {
+    expect(press('ф', { code: 'KeyA' })).toBe(0);
+    // A key that names a macro by what it types wins over where it sits.
+    expect(press('ы', { code: 'KeyS' })).toBe(2);
+    expect(press('ф', { code: 'KeyB' })).toBe(-1);
+  });
+  it('does not turn a symbol or a Latin letter of another layout into a key', () => {
+    // Dvorak types an apostrophe on the physical Q; a macro keyed q is not meant.
+    expect(macroShortcutIndex({ key: "'", code: 'KeyQ' }, [{ ...review, key: 'q' }])).toBe(-1);
+    // QWERTZ types z on the physical Y: z is z.
+    expect(macroShortcutIndex({ key: 'z', code: 'KeyY' }, [{ ...review, key: 'y' }])).toBe(-1);
+  });
+  it('ignores shortcuts with a modifier, long key names and a space', () => {
+    expect([press('a', { ctrlKey: true }), press('1', { metaKey: true }), press('a', { altKey: true })]).toEqual([-1, -1, -1]);
+    expect([press('Enter'), press('Dead'), press(' ')]).toEqual([-1, -1, -1]);
   });
 });

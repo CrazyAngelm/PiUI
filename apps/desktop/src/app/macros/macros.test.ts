@@ -57,6 +57,22 @@ describe('local macro preference', () => {
     expect(macros.list).toEqual(entries);
     expect(macros.remove('absent')).toBeUndefined();
   });
+  it('undo brings a macro back without a key another macro took meanwhile', async () => {
+    storage.set('piui.macros.v1', JSON.stringify([{ ...saved, key: 'r' }, { ...saved, id: 'second', name: 'second' }]));
+    const { macros } = await import('./macros.svelte');
+    const undo = macros.remove(saved.id);
+    expect(macros.save({ ...draft, id: 'second', name: 'second', key: 'r' })).toHaveProperty('macro');
+    undo?.();
+    expect(macros.list.map((macro) => [macro.name, macro.key])).toEqual([[saved.name, undefined], ['second', 'r']]);
+    vi.resetModules();
+    expect((await import('./macros.svelte')).macros.list.map((macro) => macro.key)).toEqual([undefined, 'r']);
+  });
+  it('undo keeps the key of a macro when nobody else took it', async () => {
+    storage.set('piui.macros.v1', JSON.stringify([{ ...saved, key: 'r' }]));
+    const { macros } = await import('./macros.svelte');
+    macros.remove(saved.id)?.();
+    expect(macros.list).toEqual([{ ...saved, key: 'r' }]);
+  });
   it('undo refuses when the removed name was taken', async () => {
     storage.set('piui.macros.v1', JSON.stringify([saved]));
     const { macros } = await import('./macros.svelte');

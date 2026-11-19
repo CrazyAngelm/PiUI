@@ -26,12 +26,12 @@
   import { ComposerAttachments } from '../chat/composer/composerAttachments.svelte';
   import { FileMentions } from '../chat/composer/composerLookups.svelte';
   import { composerDropTargets } from '../chat/composer/dropTargets.svelte';
-  import { activeMention, fileMention, type ActiveMention, rankFiles, rankNamed, replaceMention } from '../chat/composer/mentions';
+  import { activeMention, fileMention, macroKeysOpen, type ActiveMention, rankFiles, rankNamed, replaceMention } from '../chat/composer/mentions';
   import type { ComposerMenuItem } from '../chat/composer/menuItems';
   import { chatTitle } from '../chat/chatTitle';
   import { macros } from '../macros/macros.svelte';
   import type { SkillSyntax } from '../macros/expand';
-  import { findMacroTokens, macroSummary, macroTokenAt, type Macro } from '../macros/macro';
+  import { findMacroTokens, MACRO_DIGIT_ROWS, MACRO_LIMITS, macroShortcutIndex, macroSummary, macroTokenAt, type Macro } from '../macros/macro';
   import ContextChip from './ContextChip.svelte';
   import ExecutorChip from '../chatPipelines/ExecutorChip.svelte';
   import type { Executor } from '../chatPipelines/ExecutorPicker.svelte';
@@ -113,6 +113,8 @@
   const submit = (): void => (dictating ? dictate?.stopAndSend() : void send());
   let textarea = $state<HTMLTextAreaElement | null>(null);
   let menuIndex = $state(0);
+  /** The key that last picked a macro, while it may still repeat. */
+  let shortcutHeld: string | undefined;
   let menuDismissed = $state(false);
   /** The macro space Escape turned into an ordinary space: it stays closed while the text before it is unchanged. */
   let dismissedSpace = $state<string | undefined>();
@@ -162,19 +164,28 @@
       // A remote browser cannot read the desktop's files or skills: no `@` file or `$` skill menus.
       : unlessDismissed(activeMention(text, caret, { slash: false, at: !remoteMode && Boolean(workspaceId), dollar: !remoteMode && skillMentions.length > 0, macros: macros.list.length > 0 })),
   );
-  type Menu = { kind: 'macro'; items: ComposerMenuItem[]; names: string[] } | { kind: 'file'; items: ComposerMenuItem[]; paths: string[] } | { kind: 'skill'; items: ComposerMenuItem[]; mentions: string[] };
+  type Menu = { kind: 'macro'; items: ComposerMenuItem[]; names: string[]; found: readonly Macro[] } | { kind: 'file'; items: ComposerMenuItem[]; paths: string[] } | { kind: 'skill'; items: ComposerMenuItem[]; mentions: string[] };
   const menu = $derived.by((): Menu | undefined => {
     if (!mention) return undefined;
     if (mention.trigger === 'space') {
-      const found = rankNamed(macros.list, mention.query);
+      const found = rankNamed(macros.list, mention.query, MACRO_LIMITS.macros);
       // A space that names no macro is an ordinary space.
       if (found.length === 0) return undefined;
+      // Until a name is typed, a digit or a macro's own letter picks a row: the keys are shown on the rows.
+      const keyed = macroKeysOpen(mention);
       return {
         kind: 'macro',
         names: found.map((macro) => macro.name),
-        items: found.map((macro): ComposerMenuItem => {
+        found,
+        items: found.map((macro, row): ComposerMenuItem => {
           const detail = macroSummary(macro);
-          return { key: `macro:${macro.id}`, title: `//${macro.name}`, ...(detail ? { detail } : {}) };
+          return {
+            key: `macro:${macro.id}`,
+            title: macro.name,
+            ...(detail ? { detail } : {}),
+            ...(keyed && row < MACRO_DIGIT_ROWS ? { number: row + 1 } : {}),
+            ...(keyed && macro.key ? { accelerator: macro.key } : {}),
+          };
         }),
       };
     }
@@ -998,6 +1009,22 @@
         event.preventDefault();
         macros.requestEdit(token.macro.id);
         store.navigate({ name: 'settings', section: 'macros' });
+        return;
+      }
+    }
+    // A key held down after it picked a macro must not type itself into the message.
+    if (event.repeat && shortcutHeld === event.key) {
+      event.preventDefault();
+      return;
+    }
+    if (!event.repeat) shortcutHeld = undefined;
+    // Right after the space, a digit or a macro's own letter picks that macro; once a name is typed, keys type.
+    if (menu?.kind === 'macro' && macroKeysOpen(mention)) {
+      const picked = macroShortcutIndex(event, menu.found);
+      if (picked >= 0) {
+        event.preventDefault();
+        shortcutHeld = event.key;
+        choose(picked);
         return;
       }
     }

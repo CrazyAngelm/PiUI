@@ -4,13 +4,14 @@
   import Pencil from '@lucide/svelte/icons/pencil';
   import Trash2 from '@lucide/svelte/icons/trash-2';
   import { t } from '../../features/locale/language';
-  import { Button, Dialog, EmptyState, Field, IconButton, Input, Textarea, toasts } from '../../lib/ui';
+  import { Button, Dialog, EmptyState, Field, IconButton, Input, Kbd, Textarea, toasts } from '../../lib/ui';
   import { macros } from '../macros/macros.svelte';
   import { macroSummary, parseSkillNames, type Macro, type MacroErrors, type MacroField } from '../macros/macro';
 
   let open = $state(false);
   let editingId = $state('');
   let name = $state('');
+  let key = $state('');
   let description = $state('');
   let skills = $state('');
   let prompt = $state('');
@@ -20,6 +21,7 @@
   function openEditor(macro: Macro | undefined = undefined): void {
     editingId = macro?.id ?? '';
     name = macro?.name ?? '';
+    key = macro?.key ?? '';
     description = macro?.description ?? '';
     skills = macro?.skills.join(', ') ?? '';
     prompt = macro?.prompt ?? '';
@@ -37,7 +39,7 @@
 
   function save(event: SubmitEvent): void {
     event.preventDefault();
-    const result = macros.save({ ...(editingId ? { id: editingId } : {}), name, description, prompt, skills: parseSkillNames(skills) });
+    const result = macros.save({ ...(editingId ? { id: editingId } : {}), name, key, description, prompt, skills: parseSkillNames(skills) });
     if ('errors' in result) errors = result.errors;
     else close();
   }
@@ -73,7 +75,8 @@
     <div class="rows" role="list" aria-label={$t('Macros')}>
       {#each macros.list as macro (macro.id)}
         <div class="row" role="listitem">
-          <code>//{macro.name}</code>
+          <code>{macro.name}</code>
+          {#if macro.key}<Kbd keys={macro.key.toUpperCase()} />{/if}
           <span class="summary">{macroSummary(macro)}</span>
           <IconButton size="sm" label={$t('Edit //{0}', [macro.name])} onclick={() => openEditor(macro)}><Pencil /></IconButton>
           <IconButton size="sm" label={$t('Delete //{0}', [macro.name])} onclick={() => remove(macro)}><Trash2 /></IconButton>
@@ -93,6 +96,15 @@
       <Input id="macro-name" bind:ref={nameInput} bind:value={name} autocomplete="off" spellcheck={false} invalid={Boolean(errors.name)} oninput={() => clearError('name')}>
         {#snippet leading()}<span aria-hidden="true">//</span>{/snippet}
       </Input>
+    </Field>
+    <Field
+      label={$t('Key')}
+      for="macro-key"
+      optionalLabel={$t('optional')}
+      description={$t('One letter. In the list a space opens, this key picks the macro at once; digits 1–9 pick the first nine rows.')}
+      error={errors.key ? $t(errors.key) : undefined}
+    >
+      <Input id="macro-key" bind:value={key} maxlength={1} autocomplete="off" spellcheck={false} invalid={Boolean(errors.key)} oninput={() => clearError('key')} />
     </Field>
     <Field label={$t('Description')} for="macro-description" optionalLabel={$t('optional')} error={errors.description ? $t(errors.description) : undefined}>
       <Input id="macro-description" bind:value={description} invalid={Boolean(errors.description)} oninput={() => clearError('description')} />

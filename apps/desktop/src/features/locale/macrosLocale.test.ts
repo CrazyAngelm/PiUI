@@ -13,6 +13,8 @@ const strings = [
   'The description is too long.', 'Too many skills.',
   'Skill names use letters, digits, dots, colons, hyphens and underscores.',
   'Add a prompt or at least one skill.', 'The prompt is too long.',
+  'Key', 'One letter. In the list a space opens, this key picks the macro at once; digits 1–9 pick the first nine rows.',
+  'Use one letter.', 'Another macro already uses this key.',
 ];
 
 describe('macro Russian copy', () => {

@@ -74,3 +74,35 @@ space of a double space stays as the separator). Escape closes the list and
 keeps the space; the same space stays closed while the text before it is
 unchanged. The token, its marks, its card, `F2` and the expansion on send are
 unchanged, and a typed `//name` is still a macro.
+
+## Amendment — 2026-11-19: keys, numbers and a menu that scrolls
+
+- **Numbers.** While the list a space opens has no typed name yet, its first
+  nine rows carry the digits 1 to 9 to the left of the title. A digit picks
+  that row at once; a click on the row (the digit included) picks it as before.
+  A digit past the end of the list types as usual.
+- **A macro's own key.** Settings → Macros has an optional **Key**: one letter,
+  unique among the macros, stored in the macro (`key`, lower case) in the same
+  `piui.macros.v1` entry. In the list, before a name is typed, that letter
+  picks the macro and shows as a key cap on its row. A letter typed on another
+  keyboard layout counts as the Latin letter on the same physical key, so a
+  macro keyed `a` also answers `ф`. A stored key that is not one free letter
+  loses only the key; the macro stays. Digits stay for rows, so a key is a
+  letter.
+- **Once a name is started** (any letter that is not a macro's key, or any
+  character after one), keys type again, the numbers and key caps leave the
+  rows, and Enter, Tab, the arrows and a click work as before. A macro whose
+  key is the first letter of other names is therefore reached by typing a
+  longer name or with the arrows.
+- **The menu scrolls and stays on screen.** The list holds every macro (up to
+  the 200 allowed), grows to 360 px and scrolls inside itself; the highlighted
+  row stays in view while the arrows move it. Its height is the room between
+  the field and the nearest clipping edge, so it never runs past the top of the
+  window or of a scrolling page; when that room is under about 150 px and the
+  other side has more, the menu opens below the field.
+- **The new-chat screen** sits lower (the first line starts at a third of the
+  window height instead of a seventh), which leaves room for the full list
+  above its composer.
+- **Names without `//`.** The list rows, the hover card and Settings show the
+  bare name (`review`); the `//` was noise there. The token a pick writes into
+  the message is still `//name`, marked in the editor as before.
