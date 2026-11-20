@@ -7375,6 +7375,7 @@ mod tests {
         runtime.dispose().await.expect("dispose synthetic bridge");
     }
 
+    #[cfg(windows)] // Verbatim paths and the temp-dir crate exist only there.
     #[test]
     fn native_launch_paths_are_never_verbatim() {
         let verbatim = |text: &str| text.starts_with(r"\\?\");
