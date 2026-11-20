@@ -134,7 +134,7 @@
     font-size: var(--piui-text-xs);
   }
   .turn__failed {
-    color: var(--piui-text-disabled);
+    color: var(--piui-text-muted);
   }
   .turn__stopped {
     color: var(--piui-text-disabled);
@@ -149,7 +149,7 @@
   }
   .turn__agent {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 6px;
     min-width: 0;
     color: var(--piui-text-muted);
@@ -167,10 +167,13 @@
     color: var(--piui-accent);
   }
   .turn__agent-line {
+    display: -webkit-box;
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
   }
   .chevron {
     display: inline-flex;

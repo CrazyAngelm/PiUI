@@ -1159,7 +1159,7 @@ test("a Pi subagent call names who was called and what they were asked", async (
   try {
     await runScenario(adapter, events, "delegations");
     const titles = (await adapter.snapshot()).blocks.filter((block) => block.kind === "tool").map((block) => block.title);
-    assert.deepEqual(titles, ["subagent: scout — Find the crash", "subagent: scout, reviewer", "subagent: planner → worker"]);
+    assert.deepEqual(titles, ["subagent: scout — Find the crash", "subagent: scout — a; reviewer — b", "subagent: planner — a → worker — b"]);
   } finally { await adapter.dispose(); }
 });
 

@@ -296,11 +296,15 @@
     }
   }
 
-  function choices(): HarnessChoice[] {
-    return available.map((item) => ({
-      harness: item.kind,
-      label: harnessMeta(item.kind).label,
-      models: editor.catalogs[item.kind]?.models.map((entry) => ({ id: entry.id, ...(entry.provider ? { provider: entry.provider } : {}) })),
+  /** The shown catalogs, each with the harness's own default first: a remembered catalog may list another order. */
+  async function choices(): Promise<HarnessChoice[]> {
+    return Promise.all(available.map(async (item) => {
+      const models = editor.catalogs[item.kind]?.models.map((entry) => ({ id: entry.id, ...(entry.provider ? { provider: entry.provider } : {}) }));
+      // A harness slow to answer does not hold the message back: its list goes as shown.
+      const answered = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 3000));
+      const preferred = models ? await Promise.race([editor.defaultModel(item.kind, item.version).catch(() => undefined), answered]) : undefined;
+      const first = preferred ? models?.findIndex((entry) => entry.id === preferred.model && entry.provider === preferred.modelProvider) ?? -1 : -1;
+      return { harness: item.kind, label: harnessMeta(item.kind).label, models: models && first > 0 ? [models[first]!, ...models.filter((_, index) => index !== first)] : models };
     }));
   }
 
@@ -315,7 +319,7 @@
         first: !sessionId,
         draftJson: JSON.stringify(graphToSystemFile(editor.graph, editor.systems), null, 1),
         problems: [...editor.issues.map((issue) => issue.message), ...editor.preflight.map((issue) => issue.message)],
-        harnesses: choices(),
+        harnesses: await choices(),
         text: message,
       });
       if (!sessionId) {

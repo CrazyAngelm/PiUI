@@ -162,7 +162,8 @@ async fn run_helper(
         .arg(process_directory(dist_path))
         .arg(process_directory(working_directory))
         .arg(action)
-        .arg(target.map_or_else(PathBuf::new, process_directory))
+        // The target is a lookup key matched against Pi's settings exactly: it keeps its spelling.
+        .arg(target.unwrap_or_else(|| Path::new("")))
         .arg(enabled.map_or("", |value| if value { "true" } else { "false" }))
         .current_dir(process_directory(working_directory))
         .env("PI_OFFLINE", "1")

@@ -437,12 +437,17 @@ fn plain_name(name: &str, check_device: bool) -> bool {
         return true;
     }
     let stem = name.split('.').next().unwrap_or(name).trim_end_matches(' ');
+    // Windows also reads COM¹–COM³ and LPT¹–LPT³ as devices.
     let numbered = |prefix: &str| {
-        stem.len() == prefix.len() + 1
-            && stem
-                .get(..prefix.len())
-                .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
-            && stem.ends_with(|c: char| c.is_ascii_digit())
+        stem.get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+            && stem.get(prefix.len()..).is_some_and(|tail| {
+                let mut chars = tail.chars();
+                chars
+                    .next()
+                    .is_some_and(|c| c.is_ascii_digit() || matches!(c, '¹' | '²' | '³'))
+                    && chars.next().is_none()
+            })
     };
     !(DEVICES.iter().any(|device| stem.eq_ignore_ascii_case(device))
         || numbered("COM")

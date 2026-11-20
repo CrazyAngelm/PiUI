@@ -267,6 +267,8 @@ fn verbatim_text_becomes_plain_only_when_the_plain_spelling_is_equal() {
         r"\\?\C:\a\nul.txt",
         r"\\?\C:\a\COM1",
         r"\\?\C:\a\lpt9.log",
+        r"\\?\C:\a\COM².txt",
+        r"\\?\C:\a\LPT³",
         r"\\?\C:\a\x:stream",
         r"\\?\C:\a\b*c",
         r"\\?\C:\a/b",

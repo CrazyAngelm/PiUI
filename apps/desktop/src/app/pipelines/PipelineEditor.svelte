@@ -203,7 +203,11 @@
     const moved = profileForHarness(current, harness);
     // A model call stays read-only, offline and without tools on every harness.
     const locked = remoteMode || kind === 'llm' ? { permissionMode: 'read-only' as const, networkAccess: undefined } : { networkAccess: moved.networkAccess };
-    editor.updateProfile(id, { ...moved, serviceTier: moved.serviceTier, ...locked, ...((await defaultModel(harness)) ?? {}) });
+    editor.updateProfile(id, { ...moved, serviceTier: moved.serviceTier, ...locked });
+    // The model arrives with the catalog; edits made meanwhile (a name, another harness or model) stay.
+    const model = await defaultModel(harness);
+    const now = editor.graph.nodes.find((node) => node.id === id)?.profile;
+    if (model && now && now.harness === harness && !now.model.trim()) editor.updateProfile(id, model);
   }
 
   /** Node types of active plugins for the Add menu (v6.5). */
@@ -261,11 +265,10 @@
     const harness = defaultHarness;
     if (!harness) return;
     const graph = buildTemplate(id, harness, (value) => $t(value));
-    const known = editor.catalogs[harness]?.models[0];
-    // The draft opens at once; a model still loading fills in when it arrives.
-    editor.startFrom(known ? withModel(graph, { model: known.id, ...(known.provider ? { modelProvider: known.provider } : {}) }) : graph);
+    // The draft opens at once; the harness's own default model fills in when the harness names it
+    // (the catalog shown may be a remembered copy in an older order).
+    editor.startFrom(graph);
     setTimeout(() => api?.fitView(), 60);
-    if (known) return;
     const model = await defaultModel(harness);
     if (model && editor.graph.id === graph.id) editor.fillIn(withModel(editor.graph, model));
   }

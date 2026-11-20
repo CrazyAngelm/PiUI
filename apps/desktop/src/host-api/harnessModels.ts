@@ -161,8 +161,12 @@ export function nativeHarnessModels(request: HarnessModelsRequest, version: stri
   if (version) knownVersions.set(key, version);
   const nativeVersion = version ?? knownVersions.get(key);
   const live = catalogs.get(key);
-  if (live && otherVersion(live, nativeVersion)) retire(request, true);
-  return splitCatalog(request, nativeVersion).models;
+  if (live && !live.pending && outdated(live, nativeVersion)) retire(request, false);
+  else if (live && otherVersion(live, nativeVersion)) retire(request, true);
+  const { models, full } = splitCatalog(request, nativeVersion);
+  // The caller waits for the models only; a failed resource step is not its rejection.
+  full.catch(() => undefined);
+  return models;
 }
 
 /**

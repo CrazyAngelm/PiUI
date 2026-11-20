@@ -454,6 +454,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     return { text: output.text, truncated: output.truncated, ...(title ? { title } : {}) };
   };
   const COLLAB_TITLES = { spawnAgent: "Start agent", sendInput: "Message to agent", sendMessage: "Message to agent", followupTask: "Follow-up task", resumeAgent: "Resume agent", wait: "Wait for agents", closeAgent: "Close agent", interruptAgent: "Interrupt agent", listAgents: "List agents" };
+  const DELEGATING_COLLAB = new Set(["spawnAgent", "sendInput", "sendMessage", "followupTask", "resumeAgent"]);
   const SUBAGENT_TITLES = { started: "Agent started", interacted: "Agent continued", interrupted: "Agent interrupted", completed: "Agent finished" };
   const projectedToolFields = (item) => {
     const lines = [];
@@ -462,7 +463,9 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     };
     let toolName, title, status;
     if (item.type === "collabAgentToolCall") {
-      toolName = "subagent";
+      // Only a call that hands work to an agent is a delegation; waiting, listing and
+      // closing agents are status steps beside it.
+      toolName = DELEGATING_COLLAB.has(item.tool) ? "subagent" : "subagent-status";
       title = Object.hasOwn(COLLAB_TITLES, item.tool) ? COLLAB_TITLES[item.tool] : "Agent tool";
       if (typeof item.prompt === "string" && item.prompt.trim()) title += `: ${oneLine(item.prompt, 100)}`;
       addLine("Prompt", item.prompt);
@@ -479,7 +482,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       }
       status = mapStatus(item.status);
     } else if (item.type === "subAgentActivity") {
-      toolName = "subagent";
+      toolName = "subagent-status";
       title = Object.hasOwn(SUBAGENT_TITLES, item.kind) ? SUBAGENT_TITLES[item.kind] : "Agent activity";
       if (typeof item.agentPath === "string" && item.agentPath.trim()) title += ` · ${oneLine(item.agentPath, 120)}`;
       addLine("Agent", item.agentPath);
@@ -2031,7 +2034,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   };
 
   const initialize = await callDuringStartup("initialize", {
-    clientInfo: { name: "piui", title: "PiUI", version: "0.3.9" },
+    clientInfo: { name: "piui", title: "PiUI", version: "0.3.10" },
     capabilities: { experimentalApi: true, requestAttestation: false },
   });
   if (!isRecord(initialize) || typeof initialize.codexHome !== "string") {
@@ -2353,6 +2356,12 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
           || (model.model || model.id) === selectedId
           || (catalogConfig && !selectedId && model.isDefault === true))
         .map(model => mapModel(model, resolvedProvider));
+      // The model Codex starts with comes first, as in every catalog: the configured
+      // one, else the one model/list marks default.
+      const defaultId = selectedId || data.find((model) => model.isDefault === true && !model.hidden)?.model
+        || data.find((model) => model.isDefault === true && !model.hidden)?.id;
+      const defaultIndex = typeof defaultId === "string" ? models.findIndex((model) => model.id === defaultId) : -1;
+      if (defaultIndex > 0) models.unshift(...models.splice(defaultIndex, 1));
       if (currentModel && !models.some((model) => model.id === currentModel.id && model.provider === currentModel.provider)) {
         models.unshift({ ...currentModel, thinkingLevels: [] });
       }

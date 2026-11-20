@@ -309,7 +309,8 @@ export async function createPiAdapter(config, emit) {
   const preparingCall = (event, message) => {
     const index = Number.isInteger(event.contentIndex) ? event.contentIndex : -1;
     const call = event.toolCall ?? event.partial?.content?.[index] ?? message?.content?.[index];
-    if (call?.type !== "toolCall" || typeof call.id !== "string" || typeof call.name !== "string") return;
+    // A call shown before its id arrives would become a second block once it does.
+    if (call?.type !== "toolCall" || typeof call.id !== "string" || !call.id || typeof call.name !== "string" || !call.name) return;
     const id = opaque("pi-tool", call.id);
     const existing = blocks.get(id);
     if (existing && !preparingTools.has(id)) return;
@@ -378,7 +379,11 @@ export async function createPiAdapter(config, emit) {
   const headEnd = (text, end) => (isHighSurrogate(text.charCodeAt(end - 1)) ? end - 1 : end);
   const tailStart = (text, start) => (isLowSurrogate(text.charCodeAt(start)) ? start + 1 : start);
   const oneLine = (value, limit) => {
-    const line = String(value).replace(/\s+/g, " ").trim();
+    // Only the head can be shown: a long value streamed per token is not re-scanned whole,
+    // and a surrogate pair split by the stream never reaches a frame half-made.
+    const text = String(value);
+    const head = text.length > limit * 4 ? text.slice(0, headEnd(text, limit * 4)) : text;
+    const line = (head.toWellFormed?.() ?? head).replace(/\s+/g, " ").trim();
     return line.length <= limit ? line : `${line.slice(0, headEnd(line, limit - 1))}…`;
   };
   const boundToolText = (value) => {
@@ -402,9 +407,8 @@ export async function createPiAdapter(config, emit) {
     const single = (entry) => [text(entry?.agent), text(entry?.task)].filter(Boolean).join(" — ");
     const many = Array.isArray(input.tasks) ? input.tasks : Array.isArray(input.chain) ? input.chain : undefined;
     if (!many) return single(input) || compactArgs(input);
-    const agents = many.map((entry) => text(entry?.agent)).filter(Boolean);
-    const joiner = Array.isArray(input.tasks) ? ", " : " → ";
-    return agents.length ? agents.join(joiner) : compactArgs(input);
+    const pairs = many.map(single).filter(Boolean);
+    return pairs.length ? pairs.join(Array.isArray(input.tasks) ? "; " : " → ") : compactArgs(input);
   };
   const toolTitle = (toolName, args) => {
     const input = args && typeof args === "object" && !Array.isArray(args) ? args : {};
@@ -917,7 +921,8 @@ export async function createPiAdapter(config, emit) {
         if (typeof frame.toolCallId !== "string") break;
         const id = opaque("pi-tool", frame.toolCallId);
         const existing = blocks.get(id);
-        const toolName = existing?.toolName ?? safeToolName(frame.toolName);
+        // The execution names the tool; a streamed call may have shown a partial name.
+        const toolName = typeof frame.toolName === "string" && frame.toolName ? safeToolName(frame.toolName) : existing?.toolName ?? "tool";
         const ended = frame.type === "tool_execution_end";
         preparingTools.delete(id);
         // Updates carry the accumulated partial result, so each replaces the text.
@@ -973,6 +978,9 @@ export async function createPiAdapter(config, emit) {
     clearSettleTimer();
     for (const slot of pending.values()) slot.reject(fail("runtime-exited", "The Pi runtime exited before responding."));
     pending.clear();
+    // A call that was being written when the runtime exited never runs.
+    for (const id of preparingTools.keys()) updateBlock(id, { status: "failed" });
+    preparingTools.clear();
     if (!disposing) {
       setStatus("failed");
       emit({ type: "error", message: "The Pi runtime exited unexpectedly." });

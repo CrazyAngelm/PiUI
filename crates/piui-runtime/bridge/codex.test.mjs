@@ -492,7 +492,7 @@ for (const history of [false, true]) test(`projects Codex agent and image items 
     const subagent = block("subagent-item");
     assert.deepEqual(
       [subagent.kind, subagent.label, subagent.toolName, subagent.title, subagent.text, subagent.status],
-      ["tool", "Agent", "subagent", "Agent interrupted · reviewer/parser", "Agent: reviewer/parser\nModel: fixture-model\nReasoning: medium", "interrupted"],
+      ["tool", "Agent", "subagent-status", "Agent interrupted · reviewer/parser", "Agent: reviewer/parser\nModel: fixture-model\nReasoning: medium", "interrupted"],
     );
     assert.deepEqual(
       [block("subagent-complete").title, block("subagent-complete").text, block("subagent-complete").status],

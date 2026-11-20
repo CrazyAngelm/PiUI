@@ -42,7 +42,7 @@ test('a cold remembered model blocks the first send until its own catalog answer
   await expect(start).toBeDisabled();
   await message.press('Enter');
   await expect(message).toHaveValue('Use my remembered model');
-  await expect(home.getByRole('button', { name: /^GPT Lab 5 Codex high/ })).toBeVisible();
+  await expect(home.getByRole('button', { name: /^GPT Lab 5 Codex High/ })).toBeVisible();
   await expect(start).toBeEnabled();
   await start.click();
   await expect(page.getByRole('region', { name: 'Conversation messages' })).toContainText('Use my remembered model');
@@ -91,7 +91,7 @@ test('the pipeline assistant restores the session harness, model, reasoning and 
   await toggle.click();
 
   await expect(assistant.getByRole('button', { name: 'Codex', exact: true })).toBeVisible();
-  await assistant.getByRole('button', { name: /^GPT Lab 5 Codex high/ }).click();
+  await assistant.getByRole('button', { name: /^GPT Lab 5 Codex High/ }).click();
   await expect(page.getByRole('radio', { name: 'High', exact: true })).toBeChecked();
   await expect(page.getByRole('switch', { name: 'Fast mode' })).toBeChecked();
 });
@@ -172,7 +172,7 @@ test('fresh catalog capabilities clear obsolete reasoning and Fast for a new ass
   await page.getByRole('radio', { name: 'High', exact: true }).click();
   await page.getByRole('switch', { name: 'Fast mode' }).click();
   await page.keyboard.press('Escape');
-  await expect(assistant.getByRole('button', { name: 'Prime Lab Small high', exact: true })).toBeVisible();
+  await expect(assistant.getByRole('button', { name: 'Prime Lab Small High', exact: true })).toBeVisible();
   // Only the remembered levels existed until now; the slow probe answers here.
   await page.clock.runFor(SLOW_CATALOG_MS);
   await assistant.getByRole('button', { name: 'Prime Lab Small', exact: true }).click();

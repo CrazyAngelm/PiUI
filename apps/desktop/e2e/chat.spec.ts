@@ -32,7 +32,7 @@ test.describe('new chat', () => {
     await expect(reasoning.getByRole('radio')).toHaveText(['Auto', 'None', 'Minimal', 'Low', 'Medium', 'High', 'Extra high']);
     await reasoning.getByRole('radio', { name: 'High', exact: true }).click();
     await page.keyboard.press('Escape');
-    await expect(composer.getByRole('button', { name: 'GPT Lab 5 Codex high' })).toBeVisible();
+    await expect(composer.getByRole('button', { name: 'GPT Lab 5 Codex High' })).toBeVisible();
 
     const prompt = 'Summarize how the transport boundary keeps Tauri out of components';
     const transcript = await startChat(lab, prompt);
@@ -46,10 +46,10 @@ test.describe('new chat', () => {
     expect((await transcript.innerText()).length).toBeGreaterThan(early);
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
     // The chosen model and reasoning reached the native session settings.
-    await page.getByRole('button', { name: 'GPT Lab 5 Codex high', exact: true }).click();
+    await page.getByRole('button', { name: 'GPT Lab 5 Codex High', exact: true }).click();
     await expect(page.getByRole('radiogroup', { name: 'Reasoning' }).getByRole('radio', { name: 'High', exact: true })).toBeChecked();
     await page.keyboard.press('Escape');
-    await expect(page.getByRole('button', { name: 'GPT Lab 5 Codex high' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'GPT Lab 5 Codex High' })).toBeVisible();
   });
 
   test('a restricted project asks for trust instead of starting', async ({ lab, page }) => {
@@ -190,12 +190,12 @@ test.describe('chat settings', () => {
     await lab.open();
     // A saved chat: opening it resumes the native session.
     await lab.chat(/Plan a weekend in Lisbon/).click();
-    await expect(page.getByRole('button', { name: 'Claude Lab Haiku low', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Claude Lab Haiku Low', exact: true })).toBeVisible();
     // Another chat and back: each chat keeps showing its own settings.
     await lab.chat(/Route host calls through one transport/).click();
-    await expect(page.getByRole('button', { name: 'GPT Lab 5 Codex high', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'GPT Lab 5 Codex High', exact: true })).toBeVisible();
     await lab.chat(/Plan a weekend in Lisbon/).click();
-    await expect(page.getByRole('button', { name: 'Claude Lab Haiku low', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Claude Lab Haiku Low', exact: true })).toBeVisible();
   });
 });
 
