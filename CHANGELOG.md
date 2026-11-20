@@ -4,6 +4,24 @@ All notable changes to Nano Desktop (formerly PiUI) are documented here.
 
 Nano Desktop is currently a developer preview. Versions before 1.0 may change without a stable migration promise; changes to typed host contracts remain versioned under `contracts/`.
 
+## [0.3.9] - 2026-11-20
+
+### Added
+
+- **Cancel while dictating.** While a voice recording is in progress the message bar holds only **Cancel**, **Stop** and **Send**, as on the web. Cancel works like Esc: a recording shorter than five seconds leaves nothing, a longer one stays as an unsent recording you can still send or delete.
+
+### Changed
+
+- **Branching a Pi chat copies the conversation.** A branch now opens with the earlier messages already in it, as it does for Claude Code and Codex, instead of an empty chat with a text summary in the message box. Branching from a message keeps everything before it. A chat whose session file cannot be found, and Nano chats, still open a linked branch.
+
+### Fixed
+
+- A transcription no longer ends with an invented subtitle credit such as "Субтитры сделал DimaTorzok".
+
+### Internal
+
+- Groundwork for the unified Nano shell lands without any visible change: the shared graph compiler, the second graph kernel protocol and the security core for connected computers (ADR-059 and ADR-080). Nothing in the app uses them yet.
+
 ## [0.3.8] - 2026-11-19
 
 ### Added
