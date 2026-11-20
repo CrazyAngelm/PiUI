@@ -38,6 +38,7 @@
   import NodeInputs from './NodeInputs.svelte';
   import { firstCodeLine, RUNTIME_LABEL } from '../executors';
   import { useTranslation } from '../../../features/locale/context';
+  import { reasoningLabel } from '../../../features/locale/reasoningLabel';
   const t = useTranslation();
   import HarnessMark from '../../shell/HarnessMark.svelte';
   import { harnessMeta } from '../../harnessMeta';
@@ -93,7 +94,7 @@
         <span class="sub" title={childName || node.pipelineName}>{$t('Sub-pipeline')} · {childName || (subpipeline.launchCommandId ? $t('Unknown pipeline') : node.pipelineName ? $t('“{0}” not found', [node.pipelineName]) : $t('No pipeline chosen'))}</span>
       {:else}
         <span class="sub" title={profile.model}>
-          {[data.executionLocation === 'cloud-draft' && profile.harness === 'hermes' ? $t('Nano Cloud') : harnessMeta(profile.harness).short, profile.model, profile.reasoning].filter(Boolean).join(' · ')}
+          {[data.executionLocation === 'cloud-draft' && profile.harness === 'hermes' ? $t('Nano Cloud') : harnessMeta(profile.harness).short, profile.model, profile.reasoning ? reasoningLabel(profile.reasoning, $t) : ''].filter(Boolean).join(' · ')}
           {#if profile.serviceTier === 'fast'}<Zap size={11} />{/if}
         </span>
       {/if}

@@ -443,7 +443,7 @@ fn runtime_launch_args(
             AgentKind::PrimeAgent => "--resume",
         };
         args.push(OsString::from(flag));
-        args.push(path.as_os_str().to_owned());
+        args.push(crate::script_runner::process_directory(path).into_os_string());
     }
     if let Some(name) = &config.session_name {
         args.push(OsString::from("--name"));
@@ -604,7 +604,7 @@ impl RealPiRuntime {
                 agent_kind,
                 prime_daemon_socket.as_deref(),
             ))
-            .current_dir(&config.cwd)
+            .current_dir(crate::script_runner::process_directory(&config.cwd))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());

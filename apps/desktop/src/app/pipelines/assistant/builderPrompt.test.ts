@@ -13,14 +13,24 @@ function draft(): AgentGraph {
 
 describe('pipeline assistant prompt', () => {
   it('wraps the draft as context and shows only what the person typed', () => {
-    const text = builderEnvelope({ first: true, draftJson: '{"a":1}', problems: ['Missing task'], harnesses: [{ harness: 'codex', label: 'Codex', models: ['gpt-5'] }], text: '  Add a tester  ' });
+    const text = builderEnvelope({ first: true, draftJson: '{"a":1}', problems: ['Missing task'], harnesses: [{ harness: 'codex', label: 'Codex', models: [{ id: 'gpt-5' }] }], text: '  Add a tester  ' });
     expect(text.startsWith('<piui-builder-context>')).toBe(true);
     expect(text).toContain('You are the PiUI pipeline assistant');
-    expect(text).toContain('- codex (Codex): gpt-5');
+    expect(text).toContain('- codex (Codex): gpt-5 (default)');
     expect(text).toContain('- Missing task');
     expect(stripEnvelope(text)).toBe('Add a tester');
     expect(builderEnvelope({ first: false, draftJson: '{}', problems: [], harnesses: [], text: 'x' })).not.toContain('You are the PiUI pipeline assistant');
     expect(stripEnvelope('plain question')).toBe('plain question');
+  });
+
+  it('names each model with its provider and points at the harness default', () => {
+    const text = builderEnvelope({
+      first: true, draftJson: '{}', problems: [], text: 'Research this',
+      harnesses: [{ harness: 'pi', label: 'Pi', models: [{ id: 'gpt-6.2-sol', provider: 'cpamc' }, { id: 'chat-latest', provider: 'openai' }] }],
+    });
+    // The person's own default comes first; another provider's model may not exist for their account.
+    expect(text).toContain('- pi (Pi): gpt-6.2-sol (modelProvider cpamc, default), chat-latest (modelProvider openai)');
+    expect(text).toContain("Unless the person names a model, use the harness's default model");
   });
 
   it('distinguishes an unresolved catalog from one that answered without models', () => {

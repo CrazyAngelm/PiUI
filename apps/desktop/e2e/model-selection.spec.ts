@@ -77,7 +77,7 @@ test('the pipeline assistant restores the session harness, model, reasoning and 
   await lab.option(/^Codex/).click();
   await assistant.getByRole('button', { name: 'Default model' }).click();
   await lab.option(/^GPT Lab 5 Codex/).click();
-  await page.getByRole('radio', { name: 'high', exact: true }).click();
+  await page.getByRole('radio', { name: 'High', exact: true }).click();
   await page.getByRole('switch', { name: 'Fast mode' }).click();
   await page.keyboard.press('Escape');
   await assistant.getByRole('textbox', { name: 'Message to the assistant' }).fill('Explain this pipeline');
@@ -92,7 +92,7 @@ test('the pipeline assistant restores the session harness, model, reasoning and 
 
   await expect(assistant.getByRole('button', { name: 'Codex', exact: true })).toBeVisible();
   await assistant.getByRole('button', { name: /^GPT Lab 5 Codex high/ }).click();
-  await expect(page.getByRole('radio', { name: 'high', exact: true })).toBeChecked();
+  await expect(page.getByRole('radio', { name: 'High', exact: true })).toBeChecked();
   await expect(page.getByRole('switch', { name: 'Fast mode' })).toBeChecked();
 });
 
@@ -169,13 +169,13 @@ test('fresh catalog capabilities clear obsolete reasoning and Fast for a new ass
   await assistant.getByRole('button', { name: 'Claude Code', exact: true }).click();
   await lab.option(/^Prime Agent/).click();
   await assistant.getByRole('button', { name: 'Prime Lab Small', exact: true }).click();
-  await page.getByRole('radio', { name: 'high', exact: true }).click();
+  await page.getByRole('radio', { name: 'High', exact: true }).click();
   await page.getByRole('switch', { name: 'Fast mode' }).click();
   await page.keyboard.press('Escape');
   await expect(assistant.getByRole('button', { name: 'Prime Lab Small high', exact: true })).toBeVisible();
   // Only the remembered levels existed until now; the slow probe answers here.
   await page.clock.runFor(SLOW_CATALOG_MS);
   await assistant.getByRole('button', { name: 'Prime Lab Small', exact: true }).click();
-  await expect(page.getByRole('radio', { name: 'high', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('radio', { name: 'High', exact: true })).toHaveCount(0);
   await expect(page.getByRole('switch', { name: 'Fast mode' })).toHaveCount(0);
 });

@@ -14,6 +14,7 @@
   import Brain from '@lucide/svelte/icons/brain';
   import Zap from '@lucide/svelte/icons/zap';
   import { t } from '../../features/locale/language';
+  import { reasoningLabel } from '../../features/locale/reasoningLabel';
   import { cachedHarnessModels, harnessModels, workspaceModel } from '../../host-api/harnessModels';
   import type { HarnessCatalogModel } from '../../../../../contracts/harness-models-v18';
   import type { PermissionMode } from '../../../../../contracts/workspace-v15';
@@ -191,7 +192,7 @@
         <button type="button" class="model" {...props} {disabled} aria-labelledby="{uid}-model-label {uid}-model">
           {#if loading}<Spinner size={12} />{:else}<Brain size={14} />{/if}
           <span id="{uid}-model">{value.model?.name ?? $t('Default model')}</span>
-          {#if value.thinkingLevel}<span class="model__sub">{value.thinkingLevel}</span>{/if}
+          {#if value.thinkingLevel}<span class="model__sub">{reasoningLabel(value.thinkingLevel, $t)}</span>{/if}
           {#if fast}<Zap size={12} />{/if}
         </button>
       {/snippet}

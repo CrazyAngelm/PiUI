@@ -3,6 +3,7 @@
   import Sparkles from '@lucide/svelte/icons/sparkles';
   import Zap from '@lucide/svelte/icons/zap';
   import { t } from '../../features/locale/language';
+  import { reasoningLabel } from '../../features/locale/reasoningLabel';
   import { Switch } from '../../lib/ui';
   import { nearestStop, railPosition, railStops, RailGesture, reasoningSteps, stepForKey, type ReasoningStep } from './reasoningSteps';
 
@@ -51,7 +52,7 @@
   }
 
   function name(value: string): string {
-    return value === '' ? $t('Auto') : $t(value);
+    return reasoningLabel(value, $t);
   }
 
   function radios(): HTMLElement[] {

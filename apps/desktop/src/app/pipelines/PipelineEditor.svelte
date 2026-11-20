@@ -183,11 +183,9 @@
     setTimeout(() => api?.fitView(), 60);
   }
 
-  /** First model of the harness's native catalog, so new agents can run at once. */
-  async function defaultModel(harness: AgentProfile['harness']): Promise<Pick<AgentProfile, 'model' | 'modelProvider'> | undefined> {
-    await editor.loadCatalog(harness, false, workspace.catalog.harnesses.find((item) => item.kind === harness)?.version);
-    const model = editor.catalogs[harness]?.models[0];
-    return model ? { model: model.id, ...(model.provider ? { modelProvider: model.provider } : {}) } : undefined;
+  /** The harness's default model, so new agents can run at once. */
+  function defaultModel(harness: AgentProfile['harness']): Promise<Pick<AgentProfile, 'model' | 'modelProvider'> | undefined> {
+    return editor.defaultModel(harness, workspace.catalog.harnesses.find((item) => item.kind === harness)?.version);
   }
 
   async function addAt(kind: 'agent' | 'router' | 'llm' | 'script', screen: { x: number; y: number } | undefined = undefined): Promise<void> {

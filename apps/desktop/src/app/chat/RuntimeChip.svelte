@@ -4,6 +4,7 @@
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import Zap from '@lucide/svelte/icons/zap';
   import { t } from '../../features/locale/language';
+  import { reasoningLabel } from '../../features/locale/reasoningLabel';
   import { onRuntimeSettingsSet, runtimeSettings } from '../../host-api/runtimeSettings';
   import { isNanoConnectorModel } from '../../host-api/harnessModels';
   import { NANO_EXTERNAL_PROVIDER_PREFIX } from '../../../../../contracts/nano-providers-v1';
@@ -147,7 +148,7 @@
     <button type="button" class="chip" {...props} {disabled} title={disabled ? $t('Available while the agent is idle') : undefined}>
       {#if busy}<Spinner size={12} />{:else}<Brain size={14} />{/if}
       <span>{model?.name ?? $t('Default model')}</span>
-      {#if current?.thinkingLevel}<span class="chip__sub">{$t(current.thinkingLevel)}</span>{/if}
+      {#if current?.thinkingLevel}<span class="chip__sub">{reasoningLabel(current.thinkingLevel, $t)}</span>{/if}
       {#if current?.serviceTier === 'fast'}<Zap size={12} />{/if}
       <ChevronDown size={12} />
     </button>

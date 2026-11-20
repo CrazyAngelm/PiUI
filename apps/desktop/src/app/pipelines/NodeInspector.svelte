@@ -19,6 +19,7 @@
   } from '../../host-api/stepExecutors';
   import { RUNTIME_LABEL, SCRIPT_EXAMPLES, sourceBytes } from './executors';
   import { t } from '../../features/locale/language';
+  import { reasoningLabel } from '../../features/locale/reasoningLabel';
   import { harnessConfiguration, permissionLabels, profileHarnesses } from '../../harness-adapters';
   import { profileForHarness } from '../../harness-adapters/normalize';
   import type { AgentProfile } from '../../host-api/orchestrationClient';
@@ -378,7 +379,7 @@
                   size="sm"
                   label={$t('Reasoning')}
                   value={profile.reasoning ?? '__default'}
-                  options={[{ value: '__default', label: $t('Default') }, ...levels.map((level) => ({ value: level, label: level }))]}
+                  options={[{ value: '__default', label: $t('Default') }, ...levels.map((level) => ({ value: level, label: reasoningLabel(level, $t) }))]}
                   onValueChange={(value) => patch({ reasoning: value === '__default' ? undefined : value })}
                 />
               </Field>

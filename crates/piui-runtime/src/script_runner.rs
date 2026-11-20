@@ -348,33 +348,105 @@ impl Drop for ScriptContainment {
     }
 }
 
-/// The working directory as a program expects it. Windows `canonicalize`
-/// returns verbatim `\\?\` paths, which many programs (cmd.exe among them)
-/// cannot use as a working directory; the plain spelling names the same
-/// folder.
+/// A path as a spawned program expects it. Windows `canonicalize` returns
+/// verbatim `\\?\` paths; used as a working directory, an argument or an
+/// environment value they break MSBuild (MSB4019), .NET, Node and `cmd.exe`,
+/// while the plain spelling names the same folder. Every path that reaches a
+/// child process, a bridge configuration or an agent's environment goes through
+/// this function; containment and trust checks keep the canonical form.
+///
+/// The path is returned unchanged when it is not a verbatim drive or UNC path,
+/// when the plain spelling would reach `MAX_PATH`, or when a verbatim name
+/// (`.`, `..`, a trailing dot or space, a device name, a reserved character)
+/// would mean something else in the plain form. Other platforms never change it.
 pub fn process_directory(path: &Path) -> PathBuf {
     #[cfg(windows)]
-    {
-        use std::path::{Component, Prefix};
-        let mut components = path.components();
-        if let Some(Component::Prefix(prefix)) = components.next() {
-            let root = match prefix.kind() {
-                Prefix::VerbatimDisk(letter) => Some(format!("{}:\\", char::from(letter))),
-                Prefix::VerbatimUNC(server, share) => Some(format!(
-                    "\\\\{}\\{}\\",
-                    server.to_string_lossy(),
-                    share.to_string_lossy()
-                )),
-                _ => None,
-            };
-            if let Some(root) = root {
-                let mut plain = PathBuf::from(root);
-                plain.extend(components.filter(|component| *component != Component::RootDir));
-                return plain;
-            }
-        }
+    if let Some(plain) = path.to_str().and_then(plain_verbatim_text) {
+        return PathBuf::from(plain);
     }
     path.to_path_buf()
+}
+
+/// Longest plain Windows path (`MAX_PATH`, which counts the terminating NUL).
+#[cfg_attr(not(windows), allow(dead_code))]
+const MAX_PLAIN_PATH: usize = 260;
+
+/// `\\?\C:\x` to `C:\x` and `\\?\UNC\server\share\x` to `\\server\share\x`.
+/// `None` when `text` is not such a path or has no equal plain spelling. Pure
+/// text, so it is tested on every platform.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn plain_verbatim_text(text: &str) -> Option<String> {
+    let body = text.strip_prefix(r"\\?\")?;
+    let (plain, names, unc) = match body.get(..4) {
+        Some(head) if head.eq_ignore_ascii_case(r"UNC\") => {
+            let names = &body[4..];
+            (format!(r"\\{names}"), names, true)
+        }
+        _ => {
+            let bytes = body.as_bytes();
+            let drive = bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && bytes[2] == b'\\';
+            if !drive {
+                return None;
+            }
+            (body.to_owned(), &body[3..], false)
+        }
+    };
+    // A drive root (`\\?\C:\`) has no name to check.
+    let mut segments = names
+        .split('\\')
+        .filter(|_| !names.is_empty())
+        .peekable();
+    let mut count = 0usize;
+    while let Some(segment) = segments.next() {
+        // A trailing separator ends the path; an empty name elsewhere is a
+        // literal empty name that the plain form would collapse.
+        if segment.is_empty() && segments.peek().is_none() && count > 0 {
+            break;
+        }
+        // The server and share of a UNC path are not file names.
+        if !plain_name(segment, !(unc && count < 2)) {
+            return None;
+        }
+        count += 1;
+    }
+    if unc && count < 2 {
+        return None;
+    }
+    (plain.encode_utf16().count() < MAX_PLAIN_PATH).then_some(plain)
+}
+
+/// Whether a verbatim path component keeps its meaning without the `\\?\`
+/// prefix. `check_device` is off for a UNC server or share name.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn plain_name(name: &str, check_device: bool) -> bool {
+    const DEVICES: [&str; 6] = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.ends_with(['.', ' '])
+        || name
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '|' | '?' | '*'))
+    {
+        return false;
+    }
+    if !check_device {
+        return true;
+    }
+    let stem = name.split('.').next().unwrap_or(name).trim_end_matches(' ');
+    let numbered = |prefix: &str| {
+        stem.len() == prefix.len() + 1
+            && stem
+                .get(..prefix.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+            && stem.ends_with(|c: char| c.is_ascii_digit())
+    };
+    !(DEVICES.iter().any(|device| stem.eq_ignore_ascii_case(device))
+        || numbered("COM")
+        || numbered("LPT"))
 }
 
 async fn spawn_contained(

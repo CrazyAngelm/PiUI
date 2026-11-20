@@ -1128,14 +1128,38 @@ test("Pi routes text, thinking and tool-call updates apart: streamed tool argume
   try {
     await runScenario(adapter, events, "richlive");
     const blocks = (await adapter.snapshot()).blocks.filter((block) => block.kind !== "user");
+    // The call shows where the model wrote it, as soon as it is being written.
     assert.deepEqual(blocks.map((block) => [block.kind, block.text]), [
-      ["thinking", "plan the change"], ["assistant", "First part."], ["assistant", "Second part."], ["tool", "Wrote notes.md"],
+      ["thinking", "plan the change"], ["assistant", "First part."], ["tool", "Wrote notes.md"], ["assistant", "Second part."],
     ]);
     assert.ok(blocks.every((block) => block.status === "complete"));
     assert.deepEqual(blocks.map((block) => block.id), [
-      piStampedId("thinking", RICH_TIMESTAMP, 0), piStampedId("assistant", RICH_TIMESTAMP, 0), piStampedId("assistant", RICH_TIMESTAMP, 1), piToolId("call-write"),
+      piStampedId("thinking", RICH_TIMESTAMP, 0), piStampedId("assistant", RICH_TIMESTAMP, 0), piToolId("call-write"), piStampedId("assistant", RICH_TIMESTAMP, 1),
     ]);
+    // Before the tool ran, the feed already named the call it was writing.
+    const writing = events.find((event) => event.type === "block" && event.block.id === piToolId("call-write"));
+    assert.deepEqual([writing.block.status, writing.block.title, writing.block.text], ["streaming", "write: notes.md", undefined]);
     assert.doesNotMatch(JSON.stringify(events), /TOOLCALL-ARGS-MUST-NOT-BE-PROSE/);
+  } finally { await adapter.dispose(); }
+});
+
+test("a tool call the model was writing is shown at once and ends stopped when the turn is stopped", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    await runScenario(adapter, events, "toolcallstopped");
+    const shown = events.filter((event) => event.type === "block" && event.block.id === piToolId("call-long")).map((event) => [event.block.status, event.block.title]);
+    assert.deepEqual(shown, [["streaming", "write"], ["streaming", "write: big.md"], ["interrupted", "write: big.md"]]);
+  } finally { await adapter.dispose(); }
+});
+
+test("a Pi subagent call names who was called and what they were asked", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    await runScenario(adapter, events, "delegations");
+    const titles = (await adapter.snapshot()).blocks.filter((block) => block.kind === "tool").map((block) => block.title);
+    assert.deepEqual(titles, ["subagent: scout — Find the crash", "subagent: scout, reviewer", "subagent: planner → worker"]);
   } finally { await adapter.dispose(); }
 });
 

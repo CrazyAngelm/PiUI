@@ -7,6 +7,7 @@
   import ShieldCheck from '@lucide/svelte/icons/shield-check';
   import Workflow from '@lucide/svelte/icons/workflow';
   import { t } from '../../features/locale/language';
+  import { reasoningLabel } from '../../features/locale/reasoningLabel';
   import { Button, Checkbox, Dialog, Input, Picker, Segmented, Spinner, Switch, Textarea, type PickerItem } from '../../lib/ui';
   import type { HarnessKind, PermissionMode } from '../../../../../contracts/workspace-v15';
   import type { HarnessCatalogModel } from '../../../../../contracts/harness-models-v18';
@@ -436,7 +437,7 @@
               <button type="button" class="chip" {...props} aria-label={$t('Model')}>
                 {#if modelsLoading || profileLoading}<Spinner size={12} />{:else}<Brain size={14} />{/if}
                 <span>{model?.name ?? (modelKey ? (JSON.parse(modelKey) as [unknown, string])[1] : $t('Select model'))}</span>
-                {#if reasoning}<span class="chip__sub">{reasoning}</span>{/if}
+                {#if reasoning}<span class="chip__sub">{reasoningLabel(reasoning, $t)}</span>{/if}
                 {#if fast}<Zap size={12} />{/if}
               </button>
             {/snippet}

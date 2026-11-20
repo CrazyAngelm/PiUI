@@ -19,6 +19,7 @@ import { marksRu } from './marks';
 import { modelsRu } from './models';
 import { nanoRu } from './nano';
 import { pluginsRu } from './plugins';
+import { reasoningRu } from './reasoning';
 import { releaseRu } from './release';
 import { runsRu } from './runs';
 import { sessionRu } from './session';
@@ -50,6 +51,7 @@ export const featureRu: Readonly<Record<string, string>> = {
   ...modelsRu,
   ...nanoRu,
   ...pluginsRu,
+  ...reasoningRu,
   ...releaseRu,
   ...runsRu,
   ...sessionRu,

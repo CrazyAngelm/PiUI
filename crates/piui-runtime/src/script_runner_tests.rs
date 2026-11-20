@@ -217,6 +217,65 @@ fn verbatim_project_paths_become_plain_working_directories() {
         process_directory(Path::new(r"C:\plain")),
         PathBuf::from(r"C:\plain")
     );
+    // The real thing: what `canonicalize` returns for an existing folder.
+    let canonical = std::fs::canonicalize(std::env::temp_dir()).expect("canonical temp dir");
+    let plain = process_directory(&canonical);
+    assert!(!plain.to_string_lossy().starts_with(r"\\?\"));
+    assert!(plain.is_dir(), "the plain spelling names the same folder");
+}
+
+#[cfg(not(windows))]
+#[test]
+fn other_platforms_never_change_a_path() {
+    for text in [r"\\?\C:\a", "/tmp/a", "relative/a"] {
+        assert_eq!(process_directory(Path::new(text)), PathBuf::from(text));
+    }
+}
+
+#[test]
+fn verbatim_text_becomes_plain_only_when_the_plain_spelling_is_equal() {
+    for (verbatim, plain) in [
+        (r"\\?\C:\Users\x\project", r"C:\Users\x\project"),
+        (r"\\?\d:\Projects\X\", r"d:\Projects\X\"),
+        (r"\\?\C:\", r"C:\"),
+        (r"\\?\C:\Users\x.y\a b\console.d", r"C:\Users\x.y\a b\console.d"),
+        (r"\\?\UNC\server\share\repo", r"\\server\share\repo"),
+        (r"\\?\unc\server\share", r"\\server\share"),
+        (r"\\?\UNC\server\CON\repo", r"\\server\CON\repo"),
+    ] {
+        assert_eq!(plain_verbatim_text(verbatim).as_deref(), Some(plain));
+    }
+    let too_long = format!(r"\\?\C:\{}", "a".repeat(MAX_PLAIN_PATH));
+    let longest_plain = format!(r"C:\{}", "a".repeat(MAX_PLAIN_PATH - 4));
+    assert_eq!(
+        plain_verbatim_text(&format!(r"\\?\{longest_plain}")),
+        Some(longest_plain)
+    );
+    for kept in [
+        r"C:\already\plain",
+        r"\\server\share\x",
+        r"\\.\pipe\piui-x",
+        r"\\?\GLOBALROOT\Device\x",
+        r"\\?\Volume{1234}\x",
+        r"\\?\C:",
+        r"\\?\C:\a\..\b",
+        r"\\?\C:\a\.\b",
+        r"\\?\C:\a\\b",
+        r"\\?\C:\dir.\x",
+        r"\\?\C:\a \x",
+        r"\\?\C:\CON",
+        r"\\?\C:\a\nul.txt",
+        r"\\?\C:\a\COM1",
+        r"\\?\C:\a\lpt9.log",
+        r"\\?\C:\a\x:stream",
+        r"\\?\C:\a\b*c",
+        r"\\?\C:\a/b",
+        r"\\?\UNC\server",
+        r"\\?\UNC\",
+        too_long.as_str(),
+    ] {
+        assert_eq!(plain_verbatim_text(kept), None, "{kept}");
+    }
 }
 
 #[test]

@@ -55,8 +55,8 @@ test.describe('built-in styles', () => {
       expect(geometry.hitTargets.every(Boolean)).toBe(true);
 
       // A press that slides along the rail picks the stop it is released on.
-      const low = gauge.getByRole('radio', { name: 'low', exact: true });
-      const xhigh = gauge.getByRole('radio', { name: 'xhigh', exact: true });
+      const low = gauge.getByRole('radio', { name: 'Low', exact: true });
+      const xhigh = gauge.getByRole('radio', { name: 'Extra high', exact: true });
       const from = await low.boundingBox();
       const to = await xhigh.boundingBox();
       if (!from || !to) throw new Error('Missing reasoning stops');
@@ -71,8 +71,8 @@ test.describe('built-in styles', () => {
 
       // Synthetic pointers: a second finger neither steers nor ends the first one's slide,
       // and the click a touch slide leaves on its starting stop does not undo it.
-      const medium = gauge.getByRole('radio', { name: 'medium', exact: true });
-      const high = gauge.getByRole('radio', { name: 'high', exact: true });
+      const medium = gauge.getByRole('radio', { name: 'Medium', exact: true });
+      const high = gauge.getByRole('radio', { name: 'High', exact: true });
       const centre = async (stop: typeof low): Promise<number> => {
         const box = await stop.boundingBox();
         if (!box) throw new Error('Missing reasoning stop');

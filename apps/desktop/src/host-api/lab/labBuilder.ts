@@ -40,7 +40,8 @@ function firstModels(prompt: string): Map<string, string> {
   for (const line of prompt.split('\n')) {
     const match = /^- ([a-z-]+) \([^)]*\): (.+)$/u.exec(line);
     if (!match?.[1] || !match[2] || match[2] === 'no models listed') continue;
-    models.set(match[1], match[2].split(',')[0]!.trim());
+    // "gpt-5 (modelProvider openai, default), …": the first entry's id, without its notes.
+    models.set(match[1], match[2].split(',')[0]!.replace(/\s*\(.*$/u, '').trim());
   }
   return models;
 }

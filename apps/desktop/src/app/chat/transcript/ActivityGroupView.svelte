@@ -1,6 +1,5 @@
 <script lang="ts">
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
-  import CircleAlert from '@lucide/svelte/icons/circle-alert';
   import { useTranslation } from '../../../features/locale/context';
   const t = useTranslation();
   import type { TimelineActivityGroup } from '../../../features/sessions/timelineView';
@@ -74,8 +73,10 @@
       <span class="group__summary">{now ? now.label : summary}</span>
       {#if now?.detail}<span class="group__current" class:group__current--text={!activity.live}>· {now.detail}</span>{/if}
       {#if diffStats}<DiffStats totals={diffStats} />{/if}
+      <!-- A call that answered with an error (a search with no match, a timed-out try) is part of the agent's
+           work, not a failure of the turn: it is counted plainly, and the turn's own failure is said apart. -->
       {#if activity.failed > 0}
-        <span class="group__status group__status--failed"><span class="group__icon" aria-hidden="true"><CircleAlert size={13} /></span>{$t('{0} failed', [activity.failed])}</span>
+        <span class="group__status group__status--failed">{$t('{0} returned an error', [activity.failed])}</span>
       {/if}
       {#if activity.stopped && !activity.live}<span class="group__status group__status--stopped">{$t('Stopped')}</span>{/if}
       <span class="chevron" class:chevron--open={groupOpen}><ChevronRight size={12} /></span>
@@ -135,15 +136,12 @@
     flex: none;
   }
   .group__status--failed {
-    color: var(--piui-danger);
+    color: var(--piui-text-muted);
     font-size: var(--piui-text-xs);
   }
   .group__status--stopped {
     color: var(--piui-text-disabled);
     font-size: var(--piui-text-xs);
-  }
-  .group__icon {
-    display: inline-flex;
   }
   .group__current {
     flex: 0 10 auto;

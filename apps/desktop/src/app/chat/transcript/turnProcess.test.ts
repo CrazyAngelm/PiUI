@@ -132,10 +132,10 @@ describe('TurnProcessView', () => {
   });
 
   it('counts failed calls in words and marks a stopped one', () => {
-    expect(text(view(control({}, [tool('a'), tool('b', { status: 'failed' })])))).toContain('1 failed');
+    expect(text(view(control({}, [tool('a'), tool('b', { status: 'failed' })])))).toContain('1 returned an error');
     const stopped = text(view(control({}, [tool('a'), tool('b', { status: 'interrupted' })])));
     expect(stopped).toContain('Stopped');
-    expect(stopped).not.toContain('failed');
+    expect(stopped).not.toContain('returned an error');
   });
 
   it('says what a working process does now, in place of its counts', () => {
@@ -149,7 +149,18 @@ describe('TurnProcessView', () => {
     const diff = ['--- a/x.ts', '+++ b/x.ts', '@@ -1,1 +1,2 @@', ' keep', '+new'].join('\n');
     const markup = view(control({}, [user, tool('e', { toolName: 'edit', text: diff }), tool('f', { status: 'failed' }), tool('b', { status: 'streaming', title: 'Bash: pnpm check' })], true));
     expect(markup).toContain('aria-label="1 lines added, 0 removed"');
-    expect(text(markup)).toContain('1 failed');
+    expect(text(markup)).toContain('1 returned an error');
+  });
+
+  it('keeps who the agent called and what it asked in view while the process is folded', () => {
+    const blocks = [user, tool('a'), tool('s', { toolName: 'subagent', title: 'subagent: scout — Find the crash' }), tool('t', { toolName: 'subagent', status: 'streaming', title: 'subagent: reviewer — Review the fix' })];
+    const folded = view(control({}, blocks, true));
+    expect(folded).toContain('aria-label="Delegated tasks"');
+    expect(text(folded)).toContain('subagent: scout — Find the crash');
+    expect(text(folded)).toContain('subagent: reviewer — Review the fix');
+    // Opened, the rows below name the same calls: the list is not repeated.
+    expect(view(control({}, blocks, true), true)).not.toContain('aria-label="Delegated tasks"');
+    expect(view(control({}, [user, tool('a')]))).not.toContain('Delegated tasks');
   });
 
   it('shows no spinner once the process is finished', () => {

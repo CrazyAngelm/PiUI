@@ -7,7 +7,8 @@
   import { onMount, tick, untrack } from 'svelte';
   import { SvelteMap, SvelteSet } from 'svelte/reactivity';
   import { t } from '../../features/locale/language';
-  import { cachedHarnessModels, catalogUnavailable, harnessModels, isNanoConnectorModel, rememberedHarnessModels, resourceNotices, type ResourceNotice } from '../../host-api/harnessModels';
+  import { reasoningLabel } from '../../features/locale/reasoningLabel';
+  import { cachedHarnessModels, catalogUnavailable, harnessModels, isNanoConnectorModel, nativeHarnessModels, rememberedHarnessModels, resourceNotices, type ResourceNotice } from '../../host-api/harnessModels';
   import { prewarmHarnessCatalogs } from '../../host-api/catalogPrewarm';
   import ModelPicker, { type ModelOption } from './ModelPicker.svelte';
   import type { HarnessCatalogModel, HarnessModelsResult, HarnessResource } from '../../../../../contracts/harness-models-v18';
@@ -671,11 +672,13 @@
     remember(executorMemory(workspaceId, ''));
   }
 
-  /** The model a template step runs on: this composer's model for its own harness, else the first of the harness's catalog (the editor's rule). */
+  /** The model a template step runs on: this composer's model for its own harness, else the harness's default,
+   * which its catalog lists first (the editor's rule). The catalog is asked, not a remembered copy: an older one
+   * may list another order and put a model the person's account cannot use first. */
   async function templateModel(targetId: string, kind: AgentProfile['harness']): Promise<Pick<AgentProfile, 'model' | 'modelProvider'> | undefined> {
     if (kind === harness && model) return { model: model.id, ...(model.provider ? { modelProvider: model.provider } : {}) };
     const version = store.catalog.harnesses.find((item) => item.kind === kind)?.version;
-    const result = await cachedHarnessModels({ workspaceId: targetId, harness: kind as HarnessKind }, version ? { version } : {});
+    const result = await nativeHarnessModels({ workspaceId: targetId, harness: kind as HarnessKind }, version);
     const first = result.models[0];
     return first ? { model: first.id, ...(first.provider ? { modelProvider: first.provider } : {}) } : undefined;
   }
@@ -1239,7 +1242,7 @@
             <button type="button" class="chip" {...props} aria-busy={modelsLoading || undefined}>
               {#if modelsLoading}<Spinner size={12} />{:else}<Brain size={14} />{/if}
               <span>{model?.name ?? (modelKey ? $t('Choose a model') : $t('Default model'))}</span>
-              {#if thinkingLevel}<span class="chip__sub">{$t(thinkingLevel)}</span>{/if}
+              {#if thinkingLevel}<span class="chip__sub">{reasoningLabel(thinkingLevel, $t)}</span>{/if}
               {#if fast}<Zap size={12} />{/if}
               <ChevronDown size={12} />
             </button>

@@ -16,7 +16,8 @@ export const chatRu: Readonly<Record<string, string>> = {
   'Thought': 'Размышлял',
   'Thought for {0}s': 'Размышлял {0} с',
   'Thought for {0}m {1}s': 'Размышлял {0} мин {1} с',
-  '{0} failed': 'С ошибкой: {0}',
+  '{0} returned an error': 'Вернули ошибку: {0}',
+  'Delegated tasks': 'Поручения',
   'Work plan': 'План работы',
   // The control that folds a finished turn's activity.
   'Worked for {0}s': 'Работал {0} с',

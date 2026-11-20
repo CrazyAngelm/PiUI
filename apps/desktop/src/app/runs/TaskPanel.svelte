@@ -12,6 +12,7 @@
   import { hostSupports, remoteMode } from '../nano/remoteMode';
   import { remoteRunSupported } from '../pipelines/remotePolicy';
   import { t } from '../../features/locale/language';
+  import { reasoningLabel } from '../../features/locale/reasoningLabel';
   import { onDestroy } from 'svelte';
   import { readWorkspaceHistory } from '../../host-api/workspaceHistory';
   import { CopyFeedback } from '../branch/copyFeedback.svelte';
@@ -169,7 +170,7 @@
         {:else if subpipeline}
           <span class="muted">{$t('Sub-pipeline')}{childSummary?.pipelineName ? ` · ${childSummary.pipelineName}` : ''}</span>
         {:else if profile}
-          <span class="muted">{[llm ? $t('Model call') : profile.name, harnessMeta(profile.harness).label, profile.model, profile.reasoning].filter(Boolean).join(' · ')}</span>
+          <span class="muted">{[llm ? $t('Model call') : profile.name, harnessMeta(profile.harness).label, profile.model, profile.reasoning ? reasoningLabel(profile.reasoning, $t) : ''].filter(Boolean).join(' · ')}</span>
         {:else if view.step.router}
           <span class="muted">{$t('Router')}</span>
         {/if}

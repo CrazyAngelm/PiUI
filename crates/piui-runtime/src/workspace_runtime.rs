@@ -12,6 +12,7 @@ use crate::native_version::{
 };
 use crate::prime_nano::{self, PrimeNanoSource};
 use crate::real_rpc::resolve_pi_launch;
+use crate::script_runner::process_directory;
 pub use piui_contracts::harness_identity::AcpAgentId;
 use piui_contracts::harness_identity::{
     ACP_HARNESS_PREFIX, parse_harness_identity, unknown_harness_identity,
@@ -1313,6 +1314,42 @@ pub struct NativeRuntimeConfig {
     pub nano: Option<NanoRuntimeLaunch>,
 }
 
+impl NativeRuntimeConfig {
+    /// The configuration as a native process may see it. Windows `canonicalize`
+    /// yields verbatim `\\?\` paths: the working directory, the session and
+    /// agent directories and the native session file all reach the bridge, the
+    /// agent and the tools it runs, where such a path breaks MSBuild, .NET and
+    /// Node. Every path field is respelled plainly; host-side containment and
+    /// trust checks keep their own canonical copy of the path.
+    fn with_process_paths(mut self) -> Self {
+        let plain = |path: &mut PathBuf| *path = process_directory(path);
+        plain(&mut self.cwd);
+        plain(&mut self.session_dir);
+        for path in [
+            &mut self.native_path,
+            &mut self.package_root,
+            &mut self.agent_dir,
+            &mut self.kernel_python,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            plain(path);
+        }
+        if let Some(path) = self.fork.as_mut().and_then(|fork| fork.native_path.as_mut()) {
+            plain(path);
+        }
+        if let Some(nano) = self.nano.as_mut() {
+            plain(&mut nano.agent_dir);
+            plain(&mut nano.bundle_cache_dir);
+            if let Some(path) = nano.guard_extension.as_mut() {
+                plain(path);
+            }
+        }
+        self
+    }
+}
+
 impl fmt::Debug for NativeRuntimeConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1738,6 +1775,7 @@ impl NativeRuntime {
         launch: ResolvedHarnessLaunch,
         source: Vec<u8>,
     ) -> Result<(Self, NativeEventReceiver), NativeRuntimeError> {
+        let config = config.with_process_paths();
         type PoolKey = (PathBuf, Option<std::ffi::OsString>);
         type Pools = Mutex<HashMap<PoolKey, Weak<NativeRuntime>>>;
         static POOLS: OnceLock<Pools> = OnceLock::new();
@@ -2025,6 +2063,7 @@ impl NativeRuntime {
         catalog_only: bool,
         isolated: Option<IsolatedLaunch<'_>>,
     ) -> Result<(Self, NativeEventReceiver), NativeRuntimeError> {
+        let config = config.with_process_paths();
         let source_len =
             u32::try_from(source.len()).map_err(|_| NativeRuntimeError::BridgeSourceTooLarge)?;
         #[cfg(windows)]
@@ -3744,7 +3783,7 @@ fn bridge_command(
     }
     standard
         .args(["--input-type=module", "-e", NODE_BOOTSTRAP])
-        .current_dir(&config.cwd)
+        .current_dir(process_directory(&config.cwd))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -7330,6 +7369,62 @@ mod tests {
             ));
         }
         runtime.dispose().await.expect("dispose synthetic bridge");
+    }
+
+    #[test]
+    fn native_launch_paths_are_never_verbatim() {
+        let verbatim = |text: &str| text.starts_with(r"\\?\");
+        let root = tempfile::tempdir().expect("temp root");
+        let project = root.path().join("project");
+        let sessions = root.path().join("sessions");
+        std::fs::create_dir_all(&project).expect("project");
+        std::fs::create_dir_all(&sessions).expect("sessions");
+        let mut config = test_config();
+        // `canonicalize` is where the Windows verbatim spelling comes from.
+        config.cwd = std::fs::canonicalize(&project).expect("canonical project");
+        config.session_dir = std::fs::canonicalize(&sessions).expect("canonical sessions");
+        config.native_path = Some(config.session_dir.join("native.jsonl"));
+        config.agent_dir = Some(config.session_dir.join("agent"));
+        config.fork = Some(NativeFork {
+            native_id: "source".into(),
+            native_path: Some(config.session_dir.join("source.jsonl")),
+            before_block_id: None,
+        });
+        assert_eq!(
+            verbatim(&config.cwd.to_string_lossy()),
+            cfg!(windows),
+            "the fixture must carry the spelling that broke the tools"
+        );
+
+        // The bridge process itself starts in the plain folder, even when a
+        // caller hands over the canonical spelling.
+        let command = bridge_command(Path::new("node"), &config, None);
+        let started_in = command.get_current_dir().expect("working directory");
+        assert!(!verbatim(&started_in.to_string_lossy()));
+        assert!(started_in.is_dir());
+
+        // Every path of the `initialize` frame, which the bridge hands to the
+        // agent and its tools, is plain too, and still names the same folders.
+        let config = config.with_process_paths();
+        let frame = serde_json::to_value(InitializeConfig {
+            config: &config,
+            runtime_program: "pi".into(),
+            runtime_args: Vec::new(),
+            pool_host: false,
+            catalog_only: false,
+            acp: None,
+        })
+        .expect("initialize");
+        for pointer in ["/cwd", "/sessionDir", "/nativePath", "/agentDir", "/fork/nativePath"] {
+            let value = frame.pointer(pointer).and_then(Value::as_str);
+            let value = value.unwrap_or_else(|| panic!("{pointer} is missing"));
+            assert!(!verbatim(value), "{pointer}: {value}");
+        }
+        assert_eq!(
+            std::fs::canonicalize(frame["cwd"].as_str().expect("cwd")).expect("same folder"),
+            std::fs::canonicalize(&project).expect("project")
+        );
+        assert!(Path::new(frame["sessionDir"].as_str().expect("sessions")).is_dir());
     }
 
     #[test]

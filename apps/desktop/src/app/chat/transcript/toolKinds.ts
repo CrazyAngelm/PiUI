@@ -137,7 +137,9 @@ export function activityLine(block: TimelineBlock): string {
     ?? (first.startsWith('Command: ') ? first.slice('Command: '.length) : first.startsWith('$ ') ? first.slice(2) : undefined);
   const text = line?.trim() || block.label || block.toolName || 'Tool';
   // A generic tool's title can carry its arguments ("agent_join: id: 1, timeoutMs: 120000"): the row names the tool only.
-  const named = toolKind(block) === 'command' ? undefined : /^([\w.-]+):\s+[\w.-]+:\s/.exec(text);
+  // A delegation keeps its whole line: who was called and what they were asked is the point of the row.
+  const kind = toolKind(block);
+  const named = kind === 'command' || kind === 'agent' ? undefined : /^([\w.-]+):\s+[\w.-]+:\s/.exec(text);
   return (named?.[1] ?? text).slice(0, 160);
 }
 
@@ -153,6 +155,11 @@ export function activityState(blocks: readonly TimelineBlock[]): ActivityState {
     else if (block.status === 'interrupted') stopped = true;
   }
   return { live: running !== undefined, failed, stopped, ...(running ? { current: activityLine(running) } : {}) };
+}
+
+/** Calls that hand work to another agent, in order: they stay in view while the turn's process is folded. */
+export function delegations(blocks: readonly TimelineBlock[]): TimelineBlock[] {
+  return blocks.filter((block) => block.kind === 'tool' && toolKind(block) === 'agent');
 }
 
 /** The kind that names a group: the first of the summary's order that occurs, reasoning only when it is all there is. */

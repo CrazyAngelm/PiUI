@@ -6,6 +6,10 @@ import { lookupRussian } from '../../features/locale/ruCatalog';
 import ReasoningControl from './ReasoningControl.svelte';
 
 const CODEX = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+const CODEX_NAMES = ['None', 'Minimal', 'Low', 'Medium', 'High', 'Extra high'];
+// Pi lists `max` above `xhigh` for the models that support both.
+const PI = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const PI_NAMES = ['Off', 'Minimal', 'Low', 'Medium', 'High', 'Extra high', 'Max'];
 
 function body(props: ComponentProps<typeof ReasoningControl> = {}): string {
   return render(ReasoningControl, { props }).body;
@@ -82,8 +86,8 @@ describe('ReasoningControl', () => {
   it('is a radiogroup named Reasoning with one radio per level, Auto first', () => {
     const markup = body({ levels: CODEX, level: 'high', levelDefault: true });
     expect(attribute(tagWithRole(markup, 'radiogroup'), 'aria-label')).toBe('Reasoning');
-    expect(radios(markup).map((radio) => radio.name)).toEqual(['Auto', ...CODEX]);
-    expect(radios(body({ levels: CODEX, level: 'high' })).map((radio) => radio.name)).toEqual(CODEX);
+    expect(radios(markup).map((radio) => radio.name)).toEqual(['Auto', ...CODEX_NAMES]);
+    expect(radios(body({ levels: CODEX, level: 'high' })).map((radio) => radio.name)).toEqual(CODEX_NAMES);
   });
 
   it('checks only the selected level and keeps the one tab stop on it', () => {
@@ -109,13 +113,23 @@ describe('ReasoningControl', () => {
   });
 
   it('names the selection in one readout that assistive technology skips', () => {
-    expect(readout(body({ levels: CODEX, level: 'xhigh', levelDefault: true }))).toBe('xhigh');
+    expect(readout(body({ levels: CODEX, level: 'xhigh', levelDefault: true }))).toBe('Extra high');
     expect(readout(body({ levels: CODEX, level: '', levelDefault: true }))).toBe('Auto');
+  });
+
+  it('names xhigh and max apart from High, in the slider and in the readout', () => {
+    const list = radios(body({ levels: PI, level: 'xhigh', levelDefault: true }));
+    expect(list.map((radio) => radio.name)).toEqual(['Auto', ...PI_NAMES]);
+    expect(list.map((radio) => radio.title)).toEqual(['Auto', ...PI_NAMES]);
+    expect(new Set(list.map((radio) => radio.name)).size).toBe(list.length);
+    expect(readout(body({ levels: PI, level: 'xhigh', levelDefault: true }))).toBe('Extra high');
+    expect(readout(body({ levels: PI, level: 'max', levelDefault: true }))).toBe('Max');
+    expect(readout(body({ levels: PI, level: 'high', levelDefault: true }))).toBe('High');
   });
 
   it('gives every stop a tooltip, Auto included', () => {
     const list = radios(body({ levels: CODEX, level: 'low', levelDefault: true }));
-    expect(list.map((radio) => radio.title)).toEqual(['Auto', ...CODEX]);
+    expect(list.map((radio) => radio.title)).toEqual(['Auto', ...CODEX_NAMES]);
   });
 
   it('spreads the stops along the rail and keeps Auto beside it', () => {
@@ -155,13 +169,17 @@ describe('ReasoningControl', () => {
   });
 
   it('names the levels in the interface language', () => {
-    const expected = ['Auto', ...CODEX].map((source) => lookupRussian(source));
+    const expected = ['Auto', ...CODEX.map((level) => `reasoning:${level}`)].map((source) => lookupRussian(source));
     expect(expected.every(Boolean)).toBe(true);
     language.set('ru');
     try {
       const markup = body({ levels: CODEX, level: 'high', levelDefault: true });
       expect(radios(markup).map((radio) => radio.name)).toEqual(expected);
-      expect(readout(markup)).toBe(lookupRussian('high'));
+      expect(readout(markup)).toBe(lookupRussian('reasoning:high'));
+      const pi = body({ levels: PI, level: 'xhigh', levelDefault: true });
+      expect(radios(pi).map((radio) => radio.name)).toEqual(['Auto', ...PI.map((level) => `reasoning:${level}`)].map((source) => lookupRussian(source)));
+      expect(readout(pi)).toBe('Очень высокое');
+      expect(readout(body({ levels: PI, level: 'max', levelDefault: true }))).toBe('Максимальное');
     } finally {
       language.set('en');
     }
@@ -172,7 +190,7 @@ describe('ReasoningControl', () => {
     const list = radios(markup);
     expect(list.every((radio) => radio.blocked === 'true')).toBe(true);
     expect(list.some((radio) => radio.nativelyDisabled)).toBe(false);
-    expect(list.filter((radio) => radio.tabindex === '0').map((radio) => radio.name)).toEqual(['medium']);
+    expect(list.filter((radio) => radio.tabindex === '0').map((radio) => radio.name)).toEqual(['Medium']);
     expect(flagged(tagWithRole(markup, 'switch'), 'disabled')).toBe(true);
 
     const idle = body({ levels: CODEX, level: 'medium', levelDefault: true, fastAvailable: true });

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { harnessConfiguration } from '../../harness-adapters';
   import { t } from '../locale/language';
+  import { reasoningLabel } from '../locale/reasoningLabel';
   import { tick, onMount } from 'svelte';
   import { harnessModels } from '../../host-api/harnessModels';
   import ResourcePicker from './ResourcePicker.svelte';
@@ -189,8 +190,8 @@
       <label>{$t("Reasoning")}
         <select aria-label={$t('Reasoning')} value={draft.reasoning} onchange={(event) => updateDraft({ reasoning: event.currentTarget.value })} disabled={disabled || !nativeModel?.thinkingLevels?.length}>
           <option value="">{$t('Model default')}</option>
-          {#if draft.reasoning && !nativeModel?.thinkingLevels?.includes(draft.reasoning)}<option value={draft.reasoning}>{draft.reasoning}</option>{/if}
-          {#each nativeModel?.thinkingLevels ?? [] as level}<option value={level}>{$t(level)}</option>{/each}
+          {#if draft.reasoning && !nativeModel?.thinkingLevels?.includes(draft.reasoning)}<option value={draft.reasoning}>{reasoningLabel(draft.reasoning, $t)}</option>{/if}
+          {#each nativeModel?.thinkingLevels ?? [] as level}<option value={level}>{reasoningLabel(level, $t)}</option>{/each}
         </select>
       </label>
       {#if configuration.speed}<label>{$t("Speed")}

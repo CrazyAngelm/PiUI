@@ -12,7 +12,8 @@ export const CONTEXT_CLOSE = '</piui-builder-context>';
 export interface HarnessChoice {
   harness: string;
   label: string;
-  models?: string[];
+  /** The native catalog in its own order: the harness's default model first. */
+  models?: { id: string; provider?: string }[];
 }
 
 export interface EnvelopeInput {
@@ -33,7 +34,7 @@ How to answer:
 Format (portable PiUI system v5):
 {"format":"piui-system","version":5,"name":"…","agents":[…],"connections":[…], optional "inputs", "outputs"}
 - agents[]: {"id","profile","task", optional "kind":"router", "input", "executionMode":"callable", "resultFields", "review", "requireApproval", "router", "position":{"x","y"}}
-- profile: {"name","harness","model","permissionMode","instructions","toolPolicy":{"rules":[]}, optional "reasoning" (off|minimal|low|medium|high|xhigh|max), "serviceTier" (standard|fast), "whenToCall","inputInstructions","expectedResult"}
+- profile: {"name","harness","model","modelProvider","permissionMode","instructions","toolPolicy":{"rules":[]}, optional "reasoning" (off|minimal|low|medium|high|xhigh|max), "serviceTier" (standard|fast), "whenToCall","inputInstructions","expectedResult"}
 - permissionMode: read-only | workspace-write | full-access | native. Use the least authority that can do the job.
 - connections[]: {"from","to","kind"} with kind result (the next agent waits for and receives the result), route (router branch, needs "branchId"), send (may message), observe (may watch), spawn (may start instances of a callable role).
 - resultFields: [{"name","kind"}] with kind text|number|boolean|text-list|artifact, when the next step needs structured data.
@@ -46,7 +47,7 @@ Format (portable PiUI system v5):
 Design rules:
 - Start from the smallest graph that can produce and verify the outcome. Add a node only for a different executor (harness, model, rights), an independent check, a change of control flow, or a result several nodes need. Otherwise put the step inside one agent's task.
 - Keep ids of agents you keep, and their positions. New ids: short kebab-case. Place new agents left to right about 300 px apart.
-- "model" is required. Use only the models listed below for each harness; if a harness lists none, write "REPLACE_WITH_AVAILABLE_MODEL" and tell the person to pick one. Never invent models, tools, skills or MCP servers.
+- "model" is required. Use only the models listed below for each harness, with the "modelProvider" listed beside the model (omit it when none is listed). Unless the person names a model, use the harness's default model: it runs with the person's own settings, and another provider's model may not be available to their account. If a harness lists none, write "REPLACE_WITH_AVAILABLE_MODEL" and tell the person to pick one. Never invent models, tools, skills or MCP servers.
 - Tasks are concrete: inputs, responsibility, expected output, how to verify, when to stop. Use {{input.<name>}} to insert a run input.`;
 
 export function builderEnvelope({ first, draftJson, problems, harnesses, text }: EnvelopeInput): string {
@@ -55,7 +56,15 @@ export function builderEnvelope({ first, draftJson, problems, harnesses, text }:
   lines.push('Available harnesses and models:');
   for (const choice of harnesses) {
     const label = `- ${choice.harness} (${choice.label})`;
-    lines.push(choice.models ? `${label}: ${choice.models.join(', ') || 'no models listed'}` : `${label} — model catalog not yet available`);
+    if (!choice.models) {
+      lines.push(`${label} — model catalog not yet available`);
+      continue;
+    }
+    const models = choice.models.map((model, index) => {
+      const notes = [model.provider ? `modelProvider ${model.provider}` : '', index === 0 ? 'default' : ''].filter(Boolean);
+      return notes.length ? `${model.id} (${notes.join(', ')})` : model.id;
+    });
+    lines.push(`${label}: ${models.join(', ') || 'no models listed'}`);
   }
   lines.push('', 'Current editor draft:', '```json', draftJson.trim(), '```');
   lines.push('', problems.length ? `Problems reported by Check:\n${problems.map((problem) => `- ${problem}`).join('\n')}` : 'Check reports no problems.');

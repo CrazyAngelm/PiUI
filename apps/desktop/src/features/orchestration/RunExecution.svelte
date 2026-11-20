@@ -10,6 +10,7 @@
   import GraphCanvas from '../../components/GraphCanvas.svelte';
   import PanelResize from '../../components/PanelResize.svelte';
   import { t } from '../locale/language';
+  import { reasoningLabel } from '../locale/reasoningLabel';
   import { executionLayout } from './executionLayout';
   import { statusPresentation, taskDisplays } from './runView';
 
@@ -156,7 +157,7 @@
             <p>{$t(viewedTask ? statusPresentation(viewedTask.status).label : selected.status.label)}</p>
             {#if onCancelTask && attemptIndex === -1 && ['ready','running','awaitingApproval'].includes(selected.task?.status ?? '')}<button onclick={() => onCancelTask?.(selected!.stepId)}>{$t('Cancel task')}</button>{/if}
             {#if onFlow && attemptIndex === -1 && ['succeeded','failed','cancelled','awaitingApproval'].includes(selected.task?.status ?? '')}<details><summary>{$t('Repeat from this task')}</summary><p>{$t('This starts new attempts for this task and dependent tasks. Check prior effects before repeating.')}</p><button onclick={() => onFlow?.({type:'repeat',stepId:selected!.stepId,taskRevision:selected!.task!.revision})}>{$t('Confirm repeat')}</button></details>{/if}
-            {#if onFlow && attemptIndex === -1 && selected.task?.status === 'awaitingApproval'}<button onclick={() => onFlow?.({ type:'decide', stepId:selected!.stepId, taskRevision:selected!.task!.revision, approved:true })}>{$t('Accept result')}</button><button onclick={() => onFlow?.({ type:'decide', stepId:selected!.stepId, taskRevision:selected!.task!.revision, approved:false })}>{$t('Reject result')}</button>{/if}<small>{selected.profile?.harness} · {selected.profile?.model} · {selected.profile?.reasoning ?? $t('Model default')}</small>
+            {#if onFlow && attemptIndex === -1 && selected.task?.status === 'awaitingApproval'}<button onclick={() => onFlow?.({ type:'decide', stepId:selected!.stepId, taskRevision:selected!.task!.revision, approved:true })}>{$t('Accept result')}</button><button onclick={() => onFlow?.({ type:'decide', stepId:selected!.stepId, taskRevision:selected!.task!.revision, approved:false })}>{$t('Reject result')}</button>{/if}<small>{selected.profile?.harness} · {selected.profile?.model} · {selected.profile?.reasoning ? reasoningLabel(selected.profile.reasoning, $t) : $t('Model default')}</small>
             <h3>{$t('Consumption')}</h3><dl>{#each metrics as [metric, label]}<div><dt>{$t(label)}</dt><dd>{count(usageTotal(viewedSessionId ? usage[viewedSessionId] ?? [] : [], metric))}</dd></div>{/each}</dl><small>{$t('Only native counters are shown. A dash means unavailable; cache may be included in input tokens.')}</small>
             <h3>{$t('Task')}</h3><pre>{step?.instructions}</pre>
             <h3>{$t('Waiting for')}</h3>

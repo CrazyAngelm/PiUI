@@ -303,6 +303,23 @@ export async function createPiAdapter(config, emit) {
     if (current) putBlock({ ...current, ...patch });
   };
   const safeToolName = (name) => typeof name === "string" && name.length <= 160 ? name : "tool";
+  // Tool calls the model is writing, by block id, with the title last shown;
+  // tool_execution_* takes them over.
+  const preparingTools = new Map();
+  const preparingCall = (event, message) => {
+    const index = Number.isInteger(event.contentIndex) ? event.contentIndex : -1;
+    const call = event.toolCall ?? event.partial?.content?.[index] ?? message?.content?.[index];
+    if (call?.type !== "toolCall" || typeof call.id !== "string" || typeof call.name !== "string") return;
+    const id = opaque("pi-tool", call.id);
+    const existing = blocks.get(id);
+    if (existing && !preparingTools.has(id)) return;
+    const toolName = safeToolName(call.name);
+    const title = toolTitle(toolName, call.arguments);
+    // Deltas arrive per token: the block changes only when its line does.
+    if (existing && preparingTools.get(id) === title) return;
+    preparingTools.set(id, title);
+    putBlock({ ...(existing ?? { id, kind: "tool", label: toolName, toolName, collapsible: true }), status: "streaming", title });
+  };
 
   // Chat files (CONTRACT.md, "File events"): files a tool wrote or read and
   // images a tool returned. Only the location or the bytes are forwarded as a
@@ -378,6 +395,17 @@ export async function createPiAdapter(config, emit) {
     if (["number", "boolean"].includes(typeof value) || value === null) return `${key}: ${value}`;
     return `${key}: ${Array.isArray(value) ? "[…]" : "{…}"}`;
   }).join(", ");
+  // Pi's subagent tool (single `agent`/`task`, parallel `tasks`, sequential
+  // `chain`): the line names who was called and what they were asked, not the
+  // argument keys.
+  const delegationDetail = (input, text) => {
+    const single = (entry) => [text(entry?.agent), text(entry?.task)].filter(Boolean).join(" — ");
+    const many = Array.isArray(input.tasks) ? input.tasks : Array.isArray(input.chain) ? input.chain : undefined;
+    if (!many) return single(input) || compactArgs(input);
+    const agents = many.map((entry) => text(entry?.agent)).filter(Boolean);
+    const joiner = Array.isArray(input.tasks) ? ", " : " → ";
+    return agents.length ? agents.join(joiner) : compactArgs(input);
+  };
   const toolTitle = (toolName, args) => {
     const input = args && typeof args === "object" && !Array.isArray(args) ? args : {};
     const text = (value) => (typeof value === "string" && value.trim() ? value : "");
@@ -386,7 +414,8 @@ export async function createPiAdapter(config, emit) {
     else if (["read", "edit", "write", "ls"].includes(toolName)) detail = text(input.path);
     else if (toolName === "grep" || toolName === "find") {
       detail = [text(input.pattern), text(input.path)].filter(Boolean).join(" in ");
-    } else detail = compactArgs(input);
+    } else if (toolName === "subagent") detail = delegationDetail(input, text);
+    else detail = compactArgs(input);
     return oneLine(detail ? `${toolName}: ${detail}` : toolName, 200);
   };
   const toolResultText = (result) => {
@@ -733,6 +762,9 @@ export async function createPiAdapter(config, emit) {
   };
   const completeSettled = () => {
     clearSettleTimer();
+    // A call that was written but never ran does not stay "running" after the turn.
+    for (const id of preparingTools.keys()) updateBlock(id, { status: "interrupted" });
+    preparingTools.clear();
     finishCompaction("complete", "Context compaction ended.");
     settleTurn();
     setStatus("idle");
@@ -821,9 +853,15 @@ export async function createPiAdapter(config, emit) {
           reportUnknownEvent(`message_update.${event.type}`);
           break;
         }
-        // The tool block itself comes from tool_execution_*; the call's
-        // arguments stream here as JSON and are only a summary on that block.
-        if (phase[1] === "toolcall") break;
+        // A call the model is still writing (a long file, a long command) is
+        // shown at once as a running tool with its name and what is known of
+        // its arguments, so the feed says what the agent is doing instead of
+        // only "thinking". The streamed JSON never becomes prose; the block is
+        // the one tool_execution_* continues (same call id).
+        if (phase[1] === "toolcall") {
+          preparingCall(event, frame.message);
+          break;
+        }
         const index = Number.isInteger(event.contentIndex) ? event.contentIndex : 0;
         const kind = phase[1] === "thinking" ? "thinking" : "assistant";
         const key = `${kind}:${index}`;
@@ -860,6 +898,11 @@ export async function createPiAdapter(config, emit) {
 
         if (frame.message?.role === "assistant") {
           const interrupted = frame.message.stopReason === "aborted";
+          // A call written in a message that failed or was stopped never runs.
+          if (interrupted || frame.message.stopReason === "error") {
+            for (const id of preparingTools.keys()) updateBlock(id, { status: interrupted ? "interrupted" : "failed" });
+            preparingTools.clear();
+          }
           const failed = frame.message.stopReason === "error";
           lastTurnOutcome = interrupted ? "interrupted" : failed ? "failed" : "succeeded";
           // Held until settlement: Pi may retry a transient failure.
@@ -876,6 +919,7 @@ export async function createPiAdapter(config, emit) {
         const existing = blocks.get(id);
         const toolName = existing?.toolName ?? safeToolName(frame.toolName);
         const ended = frame.type === "tool_execution_end";
+        preparingTools.delete(id);
         // Updates carry the accumulated partial result, so each replaces the text.
         const result = ended ? frame.result : frame.partialResult;
         const output = result === undefined ? undefined : boundToolText(toolResultText(result));

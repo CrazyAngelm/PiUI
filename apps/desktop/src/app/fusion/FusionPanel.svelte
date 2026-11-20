@@ -10,6 +10,7 @@
   import OctagonX from '@lucide/svelte/icons/octagon-x';
   import { tick } from 'svelte';
   import { t } from '../../features/locale/language';
+  import { reasoningLabel } from '../../features/locale/reasoningLabel';
   import { Badge, Button, Spinner, StatusDot } from '../../lib/ui';
   import { harnessMeta } from '../harnessMeta';
   import HarnessMark from '../shell/HarnessMark.svelte';
@@ -111,7 +112,7 @@
   const permissionLabel = (role: FusionRoleV1): string =>
     $t(FUSION_PERMISSION_CHOICES.find((choice) => choice.value === role.permissionMode)?.label ?? role.permissionMode);
   const roleLine = (role: FusionRoleV1): string =>
-    [role.model?.name ?? $t('Default model'), role.thinkingLevel, role.serviceTier === 'fast' ? $t('Fast mode') : '', permissionLabel(role)].filter(Boolean).join(' · ');
+    [role.model?.name ?? $t('Default model'), role.thinkingLevel ? reasoningLabel(role.thinkingLevel, $t) : '', role.serviceTier === 'fast' ? $t('Fast mode') : '', permissionLabel(role)].filter(Boolean).join(' · ');
   const briefTone = (brief: FusionBriefV1): 'neutral' | 'accent' | 'success' | 'warning' | 'danger' => {
     if (brief.state === 'active') return 'accent';
     if (brief.outcome === 'accepted') return 'success';

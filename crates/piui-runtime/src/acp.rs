@@ -1029,7 +1029,7 @@ fn run_probe_command(
         .args(args)
         .env_clear()
         .envs(environment.iter().map(|(name, value)| (name, value)))
-        .current_dir(cwd)
+        .current_dir(process_directory(cwd))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(stderr);

@@ -152,6 +152,20 @@ export function harnessModels(request: HarnessModelsRequest, refresh = false, ve
 }
 
 /**
+ * The models the native harness itself answers, never a remembered copy: the
+ * first one is the harness's own default. Shares a load in flight and does not
+ * wait for resource discovery.
+ */
+export function nativeHarnessModels(request: HarnessModelsRequest, version: string | undefined = undefined): Promise<HarnessModelsResult> {
+  const key = catalogKey(request);
+  if (version) knownVersions.set(key, version);
+  const nativeVersion = version ?? knownVersions.get(key);
+  const live = catalogs.get(key);
+  if (live && otherVersion(live, nativeVersion)) retire(request, true);
+  return splitCatalog(request, nativeVersion).models;
+}
+
+/**
  * True once no native request for this project and harness is in flight: the
  * models and the resources are both known, or the load ended without them (a
  * failure, or resources degraded to a warning). False while either is still

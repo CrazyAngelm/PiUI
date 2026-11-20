@@ -32,7 +32,7 @@ test.describe('chat activity', () => {
     await expect(control).toContainText('pnpm --filter @piui/desktop test:e2e');
     await expect(analysis).toHaveCount(0);
     await expect(transcript.getByRole('button', { name: 'Thought', exact: true })).toHaveCount(0);
-    await expect(transcript.getByRole('button', { name: /failed|Stopped/ })).toHaveCount(0);
+    await expect(transcript.getByRole('button', { name: /returned an error|Stopped/ })).toHaveCount(0);
 
     // Opening it outlines the groups with the reply between them, each group still closed.
     await control.focus();
@@ -145,7 +145,7 @@ test.describe('chat activity', () => {
     const transcript = page.getByRole('region', { name: 'Conversation messages' });
 
     // A turn that ended badly opens its process: the failed call is in view without a click.
-    const control = transcript.getByRole('button', { name: /ran 2 commands.*1 failed/i });
+    const control = transcript.getByRole('button', { name: /ran 2 commands.*1 returned an error/i });
     await expect(control).toBeVisible();
     await expect(control).toHaveAttribute('aria-expanded', 'true');
     await expect(transcript.getByText('Failed', { exact: true })).toBeVisible();
@@ -153,7 +153,7 @@ test.describe('chat activity', () => {
     // A chat whose calls all succeeded carries no error or stopped mark.
     await lab.chat(/Map pipeline editor shortcuts/).click();
     await expect(transcript.getByRole('button', { name: /read 1 file, searched 1 time/i })).toBeVisible();
-    await expect(transcript.getByRole('button', { name: /failed|Stopped/ })).toHaveCount(0);
+    await expect(transcript.getByRole('button', { name: /returned an error|Stopped/ })).toHaveCount(0);
   });
 
   test('a running turn shows its reasoning and command as one working line, and a declined command is stopped, not failed', async ({ lab, page }) => {
@@ -177,6 +177,6 @@ test.describe('chat activity', () => {
     // Declining stops the command; it is not an error.
     await card.getByRole('button', { name: 'Deny' }).click();
     await expect(transcript.getByRole('button', { name: /ran 1 command.*Stopped/i })).toBeVisible({ timeout: 30_000 });
-    await expect(transcript.getByRole('button', { name: /failed/ })).toHaveCount(0);
+    await expect(transcript.getByRole('button', { name: /returned an error/ })).toHaveCount(0);
   });
 });

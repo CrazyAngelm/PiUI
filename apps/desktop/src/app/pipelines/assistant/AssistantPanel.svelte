@@ -17,6 +17,7 @@
   import Zap from '@lucide/svelte/icons/zap';
   import { tick, untrack } from 'svelte';
   import { t } from '../../../features/locale/language';
+  import { reasoningLabel } from '../../../features/locale/reasoningLabel';
   import MarkdownContent from '../../../components/MarkdownContent.svelte';
   import { graphToSystemFile } from '../../../features/orchestration/systemFile';
   import { composerRequest } from '../../../host-api/composerClient';
@@ -299,7 +300,7 @@
     return available.map((item) => ({
       harness: item.kind,
       label: harnessMeta(item.kind).label,
-      models: editor.catalogs[item.kind]?.models.map((entry) => entry.id),
+      models: editor.catalogs[item.kind]?.models.map((entry) => ({ id: entry.id, ...(entry.provider ? { provider: entry.provider } : {}) })),
     }));
   }
 
@@ -400,7 +401,7 @@
           <button type="button" class="chip chip--model" {...props} disabled={!canTune}>
             {#if modelBusy || modelsLoading || settingsLoading}<Spinner size={12} />{:else}<Brain size={13} />{/if}
             <span>{model?.name ?? (modelKey ? $t('Choose a model') : $t('Default model'))}</span>
-            {#if level}<span class="chip__sub">{level}</span>{/if}
+            {#if level}<span class="chip__sub">{reasoningLabel(level, $t)}</span>{/if}
             {#if fast}<Zap size={12} />{/if}
             <ChevronDown size={12} />
           </button>

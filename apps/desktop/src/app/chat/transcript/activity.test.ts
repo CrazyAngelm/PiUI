@@ -66,6 +66,11 @@ describe('activityLine', () => {
     expect(activityLine(block({ label: undefined }))).toBe('Tool');
   });
 
+  it('names a generic tool without its arguments, but keeps a delegation whole', () => {
+    expect(activityLine(block({ toolName: 'agent_join', title: 'agent_join: id: 1, timeoutMs: 120000' }))).toBe('agent_join');
+    expect(activityLine(block({ toolName: 'subagent', title: 'subagent: agent: scout, task: Find the crash' }))).toBe('subagent: agent: scout, task: Find the crash');
+  });
+
   it('cuts a long title to 160 characters', () => {
     expect(activityLine(block({ title: 'x'.repeat(300) }))).toHaveLength(160);
   });

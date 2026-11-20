@@ -1,6 +1,5 @@
 <script lang="ts">
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
-  import CircleAlert from '@lucide/svelte/icons/circle-alert';
   import { useTranslation } from '../../../features/locale/context';
   const t = useTranslation();
   import type { TimelineTurnProcess } from '../../../features/sessions/timelineView';
@@ -10,7 +9,8 @@
   import { Spinner } from '../../../lib/ui';
   import ActivityGroupView from './ActivityGroupView.svelte';
   import DiffStats from './DiffStats.svelte';
-  import { activityState } from './toolKinds';
+  import { activityLine, activityState, delegations } from './toolKinds';
+  import { toolIcons } from './toolIcons';
   import { processDiffTotals, processLive, turnProcessLabel } from './turnProcess';
 
   interface Props {
@@ -28,6 +28,9 @@
   const label = $derived(turnProcessLabel(item, language, $t));
   const diffStats = $derived(processDiffTotals(item));
   const state = $derived(activityState(item.blocks));
+  // Who the agent called and what it asked of them stays in view while the process is folded.
+  const delegated = $derived(delegations(item.blocks));
+  const AgentIcon = toolIcons.agent;
   // A process of one group has nothing to outline: opening it lists the calls.
   const flat = $derived(item.parts.length === 1);
   // A reply folded into the process reads the same text as in the chat: the full answer once loaded, no service markup.
@@ -41,10 +44,21 @@
     <!-- Opened, the last group below names the same call: the line keeps only the state. -->
     {#if now?.detail && !open}<span class="turn__detail" class:turn__detail--text={!state.live}>· {now.detail}</span>{/if}
     {#if diffStats}<DiffStats totals={diffStats} />{/if}
-    {#if state.failed > 0}<span class="turn__failed"><span class="turn__icon" aria-hidden="true"><CircleAlert size={13} /></span>{$t('{0} failed', [state.failed])}</span>{/if}
+    <!-- Calls that answered with an error are part of the work (ActivityGroupView): counted plainly, not as an alarm. -->
+    {#if state.failed > 0}<span class="turn__failed">{$t('{0} returned an error', [state.failed])}</span>{/if}
     {#if state.stopped && !now}<span class="turn__stopped">{$t('Stopped')}</span>{/if}
     <span class="chevron" class:chevron--open={open}><ChevronRight size={12} /></span>
   </button>
+  {#if !open && delegated.length > 0}
+    <ul class="turn__agents" aria-label={$t('Delegated tasks')}>
+      {#each delegated as block (block.id)}
+        <li class="turn__agent" class:turn__agent--live={block.status === 'streaming'}>
+          <span class="turn__agent-icon" aria-hidden="true">{#if block.status === 'streaming'}<Spinner size={12} />{:else}<AgentIcon size={12} />{/if}</span>
+          <span class="turn__agent-line">{activityLine(block)}</span>
+        </li>
+      {/each}
+    </ul>
+  {/if}
   {#if open}
     <div class="turn__body">
       {#each item.parts as part (part.type === 'block' ? part.block.id : part.id)}
@@ -120,13 +134,43 @@
     font-size: var(--piui-text-xs);
   }
   .turn__failed {
-    color: var(--piui-danger);
+    color: var(--piui-text-disabled);
   }
   .turn__stopped {
     color: var(--piui-text-disabled);
   }
-  .turn__icon {
+  .turn__agents {
+    display: grid;
+    gap: 2px;
+    margin: 0 0 var(--piui-space-2) 5px;
+    padding: 0 0 0 12px;
+    border-left: 1px solid var(--piui-border-subtle);
+    list-style: none;
+  }
+  .turn__agent {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
+  }
+  .turn__agent--live {
+    color: var(--piui-text);
+  }
+  .turn__agent-icon {
     display: inline-flex;
+    flex: none;
+    color: var(--piui-text-disabled);
+  }
+  .turn__agent--live .turn__agent-icon {
+    color: var(--piui-accent);
+  }
+  .turn__agent-line {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .chevron {
     display: inline-flex;

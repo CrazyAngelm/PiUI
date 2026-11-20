@@ -4,6 +4,20 @@ All notable changes to Nano Desktop (formerly PiUI) are documented here.
 
 Nano Desktop is currently a developer preview. Versions before 1.0 may change without a stable migration promise; changes to typed host contracts remain versioned under `contracts/`.
 
+## [0.3.10] - 2026-11-20
+
+### Changed
+
+- **The chat shows what the agent is doing while it writes a long call.** A file or command the model is still composing appears at once as a running step with its name, instead of minutes of "Thinking…".
+- **Subagent calls stay in view.** A folded turn lists who the agent called and what it asked of them; a Pi subagent call names the agent and its task.
+- **Calls that answered with an error are counted plainly.** A search with no match or a timed-out try reads "Returned an error: N" in a muted color, not a red failure count. A failed turn still says so.
+- **Reasoning levels have one name everywhere.** The model picker, the chat chip and the pipeline editors use the same label for each level (Extra high, Max and so on). Pi offers only the levels its model settings allow: a custom model without `thinkingLevelMap` stops at High.
+
+### Fixed
+
+- New and built-in pipelines use the harness's own default model and provider (for Pi, the one Pi starts with) instead of the first model of an older remembered list, which could be a model the account cannot use.
+- Agents now start in a plain working folder path. The Windows `\\?\` prefix broke MSBuild, .NET and Node in the agent's commands.
+
 ## [0.3.9] - 2026-11-20
 
 ### Added

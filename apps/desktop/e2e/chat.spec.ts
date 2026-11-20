@@ -29,8 +29,8 @@ test.describe('new chat', () => {
     await lab.option(/^GPT Lab 5 Codex/).click();
     // The popover stays open on a model with levels: reasoning is tuned there, from the model's native levels.
     const reasoning = page.getByRole('radiogroup', { name: 'Reasoning' });
-    await expect(reasoning.getByRole('radio')).toHaveText(['Auto', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
-    await reasoning.getByRole('radio', { name: 'high', exact: true }).click();
+    await expect(reasoning.getByRole('radio')).toHaveText(['Auto', 'None', 'Minimal', 'Low', 'Medium', 'High', 'Extra high']);
+    await reasoning.getByRole('radio', { name: 'High', exact: true }).click();
     await page.keyboard.press('Escape');
     await expect(composer.getByRole('button', { name: 'GPT Lab 5 Codex high' })).toBeVisible();
 
@@ -47,7 +47,7 @@ test.describe('new chat', () => {
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
     // The chosen model and reasoning reached the native session settings.
     await page.getByRole('button', { name: 'GPT Lab 5 Codex high', exact: true }).click();
-    await expect(page.getByRole('radiogroup', { name: 'Reasoning' }).getByRole('radio', { name: 'high', exact: true })).toBeChecked();
+    await expect(page.getByRole('radiogroup', { name: 'Reasoning' }).getByRole('radio', { name: 'High', exact: true })).toBeChecked();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('button', { name: 'GPT Lab 5 Codex high' })).toBeVisible();
   });

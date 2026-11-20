@@ -139,6 +139,28 @@ const scenarios = {
     tool("tool_execution_end", "call-write", "write", { result: { content: [{ type: "text", text: "Wrote notes.md" }] }, isError: false }),
     { type: "agent_settled" },
   ],
+  // A call the model was writing when the person stopped the turn never runs.
+  toolcallstopped: [
+    { type: "agent_start" },
+    { type: "message_start", message: { role: "assistant", timestamp: RICH_TIMESTAMP } },
+    update({ type: "toolcall_start", contentIndex: 0, partial: { content: [{ type: "toolCall", id: "call-long", name: "write", arguments: {} }] } }),
+    update({ type: "toolcall_delta", contentIndex: 0, delta: '{"path":"big.md"', partial: { content: [{ type: "toolCall", id: "call-long", name: "write", arguments: { path: "big.md" } }] } }),
+    { type: "message_end", message: { role: "assistant", timestamp: RICH_TIMESTAMP, stopReason: "aborted" } },
+    { type: "agent_settled" },
+  ],
+  // Pi's subagent tool: one agent, parallel tasks and a chain.
+  delegations: [
+    { type: "agent_start" },
+    { type: "message_start", message: { role: "assistant", timestamp: RICH_TIMESTAMP } },
+    { type: "tool_execution_start", toolCallId: "call-one", toolName: "subagent", args: { agent: "scout", task: "Find the crash" } },
+    { type: "tool_execution_end", toolCallId: "call-one", toolName: "subagent", result: { content: [{ type: "text", text: "found" }] }, isError: false },
+    { type: "tool_execution_start", toolCallId: "call-many", toolName: "subagent", args: { tasks: [{ agent: "scout", task: "a" }, { agent: "reviewer", task: "b" }] } },
+    { type: "tool_execution_end", toolCallId: "call-many", toolName: "subagent", result: { content: [] }, isError: false },
+    { type: "tool_execution_start", toolCallId: "call-chain", toolName: "subagent", args: { chain: [{ agent: "planner", task: "a" }, { agent: "worker", task: "b" }] } },
+    { type: "tool_execution_end", toolCallId: "call-chain", toolName: "subagent", result: { content: [] }, isError: false },
+    { type: "message_end", message: { role: "assistant", timestamp: RICH_TIMESTAMP, stopReason: "stop" } },
+    { type: "agent_settled" },
+  ],
   // `text_end` content heals a dropped delta; an unknown update type is reported once.
   updatekinds: [
     { type: "agent_start" },

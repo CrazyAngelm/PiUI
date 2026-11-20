@@ -54,7 +54,7 @@ describe('ActivityGroupView', () => {
 
   it('counts failed calls in words, not only with an icon', () => {
     const markup = view([command('a'), command('b', { status: 'failed' }), command('c')]);
-    expect(text(markup)).toContain('1 failed');
+    expect(text(markup)).toContain('1 returned an error');
   });
 
   it('names what a working group does now, in place of its counts', () => {
@@ -64,7 +64,7 @@ describe('ActivityGroupView', () => {
     ]);
     expect(head(markup)).toMatch(/^Running a command · Bash: npm test/);
     expect(head(markup)).not.toContain('Ran 2 commands');
-    expect(text(markup)).toContain('1 failed');
+    expect(text(markup)).toContain('1 returned an error');
     expect(markup).toContain('spinner');
   });
 
@@ -89,7 +89,7 @@ describe('ActivityGroupView', () => {
   it('calls a stopped call stopped, not failed', () => {
     const markup = view([command('a'), command('b', { status: 'interrupted' })]);
     expect(text(markup)).toContain('Stopped');
-    expect(text(markup)).not.toContain('failed');
+    expect(text(markup)).not.toContain('returned an error');
   });
 
   it('prefers the running state over a stopped call', () => {

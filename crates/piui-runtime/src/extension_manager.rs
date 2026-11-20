@@ -7,6 +7,7 @@
 //! are delegated to that same runtime's upstream setters.
 
 use crate::real_rpc::{resolve_pi_launch, resolve_prime_launch};
+use crate::script_runner::process_directory;
 use piui_contracts::AgentKind;
 use serde::Deserialize;
 use std::fmt;
@@ -158,12 +159,12 @@ async fn run_helper(
         .arg("--input-type=module")
         .arg("--eval")
         .arg(HELPER)
-        .arg(dist_path)
-        .arg(working_directory)
+        .arg(process_directory(dist_path))
+        .arg(process_directory(working_directory))
         .arg(action)
-        .arg(target.unwrap_or_else(|| Path::new("")))
+        .arg(target.map_or_else(PathBuf::new, process_directory))
         .arg(enabled.map_or("", |value| if value { "true" } else { "false" }))
-        .current_dir(working_directory)
+        .current_dir(process_directory(working_directory))
         .env("PI_OFFLINE", "1")
         .env("PI_SKIP_VERSION_CHECK", "1")
         .stdin(Stdio::null())

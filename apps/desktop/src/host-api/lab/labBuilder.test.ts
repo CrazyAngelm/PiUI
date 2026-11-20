@@ -4,7 +4,7 @@ import { emptyGraph, newGraphNode } from '../../features/orchestration/agentGrap
 import { graphToSystemFile } from '../../features/orchestration/systemFile';
 import { builderAnswer } from './labBuilder';
 
-const harnesses = [{ harness: 'codex', label: 'Codex', models: ['gpt-lab-5-codex'] }];
+const harnesses = [{ harness: 'codex', label: 'Codex', models: [{ id: 'gpt-lab-5-codex' }] }];
 
 describe('lab pipeline assistant', () => {
   it('proposes a valid bounded review loop for an empty draft', () => {

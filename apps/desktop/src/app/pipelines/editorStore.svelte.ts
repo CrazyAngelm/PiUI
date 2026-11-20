@@ -7,7 +7,7 @@
  */
 import { hostSupports, remoteMode } from '../nano/remoteMode';
 import { remoteDefinitionSupported, remoteGraphIssue, remoteGraphSupported } from './remotePolicy';
-import { cachedHarnessModels, catalogSettled, harnessModels } from '../../host-api/harnessModels';
+import { cachedHarnessModels, catalogSettled, harnessModels, nativeHarnessModels } from '../../host-api/harnessModels';
 import { nanoAccount } from '../nano/nanoAccount.svelte';
 import {
   orchestrationError,
@@ -533,10 +533,15 @@ export class PipelineEditorStore {
     return true;
   }
 
-  /** The first model of a harness's native catalog, so a new profile can run at once. */
-  async defaultModel(harness: AgentProfile['harness']): Promise<Pick<AgentProfile, 'model' | 'modelProvider'> | undefined> {
-    await this.loadCatalog(harness);
-    const model = this.catalogs[harness]?.models[0];
+  /**
+   * The harness's default model (its native catalog lists it first), so a new profile can run at once.
+   * Asked of the catalog itself, not of the copy remembered for the picker: an older copy may list
+   * another order and put first a model the person's account cannot use.
+   */
+  async defaultModel(harness: AgentProfile['harness'], version: string | undefined = undefined): Promise<Pick<AgentProfile, 'model' | 'modelProvider'> | undefined> {
+    await this.loadCatalog(harness, false, version);
+    const native = this.safeMode ? undefined : await nativeHarnessModels({ workspaceId: this.workspaceId, harness }, version).catch(() => undefined);
+    const model = (native ?? this.catalogs[harness])?.models[0];
     return model ? { model: model.id, ...(model.provider ? { modelProvider: model.provider } : {}) } : undefined;
   }
 

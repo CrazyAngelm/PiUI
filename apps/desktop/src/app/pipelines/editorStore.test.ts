@@ -8,12 +8,13 @@ import { PipelineEditorStore } from './editorStore.svelte';
 import { readLastPipeline } from './lastPipeline';
 import { buildTemplate } from './templates';
 
-const { cached, refreshed, settled } = vi.hoisted(() => ({
+const { cached, refreshed, settled, native } = vi.hoisted(() => ({
+  native: vi.fn(),
   cached: vi.fn(),
   refreshed: vi.fn(),
   settled: vi.fn(),
 }));
-vi.mock('../../host-api/harnessModels', () => ({ cachedHarnessModels: cached, harnessModels: refreshed, catalogSettled: settled, catalogDegraded: () => false, forgetHarnessCatalogs: () => undefined }));
+vi.mock('../../host-api/harnessModels', () => ({ cachedHarnessModels: cached, harnessModels: refreshed, nativeHarnessModels: native, catalogSettled: settled, catalogDegraded: () => false, forgetHarnessCatalogs: () => undefined }));
 
 const memory = new Map<string, string>();
 vi.stubGlobal('localStorage', {
@@ -49,6 +50,8 @@ describe('catalog loading flags the resources that are still being discovered', 
     cached.mockReset();
     refreshed.mockReset();
     settled.mockReset();
+    native.mockReset();
+    native.mockRejectedValue(new Error('not asked'));
     memory.clear();
   });
 
@@ -172,6 +175,17 @@ describe('catalog loading flags the resources that are still being discovered', 
     expect(await editor.defaultModel('nano')).toEqual({ model: 'free', modelProvider: 'nano' });
     expect(cached).toHaveBeenCalledTimes(3);
     expect(editor.catalogs.nano).toBe(after);
+  });
+
+  it("offers the harness's own default model, not the first of a remembered copy in an older order", async () => {
+    const pi = (models: { id: string; provider: string }[]): HarnessModelsResult => ({ protocol: 18, harness: 'pi', models: models.map((model) => ({ ...model, name: model.id })), resources: { items: [], warnings: [] } });
+    cached.mockResolvedValue(pi([{ id: 'chat-latest', provider: 'openai' }, { id: 'gpt-6.2-sol', provider: 'cpamc' }]));
+    native.mockResolvedValue(pi([{ id: 'gpt-6.2-sol', provider: 'cpamc' }, { id: 'chat-latest', provider: 'openai' }]));
+    settled.mockReturnValue(true);
+    expect(await store().defaultModel('pi')).toEqual({ model: 'gpt-6.2-sol', modelProvider: 'cpamc' });
+    // Without a native answer the shown catalog still gives a model to start with.
+    native.mockRejectedValue(new Error('probe failed'));
+    expect(await store().defaultModel('pi')).toEqual({ model: 'chat-latest', modelProvider: 'openai' });
   });
 
   it('keeps the catalogs of the other harnesses when the Nano account changes', async () => {
