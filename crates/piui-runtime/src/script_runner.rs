@@ -395,10 +395,7 @@ fn plain_verbatim_text(text: &str) -> Option<String> {
         }
     };
     // A drive root (`\\?\C:\`) has no name to check.
-    let mut segments = names
-        .split('\\')
-        .filter(|_| !names.is_empty())
-        .peekable();
+    let mut segments = names.split('\\').filter(|_| !names.is_empty()).peekable();
     let mut count = 0usize;
     while let Some(segment) = segments.next() {
         // A trailing separator ends the path; an empty name elsewhere is a
@@ -449,7 +446,9 @@ fn plain_name(name: &str, check_device: bool) -> bool {
                     && chars.next().is_none()
             })
     };
-    !(DEVICES.iter().any(|device| stem.eq_ignore_ascii_case(device))
+    !(DEVICES
+        .iter()
+        .any(|device| stem.eq_ignore_ascii_case(device))
         || numbered("COM")
         || numbered("LPT"))
 }

@@ -1336,7 +1336,11 @@ impl NativeRuntimeConfig {
         {
             plain(path);
         }
-        if let Some(path) = self.fork.as_mut().and_then(|fork| fork.native_path.as_mut()) {
+        if let Some(path) = self
+            .fork
+            .as_mut()
+            .and_then(|fork| fork.native_path.as_mut())
+        {
             plain(path);
         }
         if let Some(nano) = self.nano.as_mut() {
@@ -7415,7 +7419,13 @@ mod tests {
             acp: None,
         })
         .expect("initialize");
-        for pointer in ["/cwd", "/sessionDir", "/nativePath", "/agentDir", "/fork/nativePath"] {
+        for pointer in [
+            "/cwd",
+            "/sessionDir",
+            "/nativePath",
+            "/agentDir",
+            "/fork/nativePath",
+        ] {
             let value = frame.pointer(pointer).and_then(Value::as_str);
             let value = value.unwrap_or_else(|| panic!("{pointer} is missing"));
             assert!(!verbatim(value), "{pointer}: {value}");

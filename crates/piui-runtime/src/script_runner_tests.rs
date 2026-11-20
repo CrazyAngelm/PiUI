@@ -206,8 +206,8 @@ fn captured_text_keeps_character_boundaries() {
 #[test]
 fn verbatim_project_paths_become_plain_working_directories() {
     assert_eq!(
-        process_directory(Path::new(r"\\?\C:\Users\test-user\project")),
-        PathBuf::from(r"C:\Users\test-user\project")
+        process_directory(Path::new(r"\\?\C:\Work\test-user\project")),
+        PathBuf::from(r"C:\Work\test-user\project")
     );
     assert_eq!(
         process_directory(Path::new(r"\\?\UNC\server\share\repo")),
@@ -235,10 +235,13 @@ fn other_platforms_never_change_a_path() {
 #[test]
 fn verbatim_text_becomes_plain_only_when_the_plain_spelling_is_equal() {
     for (verbatim, plain) in [
-        (r"\\?\C:\Users\x\project", r"C:\Users\x\project"),
+        (r"\\?\C:\Work\x\project", r"C:\Work\x\project"),
         (r"\\?\d:\Projects\X\", r"d:\Projects\X\"),
         (r"\\?\C:\", r"C:\"),
-        (r"\\?\C:\Users\x.y\a b\console.d", r"C:\Users\x.y\a b\console.d"),
+        (
+            r"\\?\C:\Work\x.y\a b\console.d",
+            r"C:\Work\x.y\a b\console.d",
+        ),
         (r"\\?\UNC\server\share\repo", r"\\server\share\repo"),
         (r"\\?\unc\server\share", r"\\server\share"),
         (r"\\?\UNC\server\CON\repo", r"\\server\CON\repo"),
