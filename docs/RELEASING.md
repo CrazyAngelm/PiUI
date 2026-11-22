@@ -211,6 +211,37 @@ cache). It builds `HEAD` plus uncommitted changes to tracked files; untracked
 files are left out. The `.deb`, the AppImage and an
 updated `SHA256SUMS.txt` land in `artifacts/` next to the Windows files.
 
+What keeps it fast, and what a slow Linux build means:
+
+- The slow part is the builder image (about 300 Ubuntu packages, 10-30 minutes
+  on a 1 MB/s link, and the Docker build network drops DNS now and then, so the
+  Dockerfile retries apt and the downloads). It is built once per Dockerfile
+  change and tagged with the Dockerfile hash; `build.sh` skips the build when
+  the tag exists. Docker Desktop or a clean-up can still delete an image, so
+  run once with `PIUI_LINUX_SAVE_IMAGE=1`: the image is also saved as a gzip
+  archive in `~/build/piui-linux-cache/image/` and a missing image is then
+  loaded from it (about a minute) instead of built again.
+- The cargo registry and git folders, the pnpm store and the bundler's tools
+  (`~/.cache/tauri`: linuxdeploy and its plugins, otherwise downloaded on every
+  build) live in plain folders under `~/build/piui-linux-cache` (`PIUI_LINUX_CACHE`
+  moves it), not in Docker volumes.
+- `target/` in the Linux checkout keeps the compiled dependencies. A build
+  right after a long gap, or after `Cargo.lock` changed, recompiles them.
+- Asking again for the same state is free: when the commit, the uncommitted
+  changes to tracked files, the Dockerfile and the signing configuration are the
+  ones of the last build, and the checksums of the packages in `artifacts/` still
+  match, `build.sh` prints them and exits in seconds. `PIUI_LINUX_FORCE=1` builds
+  anyway.
+- Every phase prints its duration and every container line its elapsed time,
+  so the next slow build shows where the time went. Measured on a quiet machine
+  with everything cached: about 4 minutes (frontend 30 s, cargo 170 s of which
+  `piui-desktop` and its thin LTO link are the long pole, bundles 35 s). Timings
+  swing by 30% when the machine is busy.
+- Tried and rejected: optimizing build scripts and proc macros
+  (`CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_OPT_LEVEL=3`). It rebuilds the whole
+  dependency tree once, the gain stayed inside the noise, and the executable was
+  not byte-identical to the default build's.
+
 `pnpm build:portable` is the quick local update: it skips the installer and
 replaces `artifacts/` with the new executable and its checksum. A copy that is
 still running is moved aside (`*.old`) and keeps working until it is restarted.
