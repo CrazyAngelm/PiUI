@@ -4,6 +4,17 @@ All notable changes to Nano Desktop (formerly PiUI) are documented here.
 
 Nano Desktop is currently a developer preview. Versions before 1.0 may change without a stable migration promise; changes to typed host contracts remain versioned under `contracts/`.
 
+## [0.3.11] - 2026-11-22
+
+### Changed
+
+- **One "Running" per chat.** A running chat shows its progress once, in the feed. The header badge now appears only for a failed or closed chat, and only a tab that is out of view spins.
+
+### Fixed
+
+- **Pi starts on Linux when several Node.js versions are installed.** Nano Desktop now runs Pi on the first Node.js that meets Pi's own requirement (22.19 or newer for Pi 1.5) instead of the first one it finds, so an nvm or fnm Node.js is used over an older system one. When none is new enough, Settings → Harnesses names the required and the found version.
+- **Dictation works on Linux.** The app now asks for the microphone when you press dictate; before, Linux silently refused it. The AppImage, whose built-in browser engine records no compressed audio, records WAV instead.
+
 ## [0.3.10] - 2026-11-20
 
 ### Changed
