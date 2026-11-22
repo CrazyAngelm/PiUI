@@ -13,6 +13,7 @@ Nano Desktop is currently a developer preview. Versions before 1.0 may change wi
 ### Fixed
 
 - **Pi starts on Linux when several Node.js versions are installed.** Nano Desktop now runs Pi on the first Node.js that meets Pi's own requirement (22.19 or newer for Pi 1.5) instead of the first one it finds, so an nvm or fnm Node.js is used over an older system one. When none is new enough, Settings → Harnesses names the required and the found version.
+- **Pasting a screenshot works on Linux.** The Linux window received an empty paste for a copied image, so nothing was attached; the image is now read from the clipboard and attached as on Windows.
 - **Dictation works on Linux.** The app now asks for the microphone when you press dictate; before, Linux silently refused it. The AppImage, whose built-in browser engine records no compressed audio, records WAV instead.
 
 ## [0.3.10] - 2026-11-20

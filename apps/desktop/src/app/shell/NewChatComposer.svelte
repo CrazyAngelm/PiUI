@@ -1048,7 +1048,19 @@
 
   function pasted(event: ClipboardEvent): void {
     const files = [...(event.clipboardData?.files ?? [])];
-    if (!files.length || !workspaceId) return;
+    if (!workspaceId) return;
+    if (!files.length) {
+      // Linux: a pasted screenshot arrives as an empty event; the image is on the async clipboard.
+      // Loaded on demand: the first screen's bundle stays within its budget.
+      const data = event.clipboardData;
+      if (data && !data.types.length && !remoteMode) {
+        const target = workspaceId;
+        void import('../chat/composer/clipboardImages')
+          .then(({ clipboardImages }) => clipboardImages())
+          .then((images) => (images.length ? attachments.paste(target, images, imageState) : undefined));
+      }
+      return;
+    }
     event.preventDefault();
     if (remoteMode) return;
     void attachments.paste(workspaceId, files, imageState);
