@@ -726,7 +726,7 @@ struct Answer {
     text: String,
 }
 
-/// Sends one clip. `mime` is one of `audio/webm`, `audio/ogg`, `audio/mp4`.
+/// Sends one clip. `mime` is one of `audio/webm`, `audio/ogg`, `audio/mp4`, `audio/wav`.
 ///
 /// One multipart request; a redirect is never followed; the answer and the
 /// time are capped. Nothing from the provider's answer is returned except the
@@ -819,6 +819,7 @@ fn audio_file_name(mime: &str) -> Option<&'static str> {
         "audio/webm" => Some("dictation.webm"),
         "audio/ogg" => Some("dictation.ogg"),
         "audio/mp4" => Some("dictation.mp4"),
+        "audio/wav" => Some("dictation.wav"),
         _ => None,
     }
 }
@@ -1065,7 +1066,8 @@ mod tests {
         assert_eq!(audio_file_name("audio/webm"), Some("dictation.webm"));
         assert_eq!(audio_file_name("audio/ogg"), Some("dictation.ogg"));
         assert_eq!(audio_file_name("audio/mp4"), Some("dictation.mp4"));
-        assert_eq!(audio_file_name("audio/wav"), None);
+        assert_eq!(audio_file_name("audio/wav"), Some("dictation.wav"));
+        assert_eq!(audio_file_name("audio/flac"), None);
     }
 
     #[test]
@@ -1310,7 +1312,7 @@ mod tests {
             transcribe(
                 custom_plan(closed, None, None),
                 b"AUDIO".to_vec(),
-                "audio/wav"
+                "audio/flac"
             )
             .await,
             Err(DictationError::Invalid)

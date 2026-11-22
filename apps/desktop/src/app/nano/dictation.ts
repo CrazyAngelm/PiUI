@@ -4,8 +4,8 @@
  * saved or deleted). The recording itself lives in `dictationSession.svelte.ts`.
  */
 
-/** The recording format the host sends on as is. */
-export const DICTATION_MIME_PREFERENCE: readonly string[] = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+/** The recording format the host sends on as is; WAV (Web Audio) only where MediaRecorder records none of the others. */
+export const DICTATION_MIME_PREFERENCE: readonly string[] = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/wav'];
 /** A clip never runs longer than ten minutes. */
 export const DICTATION_MAX_MS = 600_000;
 /** The clock turns to the warning colour this long before the limit. */

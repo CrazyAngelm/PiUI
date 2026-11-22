@@ -100,10 +100,10 @@ export function decodeDictationSettings(value: unknown): DictationSettingsV1 | u
   return { protocol: 1, source: source as DictationSourceV1, language, providers: decoded, maxBytes, keyEntry, safeMode };
 }
 
-/** `webm`, `ogg` or `m4a` for the container of a recording; `webm` when unknown. */
-export function recordingExtension(mimeType: string): 'webm' | 'ogg' | 'm4a' {
+/** `webm`, `ogg`, `m4a` or `wav` for the container of a recording; `webm` when unknown. */
+export function recordingExtension(mimeType: string): 'webm' | 'ogg' | 'm4a' | 'wav' {
   const essence = (mimeType.split(';')[0] ?? '').trim().toLowerCase();
-  return essence === 'audio/ogg' ? 'ogg' : essence === 'audio/mp4' ? 'm4a' : 'webm';
+  return essence === 'audio/ogg' ? 'ogg' : essence === 'audio/mp4' ? 'm4a' : essence === 'audio/wav' ? 'wav' : 'webm';
 }
 
 /** `nano-voice-YYYYMMDD-HHMM.<ext>`, in local time. */

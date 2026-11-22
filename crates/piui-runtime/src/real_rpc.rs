@@ -3017,31 +3017,40 @@ fn resolve_node_program(
         return PathBuf::from(program);
     }
 
-    #[cfg(unix)]
-    {
-        // `<prefix>/bin/node` of the prefix that holds this very package.
-        if let Some(node) = node_beside_package(cli_path) {
-            return node;
-        }
-    }
-
     let names: &[&str] = if cfg!(windows) {
         &["node.exe", "node"]
     } else {
         &["node"]
     };
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    #[cfg(unix)]
+    {
+        // `<prefix>/bin/node` of the prefix that holds this very package.
+        if let Some(node) = node_beside_package(cli_path) {
+            candidates.push(node);
+        }
+    }
     // npm's Windows shims and optional node.exe live at the global bin root,
     // while cli.js is nested below node_modules/@scope/package/dist. Search
     // only this already-resolved package's ancestors before consulting PATH.
-    for directory in cli_path.ancestors().skip(1) {
-        for name in names {
-            let candidate = directory.join(name);
-            if candidate.is_file() {
-                return candidate;
-            }
+    if let Some(node) = cli_path.ancestors().skip(1).find_map(|directory| {
+        names
+            .iter()
+            .map(|name| directory.join(name))
+            .find(|candidate| candidate.is_file())
+    }) && !candidates.contains(&node)
+    {
+        candidates.push(node);
+    }
+    for node in crate::node_runtime::nodes_on_path(path_env.as_ref()) {
+        if !candidates.contains(&node) {
+            candidates.push(node);
         }
     }
-    find_launcher_in_path(names, path_env)
+    // A package that declares `engines.node` runs on the first Node.js that
+    // satisfies it: a desktop launch often lists the distribution Node.js
+    // before the newer one nvm or fnm installed (Pi 1.5 needs 22.19+).
+    crate::node_runtime::choose(&candidates, crate::node_runtime::package_minimum(cli_path))
         .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "node.exe" } else { "node" }))
 }
 

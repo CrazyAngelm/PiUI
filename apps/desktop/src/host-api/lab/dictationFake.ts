@@ -153,7 +153,7 @@ export function dictationHandlers(state: LabState, clock: LabClock): LabHandlers
       if (state.safeMode) throw refusal('safe-mode');
       const request = args.request;
       if (!isRecord(request) || typeof request.audioBase64 !== 'string' || typeof request.mimeType !== 'string') throw refusal('invalid');
-      if (!/^audio\/(webm|ogg|mp4)\s*(;|$)/iu.test(request.mimeType)) throw refusal('invalid');
+      if (!/^audio\/(webm|ogg|mp4|wav)\s*(;|$)/iu.test(request.mimeType)) throw refusal('invalid');
       const settings = view();
       const ready = settings.providers.some((provider) => provider.id === settings.source && provider.ready);
       if (!ready) throw refusal('not-configured');

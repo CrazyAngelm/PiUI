@@ -80,7 +80,7 @@ export interface DictationAnswerV1 {
   text: string;
 }
 
-/** Audio up to 32 MiB with an `audio/webm`, `audio/ogg` or `audio/mp4` type; the file name and place are the person's choice. */
+/** Audio up to 32 MiB with an `audio/webm`, `audio/ogg`, `audio/mp4` or `audio/wav` type; the file name and place are the person's choice. */
 export interface DictationSaveRecordingRequestV1 {
   audioBase64: string;
   mimeType: string;

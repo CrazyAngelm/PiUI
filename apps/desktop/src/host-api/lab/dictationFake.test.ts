@@ -100,7 +100,7 @@ describe('dictation sources in the UI Lab', () => {
     const text = dictation.transcribe(CLIP);
     await vi.advanceTimersByTimeAsync(500);
     expect(await text).toEqual({ text: LAB_DICTATION_TEXT });
-    await expect(dictation.transcribe({ audioBase64: 'AAAA', mimeType: 'audio/wav' })).rejects.toMatchObject({ code: 'invalid' });
+    await expect(dictation.transcribe({ audioBase64: 'AAAA', mimeType: 'audio/flac' })).rejects.toMatchObject({ code: 'invalid' });
   });
 
   it('refuses a marked clip once so a retry can be tried, and has no native save dialog', async () => {

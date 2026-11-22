@@ -33,6 +33,7 @@ pub mod fake;
 pub mod git;
 pub mod nano;
 mod native_version;
+pub mod node_runtime;
 pub mod plugin_backend;
 pub mod prime_nano;
 pub mod provenance;

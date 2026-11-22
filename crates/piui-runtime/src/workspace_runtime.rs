@@ -3569,6 +3569,13 @@ fn resolve_harness_launch(kind: HarnessKind) -> Result<ResolvedHarnessLaunch, Na
                     NativeRuntimeError::HarnessUnavailable
                 });
             }
+            // Every Node.js found is older than the package's `engines.node`:
+            // Pi would exit at startup (`enableCompileCache` on Node.js 20).
+            if launch.leading_args.first().is_some_and(|entry| {
+                crate::node_runtime::shortfall(&launch.program, Path::new(entry)).is_some()
+            }) {
+                return Err(NativeRuntimeError::NodeUnavailable);
+            }
             let version = launch
                 .leading_args
                 .first()
@@ -4550,16 +4557,19 @@ fn discover_native_harness(kind: HarnessKind) -> NativeHarnessSummary {
                 version_status,
             }
         }
-        Err(NativeRuntimeError::NodeUnavailable) => NativeHarnessSummary {
-            kind,
-            name: kind.display_name().into(),
-            installed: false,
-            version: None,
-            status: HarnessAvailability::Unavailable,
-            reason: Some(NODE_UNAVAILABLE_REASON.into()),
-            location: None,
-            version_status: None,
-        },
+        Err(NativeRuntimeError::NodeUnavailable) => {
+            let too_old = node_too_old_reason(kind);
+            NativeHarnessSummary {
+                kind,
+                name: kind.display_name().into(),
+                installed: too_old.is_some(),
+                version: None,
+                status: HarnessAvailability::Unavailable,
+                reason: Some(too_old.unwrap_or_else(|| NODE_UNAVAILABLE_REASON.into())),
+                location: None,
+                version_status: None,
+            }
+        }
         Err(_) => NativeHarnessSummary {
             kind,
             name: kind.display_name().into(),
@@ -4571,6 +4581,21 @@ fn discover_native_harness(kind: HarnessKind) -> NativeHarnessSummary {
             version_status: None,
         },
     }
+}
+
+/// Pi is installed, yet every Node.js found is older than its `engines.node`.
+fn node_too_old_reason(kind: HarnessKind) -> Option<String> {
+    if !matches!(kind, HarnessKind::Pi | HarnessKind::Nano) {
+        return None;
+    }
+    let launch = resolve_pi_launch().ok()?;
+    let entry = launch.leading_args.first()?;
+    let (required, found) = crate::node_runtime::shortfall(&launch.program, Path::new(entry))?;
+    Some(format!(
+        "Pi needs Node.js {} or newer, but the Node.js it found is {}. Install a newer Node.js (nvm, fnm or your package manager) or set PIUI_PI_NODE to its full path, then choose Check again.",
+        crate::node_runtime::display(required),
+        crate::node_runtime::display(found),
+    ))
 }
 
 /// How long a native discovery result is reused.

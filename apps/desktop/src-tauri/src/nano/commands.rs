@@ -28,8 +28,9 @@ const HARD_DICTATION_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_WORKSPACE_ID_CHARS: usize = 200;
 /// Longest media type accepted from the WebView.
 const MAX_MIME_CHARS: usize = 128;
-/// Media types of a `MediaRecorder` clip the host passes on.
-const DICTATION_MIME_TYPES: [&str; 3] = ["audio/webm", "audio/ogg", "audio/mp4"];
+/// Media types of a recorded clip the host passes on: a `MediaRecorder`
+/// container, or 16-bit PCM WAV where the WebView records none (AppImage WebKit).
+const DICTATION_MIME_TYPES: [&str; 4] = ["audio/webm", "audio/ogg", "audio/mp4", "audio/wav"];
 
 /// A failed command. Serializes as `{"code": "<NanoAccountErrorCodeV1>"}`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, thiserror::Error)]
@@ -401,19 +402,20 @@ mod tests {
     }
 
     #[test]
-    fn only_webm_ogg_and_mp4_audio_is_passed_on() {
+    fn only_recorded_audio_types_are_passed_on() {
         for (given, kept) in [
             ("audio/webm", "audio/webm"),
             ("audio/webm;codecs=opus", "audio/webm"),
             ("Audio/WebM ; codecs=opus", "audio/webm"),
             ("audio/ogg;codecs=opus", "audio/ogg"),
             ("audio/mp4", "audio/mp4"),
+            ("audio/wav", "audio/wav"),
         ] {
             assert_eq!(dictation_mime(given), Some(kept), "{given}");
         }
         for refused in [
             "",
-            "audio/wav",
+            "audio/x-wav",
             "audio/mpeg",
             "video/webm",
             "text/html",

@@ -123,6 +123,7 @@ fn recording_extension(mime: &str) -> &'static str {
     match mime {
         "audio/ogg" => "ogg",
         "audio/mp4" => "m4a",
+        "audio/wav" => "wav",
         _ => "webm",
     }
 }
@@ -684,6 +685,7 @@ mod tests {
             ("audio/webm", "webm"),
             ("audio/ogg;codecs=opus", "ogg"),
             ("audio/mp4", "m4a"),
+            ("audio/wav", "wav"),
         ] {
             let checked = prepare_recording(&save_clip("AAAA", mime)).expect("recording");
             assert_eq!(checked.extension, extension, "{mime}");

@@ -14,6 +14,7 @@ import {
   type DictationErrorKind,
   type DictationNotice,
 } from './dictation';
+import { WAV_MIME, WavRecorder, assembleClip, canRecordWav } from './wavRecorder';
 import { newRecordingId, type PendingReason, type PendingRecordings } from './dictationPendingStore.svelte';
 
 /** The parts of `MediaRecorder` the session uses. */
@@ -38,12 +39,16 @@ export interface DictationEnvironment {
 
 export function browserDictationEnvironment(): DictationEnvironment {
   const recorder = typeof MediaRecorder === 'undefined' ? undefined : MediaRecorder;
+  // Where MediaRecorder records nothing usable (the AppImage's WebKitGTK), Web Audio still gives WAV.
+  const wav = canRecordWav();
   return {
-    available: canRecordAudio({ mediaDevices: typeof navigator === 'undefined' ? undefined : navigator.mediaDevices, recorder }),
-    isTypeSupported: (mime) => recorder?.isTypeSupported(mime) ?? false,
+    available: canRecordAudio({ mediaDevices: typeof navigator === 'undefined' ? undefined : navigator.mediaDevices, recorder: recorder ?? (wav ? WavRecorder : undefined) }),
+    isTypeSupported: (mime) => (mime === WAV_MIME ? wav : (recorder?.isTypeSupported(mime) ?? false)),
     requestMicrophone: () => navigator.mediaDevices.getUserMedia({ audio: true }),
     // MediaRecorder's event types are wider than the slice the session reads.
-    createRecorder: (stream, mimeType) => new MediaRecorder(stream, { mimeType, audioBitsPerSecond: DICTATION_BITS_PER_SECOND }) as unknown as RecorderLike,
+    createRecorder: (stream, mimeType) => mimeType === WAV_MIME
+      ? new WavRecorder(stream)
+      : new MediaRecorder(stream, { mimeType, audioBitsPerSecond: DICTATION_BITS_PER_SECOND }) as unknown as RecorderLike,
     now: () => Date.now(),
     setInterval: (callback, ms) => globalThis.setInterval(callback, ms),
     clearInterval: (handle) => globalThis.clearInterval(handle as Parameters<typeof globalThis.clearInterval>[0]),
@@ -260,7 +265,7 @@ export class Dictation {
     void this.options.pending.put({
       id: this.recordingId,
       scope: this.recordingScope,
-      blob: new Blob(this.chunks, { type: this.mimeType }),
+      blob: assembleClip(this.chunks, this.mimeType),
       mimeType: this.mimeType,
       durationMs: this.elapsedMs,
       createdAt: at,
@@ -291,7 +296,7 @@ export class Dictation {
     } catch {
       // Already stopped.
     }
-    const clip = new Blob(parts, { type: mimeType });
+    const clip = assembleClip(parts, mimeType);
     if (clip.size > 0) void this.keep(target, clip, durationMs, 'failed', DICTATION_ERROR_COPY[kind]);
     else void this.options.pending.remove(target.scope, target.id);
     this.fail(kind);
@@ -325,7 +330,7 @@ export class Dictation {
     const keepAsIs = this.keepOnStop;
     this.keepOnStop = false;
     this.release();
-    const clip = new Blob(parts, { type: mimeType });
+    const clip = assembleClip(parts, mimeType);
     if (keepAsIs) {
       if (clip.size > 0) void this.keep(target, clip, durationMs, 'unsent');
       else void this.options.pending.remove(target.scope, target.id);

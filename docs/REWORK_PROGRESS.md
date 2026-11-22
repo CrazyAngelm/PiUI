@@ -1085,6 +1085,26 @@ Branch `feat/workbench-1116`. Decisions: ADR-064 to ADR-071.
   source file's hash unchanged. Bridge, Rust and Lab tests are synthetic. Not
   run: the installed application, a model turn inside a branch.
 
+## 2026-11-22 — tester feedback from Ubuntu (0.3.10)
+
+- **Node.js for Pi.** A desktop launch put the distribution Node.js 20 ahead of
+  the nvm Node.js 24, and Pi 1.5.2 (`engines.node >=22.19`) exited at startup,
+  so the model list failed. The host now runs a package on the first Node.js
+  that satisfies its `engines.node` (beside the package, then the search path,
+  which already lists nvm, fnm and volta folders); the version comes from the
+  version-manager folder name or a bounded, cached `node --version`. When none
+  is new enough, Settings → Harnesses names the required and found versions
+  instead of a failed catalog load (`node_runtime.rs`).
+- **One running status.** A running chat showed "Running" three times: on its
+  tab, as a header badge and in the feed. The feed line stays; the header badge
+  now names only failed and closed chats, and only a tab out of view spins.
+- **Dictation in the AppImage.** Its bundled WebKitGTK records no format
+  `MediaRecorder` offers to the host. Where none is supported, dictation records
+  16 kHz mono PCM through Web Audio and sends `audio/wav` (the Nano server and
+  OpenAI-compatible providers accept it); the host allowlists `audio/wav`.
+- **Evidence.** Unit tests only. Not run: Ubuntu, the AppImage, a real
+  microphone or a real transcription.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

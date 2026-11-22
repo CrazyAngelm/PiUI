@@ -12,7 +12,7 @@
   import { t } from '../../features/locale/language';
   import { composerRequest } from '../../host-api/composerClient';
   import { statusLabel } from '../../features/workspace/workspaceState';
-  import { Badge, Button, EmptyState, IconButton, Menu, Skeleton, Spinner, matchesShortcut, toasts } from '../../lib/ui';
+  import { Badge, Button, EmptyState, IconButton, Menu, Skeleton, matchesShortcut, toasts } from '../../lib/ui';
   import type { ConversationMessageAction } from '../../../../../contracts/conversation-presentation-v1';
   import { readWorkspaceHistory } from '../../host-api/workspaceHistory';
   import { harnessMeta } from '../harnessMeta';
@@ -300,8 +300,9 @@
     }
   }
 
+  // A running chat shows its progress once, in the feed; the header names only states the feed does not.
   const statusTone = $derived(
-    session?.status === 'failed' ? 'danger' : running ? 'accent' : session?.status === 'closed' ? 'neutral' : undefined,
+    session?.status === 'failed' ? 'danger' : session?.status === 'closed' ? 'neutral' : undefined,
   );
 </script>
 
@@ -330,7 +331,6 @@
         {/if}
         {#if statusTone && !compact}
           <Badge tone={statusTone}>
-            {#if running}<Spinner size={10} />{/if}
             {$t(statusLabel(session.status))}
           </Badge>
         {/if}

@@ -244,7 +244,8 @@
                   <HarnessMark kind={session.harness} size={14} />
                   {#if mark}<Mark {mark} size={13} />{/if}
                   <span class="tab__title">{session.title}</span>
-                  {#if ['starting', 'running', 'stopping'].includes(session.status)}
+                  <!-- The open tab's chat shows its own progress in the feed; only a tab out of view spins. -->
+                  {#if !isSelected && ['starting', 'running', 'stopping'].includes(session.status)}
                     <Spinner size={10} />
                   {:else if kind}
                     <span class="tab__attention" role="img" aria-label={attentionLabel(kind)}></span>
