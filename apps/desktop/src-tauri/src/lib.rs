@@ -28,6 +28,7 @@ mod harness_configuration;
 mod harness_connect_api;
 mod harness_registry_api;
 mod interactive_answers;
+mod linux_media_permission;
 mod nano;
 mod navigation_guard;
 mod orchestration_api;
@@ -845,6 +846,10 @@ pub fn run() -> Result<(), tauri::Error> {
             };
             #[cfg(not(debug_assertions))]
             let app_data_dir = app.path().app_data_dir()?;
+            // Linux: WebKitGTK denies the microphone unless the host answers.
+            if let Some(main) = app.get_webview_window("main") {
+                linux_media_permission::install(&main);
+            }
             let state = HostState::open(&app_data_dir, safe_mode)
                 .map_err(Box::<dyn std::error::Error>::from)?;
             // Unix: one background run of the login shell finds the agents and
