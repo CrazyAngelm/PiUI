@@ -218,9 +218,11 @@ What keeps it fast, and what a slow Linux build means:
   Dockerfile retries apt and the downloads). It is built once per Dockerfile
   change and tagged with the Dockerfile hash; `build.sh` skips the build when
   the tag exists. Docker Desktop or a clean-up can still delete an image, so
-  run once with `PIUI_LINUX_SAVE_IMAGE=1`: the image is also saved as a gzip
-  archive in `~/build/piui-linux-cache/image/` and a missing image is then
-  loaded from it (about a minute) instead of built again.
+  run a build once with `PIUI_LINUX_SAVE_IMAGE=1` (add `PIUI_LINUX_FORCE=1`
+  when nothing changed, since the skip below comes first): the image is also
+  saved as a gzip archive of about 0.6 GB in `~/build/piui-linux-cache/image/`
+  and a missing image is then loaded from it (about a minute) instead of built
+  again. Delete the archive to get the old behaviour back.
 - The cargo registry and git folders, the pnpm store and the bundler's tools
   (`~/.cache/tauri`: linuxdeploy and its plugins, otherwise downloaded on every
   build) live in plain folders under `~/build/piui-linux-cache` (`PIUI_LINUX_CACHE`

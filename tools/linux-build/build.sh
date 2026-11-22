@@ -19,7 +19,8 @@
 #     not Docker volumes: a Docker clean-up cannot take them away.
 #   * The builder image is tagged with the hash of its Dockerfile. It is built
 #     only when it is missing, and then only from the network (10-30 minutes on a
-#     slow link). With PIUI_LINUX_SAVE_IMAGE=1 it is also saved as a gzip archive
+#     slow link). With PIUI_LINUX_SAVE_IMAGE=1 (and PIUI_LINUX_FORCE=1 when the
+#     packages are already up to date) it is also saved as a gzip archive
 #     in $PIUI_LINUX_CACHE/image/; a missing image is then loaded from it in
 #     about a minute instead of being built again.
 #   * Each phase prints its duration, and every container line its elapsed time.
