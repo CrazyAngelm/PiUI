@@ -1,6 +1,7 @@
 import { expect, test } from './fixtures';
 
 test('opens browser chrome, navigates with the keyboard and keeps separate tabs', async ({ page, lab }) => {
+  await lab.open();
   const [browser] = await Promise.all([
     page.context().waitForEvent('page'),
     lab.page.getByRole('button', { name: 'Browser', exact: true }).click(),
