@@ -244,6 +244,21 @@ What keeps it fast, and what a slow Linux build means:
   dependency tree once, the gain stayed inside the noise, and the executable was
   not byte-identical to the default build's.
 
+Updates on Linux. The app shows its update controls (Settings → About) only when
+the build carries the updater, which needs the updater key pair; without it the
+app reports updates as not configured and the controls are absent. `build.sh`
+therefore uses the pair that signs the Windows releases (`~/.tauri/piui-updater.key`
+of the Windows user, or the file named by `PIUI_UPDATER_KEY_FILE`, or the
+`PIUI_UPDATER_PUBKEY` / `TAURI_SIGNING_PRIVATE_KEY` variables). The container gets
+the key files read-only and only for the release step, not for `pnpm install`.
+The build ends with `Updates: on` (the AppImage and `.deb` then have `.sig` files)
+or `Updates: OFF`. An installation from an unsigned Linux build needs one manual
+upgrade to a signed package before it can offer updates. To publish: build Windows,
+then Linux (`build.sh` adds its files
+to `artifacts/`), then `node scripts/publish-update.mjs --publish`; the script
+uploads every `NanoDesktop_X.Y.Z_*` file and refuses a feed that would drop the
+Linux platforms the live feed already serves.
+
 `pnpm build:portable` is the quick local update: it skips the installer and
 replaces `artifacts/` with the new executable and its checksum. A copy that is
 still running is moved aside (`*.old`) and keeps working until it is restarted.

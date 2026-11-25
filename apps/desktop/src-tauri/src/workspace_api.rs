@@ -71,7 +71,7 @@ pub const WORKSPACE_EVENT_NAME: &str = "piui://workspace-event";
 /// Additive, ephemeral extension UI surface channel (workspace-extension-ui-v1).
 pub const WORKSPACE_EXTENSION_UI_EVENT: &str = "piui://workspace-extension-ui";
 pub const WORKSPACE_EXTENSION_UI_PROTOCOL: u8 = 1;
-const NATIVE_SESSION_DIRECTORY: &str = "workspace-native-v11";
+pub(crate) const NATIVE_SESSION_DIRECTORY: &str = "workspace-native-v11";
 /// Upper bound for one forwarded text delta built from already-queued deltas.
 const MAX_COALESCED_DELTA_BYTES: usize = 64 * 1024;
 /// Longest time a cached usage receipt waits for its durable registry write
@@ -1332,6 +1332,7 @@ struct WorkspaceHostInner {
     chat_files_events: Mutex<Option<chat_files::ChatFilesPublisher>>,
     /// Plugin MCP servers for ordinary chats; unset until the app is set up.
     plugin_mcp: Mutex<Option<PluginMcpProvider>>,
+    computer_use: crate::computer_use::Grants,
     /// The project board; unset until the app is set up (no board tool).
     board: Mutex<Option<Arc<dyn BoardSessionHooks>>>,
     /// Fusion pairs; unset until the app is set up (no sidekick tool).
@@ -1388,6 +1389,7 @@ impl WorkspaceHost {
                 extension_ui: Mutex::new(None),
                 chat_files_events: Mutex::new(None),
                 plugin_mcp: Mutex::new(None),
+                computer_use: crate::computer_use::Grants::default(),
                 board: Mutex::new(None),
                 fusion: Mutex::new(None),
                 session_links: Mutex::new(None),
@@ -2242,7 +2244,17 @@ impl WorkspaceHost {
         let plugin_mcp_servers = if sidekick || record.nano_connector {
             Vec::new()
         } else {
-            self.plugin_mcp_servers(&record, &cwd, managed).await
+            let mut servers = self.plugin_mcp_servers(&record, &cwd, managed).await;
+            if !managed
+                && supports_computer_use(&record)
+                && let Some(server) = self.inner.computer_use.server(&record.id)
+            {
+                if servers.len() >= piui_runtime::workspace_runtime::MAX_SESSION_MCP_SERVERS {
+                    return Err(WorkspaceError::not_supported());
+                }
+                servers.push(server);
+            }
+            servers
         };
         let board = match resume_binding(&record) {
             Ok(_) if !sidekick && !record.nano_connector => self.board_setup(&record).await,
@@ -2811,10 +2823,12 @@ impl WorkspaceHost {
             .live_runtime(session_id)?
             .ok_or_else(WorkspaceError::closed)?;
         let _admission = state.composer_gate.lock().await;
+        let revoked = self.inner.computer_use.revoke(session_id);
         runtime
             .interrupt()
             .await
-            .map_err(|_| WorkspaceError::runtime())
+            .map_err(|_| WorkspaceError::runtime())?;
+        revoked.map_err(|_| WorkspaceError::io())
     }
 
     pub(crate) fn fusion_sidekick_model(&self, session_id: &str) -> Option<WorkspaceModel> {
@@ -4099,6 +4113,62 @@ pub struct SessionTaskStopResultV1 {
     session_id: String,
 }
 
+fn supports_computer_use(record: &PersistedSession) -> bool {
+    record.harness == HarnessKind::ClaudeCode
+        && matches!(
+            record.permission_mode,
+            PermissionMode::Native | PermissionMode::FullAccess
+        )
+        && record.run_id.is_none()
+        && record.profile_id.is_none()
+        && !record.nano_connector
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerUseSettingsV1 {
+    protocol: u8,
+    available: bool,
+    enabled: bool,
+}
+
+/// Only the local main WebView can grant this ability to a specific chat.
+#[tauri::command]
+pub fn workspace_computer_use_v1(
+    state: State<'_, HostState>,
+    session_id: String,
+    enabled: Option<bool>,
+) -> Result<ComputerUseSettingsV1, WorkspaceError> {
+    let host = &state.workspace;
+    let record = host.record(&session_id)?;
+    let grants = &host.inner.computer_use;
+    let available = !state.safe_mode
+        && crate::computer_use::available()
+        && supports_computer_use(&record)
+        && (state.is_personal_workspace(&record.workspace_id)
+            || crate::api::verified_project_directory(state.inner(), &record.workspace_id, true)
+                .is_ok());
+    if let Some(enabled) = enabled {
+        if enabled {
+            if !available {
+                return Err(WorkspaceError::invalid());
+            }
+            grants
+                .enable(&session_id, &record.title, &host.inner.native_root)
+                .map_err(|_| WorkspaceError::io())?;
+        } else {
+            grants
+                .revoke(&session_id)
+                .map_err(|_| WorkspaceError::io())?;
+        }
+    }
+    Ok(ComputerUseSettingsV1 {
+        protocol: 1,
+        available,
+        enabled: grants.server(&session_id).is_some(),
+    })
+}
+
 /// Stops one task the live agent runs beside its turn (a background command or a subagent).
 /// A live trusted-session action of this window, deliberately absent from the remote allowlist.
 #[tauri::command]
@@ -4947,6 +5017,12 @@ async fn delete_session_command(
             return Err(WorkspaceError::conflict());
         }
     }
+    state
+        .workspace
+        .inner
+        .computer_use
+        .revoke(&session_id)
+        .map_err(|_| WorkspaceError::io())?;
     state.workspace.close_session(&session_id).await?;
     lock(&state.workspace.inner.registry)?
         .transact(|sessions| {

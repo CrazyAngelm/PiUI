@@ -39,29 +39,31 @@ fn grants(audio: bool, video: bool, uri: Option<&str>) -> bool {
 #[cfg(target_os = "linux")]
 pub fn install<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
     use webkit2gtk::{
-        PermissionRequestExt, UserMediaPermissionRequest, UserMediaPermissionRequestExt,
-        WebViewExt, glib::object::Cast,
+        PermissionRequestExt, SettingsExt, UserMediaPermissionRequest,
+        UserMediaPermissionRequestExt, WebViewExt, glib::object::Cast,
     };
     let _ = window.with_webview(|platform| {
-        platform
-            .inner()
-            .connect_permission_request(|view, request| {
-                let Some(media) = request.downcast_ref::<UserMediaPermissionRequest>() else {
-                    // Not ours to decide: WebKitGTK's default applies.
-                    return false;
-                };
-                let uri = view.uri();
-                if grants(
-                    media.is_for_audio_device(),
-                    media.is_for_video_device(),
-                    uri.as_deref(),
-                ) {
-                    request.allow();
-                } else {
-                    request.deny();
-                }
-                true
-            });
+        let view = platform.inner();
+        if let Some(settings) = view.settings() {
+            settings.set_enable_media_stream(true);
+        }
+        view.connect_permission_request(|view, request| {
+            let Some(media) = request.downcast_ref::<UserMediaPermissionRequest>() else {
+                // Not ours to decide: WebKitGTK's default applies.
+                return false;
+            };
+            let uri = view.uri();
+            if grants(
+                media.is_for_audio_device(),
+                media.is_for_video_device(),
+                uri.as_deref(),
+            ) {
+                request.allow();
+            } else {
+                request.deny();
+            }
+            true
+        });
     });
 }
 

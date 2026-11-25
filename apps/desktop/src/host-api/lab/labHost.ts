@@ -209,6 +209,8 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ...piHistoryHandlers(runtime, seed.nativeHistory ?? EMPTY_NATIVE_HISTORY, bus),
     ...extensionHandlers(scenario === 'empty' ? [] : demoExtensions()),
     ...backgroundHandlers(state),
+    // Lab has no OS desktop. Keep the capability unavailable there.
+    workspace_computer_use_v1: () => ({ protocol: 1, available: false, enabled: false }),
     ...interactiveAnswersHandlers(state),
     ...attentionHandlers(),
     ...acpHandlers(runtime, bus),

@@ -18,9 +18,10 @@ RUN set -e; \
     for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do \
       if apt-get $apt_opts -o APT::Update::Error-Mode=any update \
          && apt-get $apt_opts install -y --no-install-recommends \
-           build-essential ca-certificates curl file git pkg-config xz-utils \
+           build-essential ca-certificates curl file git pkg-config squashfs-tools xz-utils \
            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
-           libxdo-dev libssl-dev patchelf xdg-utils; then installed=1; break; fi; \
+           libxdo-dev libssl-dev patchelf xdg-utils \
+           gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-alsa; then installed=1; break; fi; \
       echo "apt failed (attempt $attempt), retrying in 20 s"; sleep 20; \
     done; \
     [ "${installed:-}" = 1 ]; \

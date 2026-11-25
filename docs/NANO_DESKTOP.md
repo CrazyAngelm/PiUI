@@ -393,8 +393,11 @@ on the Nano web app (`meta.links.cloud`, default `https://hermes.nanoagents.ru/`
   unchanged. The recording stays in memory while it runs. A clip that could not be
   sent (failed or empty transcription, too large, cut short) is kept in the
   WebView's own storage for at most 24 hours, one per composer, until the person
-  retries it, saves it as a file or deletes it (ADR-066). WebView2's own microphone prompt applies; whether the host can
-  answer it is unverified.
+  retries it, saves it as a file or deletes it (ADR-066). Windows uses the
+  WebView2 microphone prompt. On Linux the app grants audio capture only in its
+  own WebView. The AppImage includes GStreamer plugins for microphone capture.
+  Where MediaRecorder has no supported format, the app records WAV through
+  Web Audio.
 
 ## 11. Safe mode
 
@@ -590,3 +593,30 @@ WebView, мост и Pi их не видят.
 совместимые конвейеры. Раздел 15 описывает разрешённые шаги и операции. Сервер
 Нано пересылает содержимое открытых чатов, запрошенные данные проекта и результаты
 запусков в памяти без записи на диск.
+
+
+## Computer Use in a local chat
+
+In the actions menu of a trusted, ordinary Claude Code chat, choose **Allow
+Computer Use in this chat**. When the chat is idle, use **Stop agent process**
+in the actions menu and continue the conversation to load its per-session MCP
+server. **Turn off Computer Use** revokes access immediately. Interrupting a
+turn or closing Nano Desktop also revokes access. Safe mode, connected devices,
+managed profiles, runs and restricted chats cannot grant this capability.
+
+The tool lists app windows with consent, then requests a screenshot of one
+window. One screenshot allows at most one separately approved click, scroll,
+key or text action. The user approves the named window and exact action in a
+native dialog. Input requires that same window to be active and pointer actions
+also check which window is under the point. The helper captures windows rather
+than the whole display and uses no hosted process or global harness config.
+Approved images go to the chat and its chosen model.
+
+Windows uses Windows Graphics Capture via XCap. Linux uses the X Composite and
+XTEST extensions in an X11 session. A compositor using Wayland has a different
+capture and input permission model and this integration keeps the tool
+unavailable there.
+
+References: [XCap](https://github.com/nashaofu/xcap), [Enigo](https://github.com/enigo-rs/enigo),
+[Windows-MCP](https://github.com/CursorTouch/Windows-MCP),
+[Trope CUA](https://github.com/tropeai/trope-cua), [Cua](https://github.com/trycua/cua).

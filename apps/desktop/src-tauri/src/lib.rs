@@ -21,6 +21,11 @@ mod board_runs;
 mod board_sessions;
 mod catalog_watch;
 mod chat_link;
+mod computer_use;
+#[doc(hidden)]
+pub use computer_use::{
+    HELPER_FLAG as COMPUTER_USE_HELPER_FLAG, run_helper as run_computer_use_helper,
+};
 mod contributions;
 mod dto;
 mod fusion;
@@ -1098,6 +1103,7 @@ pub fn run() -> Result<(), tauri::Error> {
             orchestration_api::orchestration_automations_v7,
             orchestration_api::orchestration_set_automations_paused_v7,
             background::background_settings_v1,
+            workspace_api::workspace_computer_use_v1,
             background::background_update_v1,
             background::background_tray_labels_v1,
             interactive_answers::interactive_answers_settings_v1,
