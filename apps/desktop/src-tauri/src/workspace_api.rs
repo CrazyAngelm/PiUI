@@ -1332,6 +1332,7 @@ struct WorkspaceHostInner {
     chat_files_events: Mutex<Option<chat_files::ChatFilesPublisher>>,
     /// Plugin MCP servers for ordinary chats; unset until the app is set up.
     plugin_mcp: Mutex<Option<PluginMcpProvider>>,
+    computer_use: crate::computer_use::Grants,
     /// The project board; unset until the app is set up (no board tool).
     board: Mutex<Option<Arc<dyn BoardSessionHooks>>>,
     /// Fusion pairs; unset until the app is set up (no sidekick tool).
@@ -1388,6 +1389,7 @@ impl WorkspaceHost {
                 extension_ui: Mutex::new(None),
                 chat_files_events: Mutex::new(None),
                 plugin_mcp: Mutex::new(None),
+                computer_use: crate::computer_use::Grants::default(),
                 board: Mutex::new(None),
                 fusion: Mutex::new(None),
                 session_links: Mutex::new(None),
@@ -2242,7 +2244,15 @@ impl WorkspaceHost {
         let plugin_mcp_servers = if sidekick || record.nano_connector {
             Vec::new()
         } else {
-            self.plugin_mcp_servers(&record, &cwd, managed).await
+            let mut servers = self.plugin_mcp_servers(&record, &cwd, managed).await;
+            if !managed
+                && supports_computer_use(&record)
+                && let Some(server) = self.inner.computer_use.server(&record.id)
+            {
+                servers.insert(0, server);
+                servers.truncate(piui_runtime::workspace_runtime::MAX_SESSION_MCP_SERVERS);
+            }
+            servers
         };
         let board = match resume_binding(&record) {
             Ok(_) if !sidekick && !record.nano_connector => self.board_setup(&record).await,
@@ -4097,6 +4107,63 @@ pub struct SessionTaskStopRequestV1 {
 pub struct SessionTaskStopResultV1 {
     protocol: u8,
     session_id: String,
+}
+
+fn supports_computer_use(record: &PersistedSession) -> bool {
+    matches!(
+        record.harness,
+        HarnessKind::ClaudeCode | HarnessKind::Hermes
+    ) && matches!(
+        record.permission_mode,
+        PermissionMode::Native | PermissionMode::FullAccess
+    ) && record.run_id.is_none()
+        && record.profile_id.is_none()
+        && !record.nano_connector
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerUseSettingsV1 {
+    protocol: u8,
+    available: bool,
+    enabled: bool,
+}
+
+/// Only the local main WebView can grant this ability to a specific chat.
+#[tauri::command]
+pub fn workspace_computer_use_v1(
+    state: State<'_, HostState>,
+    session_id: String,
+    enabled: Option<bool>,
+) -> Result<ComputerUseSettingsV1, WorkspaceError> {
+    let host = &state.workspace;
+    let record = host.record(&session_id)?;
+    let grants = &host.inner.computer_use;
+    let available = !state.safe_mode
+        && crate::computer_use::available()
+        && supports_computer_use(&record)
+        && (state.is_personal_workspace(&record.workspace_id)
+            || crate::api::verified_project_directory(state.inner(), &record.workspace_id, true)
+                .is_ok());
+    if let Some(enabled) = enabled {
+        if enabled {
+            if !available {
+                return Err(WorkspaceError::invalid());
+            }
+            grants
+                .enable(&session_id, &record.title, &host.inner.native_root)
+                .map_err(|_| WorkspaceError::io())?;
+        } else {
+            grants
+                .revoke(&session_id)
+                .map_err(|_| WorkspaceError::io())?;
+        }
+    }
+    Ok(ComputerUseSettingsV1 {
+        protocol: 1,
+        available,
+        enabled: available && grants.server(&session_id).is_some(),
+    })
 }
 
 /// Stops one task the live agent runs beside its turn (a background command or a subagent).

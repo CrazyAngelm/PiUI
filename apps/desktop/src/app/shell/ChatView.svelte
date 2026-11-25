@@ -72,10 +72,42 @@
     /** Present when several panes are open: closes this one (the tab stays). */
     onClosePane?: () => void;
   }
+  import Monitor from '@lucide/svelte/icons/monitor';
+  import { computerUseSettings, type ComputerUseSettings } from '../../host-api/computerUseClient';
+
   let { sessionId, onDelete, active = true, onClosePane = undefined }: Props = $props();
   const store = useWorkspace();
 
   const session = $derived(store.catalog.sessions.find((item) => item.id === sessionId));
+  let computerUse = $state<ComputerUseSettings | undefined>();
+  let computerUseBusy = $state(false);
+  $effect(() => {
+    const id = sessionId;
+    computerUse = undefined;
+    if (remoteMode || store.safeMode) return;
+    let disposed = false;
+    void computerUseSettings(id).then((settings) => {
+      if (!disposed) computerUse = settings;
+    }).catch(() => undefined);
+    return () => { disposed = true; };
+  });
+
+  async function toggleComputerUse(): Promise<void> {
+    if (!computerUse?.available || computerUseBusy) return;
+    const id = sessionId;
+    const enabled = !computerUse.enabled;
+    computerUseBusy = true;
+    try {
+      const settings = await computerUseSettings(id, enabled);
+      if (sessionId === id) computerUse = settings;
+      if (settings.enabled) toasts.success($t('Computer Use will be available after the agent process restarts.'));
+    } catch {
+      toasts.error($t('Could not change Computer Use access.'));
+    } finally {
+      computerUseBusy = false;
+    }
+  }
+
   const snapshot = $derived(store.snapshots[sessionId]);
   // The selected chat reports through the store's single fields, a chat in a pane through its own.
   const loadingNow = $derived(store.loadingFor(sessionId));
@@ -379,6 +411,9 @@
             items={[
               { label: $t('Rename'), icon: Pencil, onSelect: beginRename },
               { label: $t('Mark…'), icon: SmilePlus, onSelect: () => (marking = true) },
+              ...(computerUse?.available && !isSidekick
+                ? [{ label: computerUse.enabled ? $t('Turn off Computer Use') : $t('Allow Computer Use in this chat'), icon: Monitor, disabled: computerUseBusy, onSelect: () => void toggleComputerUse() }]
+                : []),
               { label: $t('Refresh from history'), icon: RefreshCw, onSelect: () => void store.reconcileSession(session.id) },
               ...(snapshot && !session.runId && !remoteMode
                 ? [{ label: $t('Continue in another harness…'), icon: ArrowRightLeft, disabled: store.safeMode, onSelect: () => void startHandoff(store, snapshot, $t) }]

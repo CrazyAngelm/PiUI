@@ -590,3 +590,30 @@ WebView, мост и Pi их не видят.
 совместимые конвейеры. Раздел 15 описывает разрешённые шаги и операции. Сервер
 Нано пересылает содержимое открытых чатов, запрошенные данные проекта и результаты
 запусков в памяти без записи на диск.
+
+
+## Computer Use in a local chat
+
+In the actions menu of a trusted, ordinary Claude Code or Hermes chat, choose
+**Allow Computer Use in this chat**. Stop the agent process when it is idle and
+continue the conversation to load its per-session MCP server. **Turn off
+Computer Use** revokes access immediately. Access clears when Nano Desktop
+closes. Safe mode, connected devices, managed profiles, runs and restricted
+chats cannot grant this capability.
+
+The tool lists app windows with consent, then requests a screenshot of one
+window. One screenshot allows at most one separately approved click, scroll,
+key or text action. The user approves the named window and exact action in a
+native dialog. Input requires that same window to be active and pointer actions
+also check which window is under the point. The helper captures windows rather
+than the whole display and uses no hosted process or global harness config.
+Approved images go to the chat and its chosen model.
+
+Windows uses Windows Graphics Capture via XCap. Linux uses the X Composite and
+XTEST extensions in an X11 session. A compositor using Wayland has a different
+capture and input permission model and this integration keeps the tool
+unavailable there.
+
+References: [XCap](https://github.com/nashaofu/xcap), [Enigo](https://github.com/enigo-rs/enigo),
+[Windows-MCP](https://github.com/CursorTouch/Windows-MCP),
+[Trope CUA](https://github.com/tropeai/trope-cua), [Cua](https://github.com/trycua/cua).
