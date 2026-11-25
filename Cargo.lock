@@ -3834,7 +3834,6 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "enigo",
- "gtk",
  "minisign-verify",
  "notify",
  "piui-contracts",

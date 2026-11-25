@@ -4154,7 +4154,7 @@ pub fn workspace_computer_use_v1(
                 return Err(WorkspaceError::invalid());
             }
             grants
-                .enable(&session_id, &record.title, &host.inner.native_root)
+                .enable(&session_id, &host.inner.native_root)
                 .map_err(|_| WorkspaceError::io())?;
         } else {
             grants
@@ -7696,7 +7696,7 @@ Board."
     }
 
     #[tokio::test]
-    async fn only_ordinary_chats_of_harnesses_that_take_them_get_plugin_mcp_servers() {
+    async fn ordinary_chats_get_tools_allowed_by_their_harness_and_permissions() {
         let root = std::env::temp_dir().join(format!("piui-plugin-mcp-{}", uuid::Uuid::new_v4()));
         let host = super::WorkspaceHost::open(&root.join("app-data")).expect("host");
         let server = piui_runtime::workspace_runtime::SessionMcpServer {
@@ -7730,7 +7730,7 @@ Board."
             materialized: Some(false),
         };
         let cwd = root.as_path();
-        let ordinary = record(HarnessKind::ClaudeCode, None);
+        let mut ordinary = record(HarnessKind::ClaudeCode, None);
         assert_eq!(
             host.plugin_mcp_servers(&ordinary, cwd, false).await,
             vec![server.clone()]
@@ -7758,6 +7758,24 @@ Board."
                 .await
                 .is_empty()
         );
+
+        for (mode, allowed) in [
+            (PermissionMode::Native, true),
+            (PermissionMode::FullAccess, true),
+            (PermissionMode::ReadOnly, false),
+            (PermissionMode::WorkspaceWrite, false),
+        ] {
+            ordinary.permission_mode = mode;
+            assert_eq!(super::supports_computer_use(&ordinary), allowed, "{mode:?}");
+        }
+        assert!(!super::supports_computer_use(&record(
+            HarnessKind::Hermes,
+            None
+        )));
+        assert!(!super::supports_computer_use(&record(
+            HarnessKind::ClaudeCode,
+            Some("run-1")
+        )));
         let _ = fs::remove_dir_all(&root);
     }
 

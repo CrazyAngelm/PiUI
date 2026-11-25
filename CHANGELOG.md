@@ -8,7 +8,7 @@ Nano Desktop is currently a developer preview. Versions before 1.0 may change wi
 
 ### Added
 
-- **Computer Use in local Claude Code chats.** Share an app window and approve individual clicks, scrolling, text entry and keys on Windows and Linux X11. Access applies to the selected chat and can be revoked from its actions menu.
+- **Computer Use in local Claude Code chats.** Work with app windows on Windows and Linux X11. Full access lets the agent capture a window and operate it autonomously. Native permissions use Claude Code's approval settings. Enable or revoke access from the chat's actions menu.
 
 ### Fixed
 
