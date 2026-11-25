@@ -4,7 +4,7 @@
  * saved or deleted). The recording itself lives in `dictationSession.svelte.ts`.
  */
 
-/** The recording format the host sends on as is; WAV (Web Audio) only where MediaRecorder records none of the others. */
+/** Recording formats in preference order, restricted to WAV on native Linux. */
 export const DICTATION_MIME_PREFERENCE: readonly string[] = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/wav'];
 /** A clip never runs longer than ten minutes. */
 export const DICTATION_MAX_MS = 600_000;
@@ -21,7 +21,7 @@ export const DICTATION_TIMESLICE_MS = 1_000;
 /** Used when the server did not say how large a clip may be (20 MiB, as the Nano web app). */
 export const DICTATION_DEFAULT_MAX_BYTES = 20 * 1024 * 1024;
 
-export type DictationErrorKind = 'unsupported' | 'denied' | 'no-device' | 'failed' | 'too-large' | 'empty';
+export type DictationErrorKind = 'unsupported' | 'denied' | 'no-device' | 'selected-device-unavailable' | 'failed' | 'too-large' | 'empty';
 
 /** English source strings of the locale catalog: what a recording says besides an error. */
 export const DICTATION_NOTICE_COPY = {
@@ -35,6 +35,7 @@ export const DICTATION_ERROR_COPY: Readonly<Record<DictationErrorKind, string>> 
   unsupported: 'Dictation is not available in this window.',
   denied: 'Allow microphone access to dictate.',
   'no-device': 'No microphone was found.',
+  'selected-device-unavailable': 'The selected microphone is unavailable. Reconnect it or choose another in Settings → Dictation.',
   failed: 'Could not record. Try again.',
   'too-large': 'The recording was too large to send.',
   empty: 'No speech was recognized. Try again.',
@@ -69,14 +70,15 @@ function bytesPerSlice(limit: number): number {
 }
 
 /** A finished clip may be sent: it holds audio and fits the limit. */
-export function dictationClipError(size: number, maxBytes: number | undefined): DictationErrorKind | undefined {
-  if (size <= 0) return 'empty';
+export function dictationClipError(size: number, maxBytes: number | undefined): 'failed' | 'too-large' | undefined {
+  if (size <= 0) return 'failed';
   return size > dictationByteLimit(maxBytes) ? 'too-large' : undefined;
 }
 
 /** Maps what `getUserMedia` or a recorder threw to the error to show. */
 export function dictationFailure(cause: unknown): DictationErrorKind {
   const name = typeof cause === 'object' && cause !== null && 'name' in cause ? String((cause as { name: unknown }).name) : '';
+  if (name === 'DictationMicrophoneUnavailable') return 'selected-device-unavailable';
   if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'PermissionDeniedError') return 'denied';
   if (name === 'NotFoundError' || name === 'DevicesNotFoundError' || name === 'OverconstrainedError') return 'no-device';
   return 'failed';

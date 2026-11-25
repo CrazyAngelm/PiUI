@@ -31,6 +31,11 @@ describe('WAV dictation', () => {
     expect(toPcm16(new Float32Array([0.5]), 16_000)[0]).toBe(Math.trunc(0.5 * 0x7fff));
   });
 
+  it('does not make a WAV header without samples, but keeps captured silence', () => {
+    expect(assembleClip([new Blob()], WAV_MIME).size).toBe(0);
+    expect(assembleClip([new Blob([new Uint8Array(2)])], WAV_MIME).size).toBe(46);
+  });
+
   it('is the last choice, taken only when MediaRecorder records none of the others', () => {
     expect(pickDictationMime((mime) => mime === WAV_MIME)).toBe(WAV_MIME);
     expect(pickDictationMime((mime) => mime === WAV_MIME || mime === 'audio/mp4')).toBe('audio/mp4');

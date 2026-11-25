@@ -23,6 +23,12 @@ dictation button is shown whenever the chosen source can transcribe now.
   contract `contracts/dictation-v1.ts`): source, models, the custom base
   address, an optional language hint. The WebView reads a view of them with
   `keySet` and `ready` flags. They are not part of an exported system.
+- **Microphone choice is local to the app window's origin.** Recording uses the
+  default input until an individual microphone is selected. Settings opens a
+  temporary stream only when the user requests the list of microphones and closes
+  it after enumeration. It stores the browser's device ID locally. An unavailable
+  selected input stops dictation with a notice so the user can reconnect it or
+  choose another input, including the default.
 - **API keys never cross IPC.** A key is typed in the host's native masked
   dialog (the one external model providers use, ADR-051) and is stored in the
   OS credential store, service `dev.piui.desktop.dictation`, under a name that

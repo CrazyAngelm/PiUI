@@ -90,6 +90,57 @@ test('the Nano subscription stays the default when signed in, and Off hides the 
   lab.expectNoErrors();
 });
 
+test('microphone selection uses permission, keeps a disconnected choice visible, and can reset to default', async ({ lab, page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: {
+        async getUserMedia(constraints: MediaStreamConstraints) {
+          if (constraints.audio !== true) throw new Error('Expected ordinary microphone discovery permission');
+          sessionStorage.setItem('fixture-microphone-stream', 'open');
+          return { getTracks: () => [{ stop: () => sessionStorage.setItem('fixture-microphone-stream', 'closed') }] };
+        },
+        async enumerateDevices() {
+          if (sessionStorage.getItem('fixture-microphone-stream') !== 'open') throw new Error('Microphone permission not requested');
+          return [
+            { kind: 'audioinput', deviceId: 'default', label: 'Default: Built-in Audio' },
+            { kind: 'audioinput', deviceId: 'analog', label: 'Built-in Audio' },
+            { kind: 'audioinput', deviceId: 'unlabeled', label: '' },
+            ...(sessionStorage.getItem('fixture-g733-unplugged') === null
+              ? [{ kind: 'audioinput', deviceId: 'g733', label: 'Logitech G733' }]
+              : []),
+          ];
+        },
+      },
+    });
+  });
+  await lab.open();
+  await openDictation(lab);
+
+  const microphone = page.getByRole('combobox', { name: 'Microphone', exact: true });
+  const find = page.getByRole('button', { name: 'Find microphones', exact: true });
+  await expect(microphone.locator('option:checked')).toHaveText('Default microphone');
+  expect(await page.evaluate(() => sessionStorage.getItem('fixture-microphone-stream'))).toBeNull();
+
+  await find.press('Enter');
+  await expect(microphone.locator('option').filter({ hasText: 'Microphone 2' })).toHaveCount(1);
+  await microphone.selectOption({ label: 'Logitech G733' });
+  await expect(microphone).toHaveValue('g733');
+  expect(await page.evaluate(() => sessionStorage.getItem('fixture-microphone-stream'))).toBe('closed');
+
+  await openChat(lab);
+  await openDictation(lab);
+  await expect(microphone).toHaveValue('g733');
+  await page.evaluate(() => sessionStorage.setItem('fixture-g733-unplugged', '1'));
+  await find.press('Enter');
+  await expect(microphone.locator('option:checked')).toHaveText('Saved microphone (unavailable)');
+  await expect(page.getByRole('status').filter({ hasText: 'The selected microphone is unavailable.' })).toBeVisible();
+
+  await microphone.selectOption({ label: 'Default microphone' });
+  await openChat(lab);
+  await openDictation(lab);
+  await expect(microphone).toHaveValue('');
+});
+
 test('safe mode says dictation is off and offers no setup', async ({ lab, page }) => {
   await lab.open('safe');
   await openDictation(lab);
