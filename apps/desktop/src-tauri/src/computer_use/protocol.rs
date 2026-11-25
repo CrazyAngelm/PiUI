@@ -165,6 +165,9 @@ impl<B: Backend> Connection<B> {
     fn approve(&self, lease: &Path, prompt: &str) -> Result<(), &'static str> {
         self.require_lease(lease)?;
         let grant = LeaseData::load(lease).map_err(|_| "Computer Use access was turned off.")?;
+        if grant.host_pid != self.host_pid {
+            return Err("Computer Use access was turned off.");
+        }
         let prompt = format!("Chat: {}\n\n{prompt}", display_text(&grant.title));
         if !self.backend.confirm(&prompt) {
             return Err("The user declined the request.");

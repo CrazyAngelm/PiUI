@@ -93,6 +93,7 @@ pub(crate) struct Grants {
 
 #[derive(Deserialize, Serialize)]
 struct LeaseData {
+    host_pid: u32,
     title: String,
     #[cfg(target_os = "linux")]
     display: Option<String>,
@@ -103,6 +104,7 @@ struct LeaseData {
 impl LeaseData {
     fn capture(title: &str) -> Self {
         Self {
+            host_pid: std::process::id(),
             title: title.to_owned(),
             #[cfg(target_os = "linux")]
             display: std::env::var("DISPLAY").ok(),
@@ -243,8 +245,12 @@ pub fn run_helper(host_pid: u32, lease: &Path) -> io::Result<()> {
         {
             return Err(io::Error::other("Computer Use is unavailable."));
         }
+        let grant = LeaseData::load(lease)?;
+        if grant.host_pid != host_pid {
+            return Err(io::Error::other("Computer Use is unavailable."));
+        }
         #[cfg(target_os = "linux")]
-        LeaseData::load(lease)?.setup_x11();
+        grant.setup_x11();
         if !native::available() {
             return Err(io::Error::other("Computer Use is unavailable."));
         }

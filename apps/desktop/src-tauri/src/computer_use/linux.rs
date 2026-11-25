@@ -419,6 +419,7 @@ pub(super) fn confirm(prompt: &str) -> bool {
     dialog.show_all();
     cancel.grab_focus();
     let approved = dialog.run() == gtk::ResponseType::Accept;
+    dialog.hide();
     dialog.close();
     approved
 }
