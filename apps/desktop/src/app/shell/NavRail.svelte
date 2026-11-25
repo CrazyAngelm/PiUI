@@ -8,7 +8,7 @@
   import Ellipsis from '@lucide/svelte/icons/ellipsis';
   import PanelLeftOpen from '@lucide/svelte/icons/panel-left-open';
   import Globe from '@lucide/svelte/icons/globe';
-  import { t } from '../../features/locale/language';
+  import { language, t } from '../../features/locale/language';
   import { IconButton, Menu, StatusDot, toasts, type MenuEntry } from '../../lib/ui';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
   import { remoteMode, pipelineSectionAvailable } from '../nano/remoteMode';
@@ -44,7 +44,7 @@
   }
 
   function openBrowser(): void {
-    void openSiteBrowser().catch(() => toasts.error($t('Could not open the browser.')));
+    void openSiteBrowser($language).catch(() => toasts.error($t('Could not open the browser.')));
   }
 
   interface Entry {

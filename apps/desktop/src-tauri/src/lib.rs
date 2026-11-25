@@ -999,8 +999,13 @@ pub fn run() -> Result<(), tauri::Error> {
                 .map(|dirs| dirs.webview_data_dir.clone());
             #[cfg(not(debug_assertions))]
             let chrome_profile = None;
+            let browser_profile_root = if e2e_isolated {
+                Some(app_data_dir.clone())
+            } else {
+                app.path().app_local_data_dir().ok()
+            };
             app.manage(site_browser::SiteBrowser::new(
-                &app_data_dir,
+                browser_profile_root,
                 chrome_profile,
             ));
             app.manage(state);

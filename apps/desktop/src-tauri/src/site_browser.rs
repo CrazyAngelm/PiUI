@@ -28,7 +28,7 @@ const CHROME_HEIGHT: f64 = 88.0;
 const SUPPORTED: bool = cfg!(any(windows, target_os = "linux"));
 
 pub struct SiteBrowser {
-    profile: PathBuf,
+    profile: Option<PathBuf>,
     chrome_profile: Option<PathBuf>,
     next_id: AtomicU32,
     tabs: Mutex<Tabs>,
@@ -84,9 +84,12 @@ impl From<tauri::Error> for SiteBrowserError {
 }
 
 impl SiteBrowser {
-    pub(crate) fn new(app_data_dir: &Path, chrome_profile: Option<PathBuf>) -> Self {
+    pub(crate) fn new(profile_root: Option<PathBuf>, chrome_profile: Option<PathBuf>) -> Self {
         Self {
-            profile: app_data_dir.join("browser-profile"),
+            // WebView2 passes this directory to its child processes.
+            profile: profile_root.map(|root| {
+                piui_runtime::script_runner::process_directory(&root.join("browser-profile"))
+            }),
             chrome_profile,
             next_id: AtomicU32::new(1),
             tabs: Mutex::new(Tabs::default()),
@@ -154,7 +157,12 @@ fn address(input: &str, dev_url: Option<&Url>) -> Result<Url, SiteBrowserError> 
     {
         return Err(SiteBrowserError::InvalidAddress);
     }
-    let url = if input.contains("://") {
+    let has_scheme = input.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
+        })
+    });
+    let url = if has_scheme {
         Url::parse(input)
     } else {
         Url::parse(&format!("https://{input}"))
@@ -302,7 +310,16 @@ fn create_site_view<R: Runtime>(
     tab: u32,
     url: Url,
 ) -> Result<(), SiteBrowserError> {
-    std::fs::create_dir_all(profile).map_err(|_| SiteBrowserError::OperationFailed)?;
+    let mut directories = std::fs::DirBuilder::new();
+    directories.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        directories.mode(0o700);
+    }
+    directories
+        .create(profile)
+        .map_err(|_| SiteBrowserError::OperationFailed)?;
     let dev_url = window.app_handle().config().build.dev_url.clone();
     let popup_app = window.app_handle().clone();
     let download_app = popup_app.clone();
@@ -325,6 +342,9 @@ fn create_site_view<R: Runtime>(
             }
             false
         });
+    #[cfg(windows)]
+    // Wry disables SmartScreen by default. Keep it enabled on arbitrary sites.
+    let builder = builder.additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI");
     let size = window
         .inner_size()?
         .to_logical::<f64>(window.scale_factor()?);
@@ -342,6 +362,7 @@ pub async fn site_browser_open_v1<R: Runtime>(
     app: AppHandle<R>,
     host: State<'_, HostState>,
     browser: State<'_, SiteBrowser>,
+    language: String,
 ) -> Result<(), SiteBrowserError> {
     if !SUPPORTED || host.safe_mode || host.is_shutting_down() {
         return Err(SiteBrowserError::Unavailable);
@@ -354,8 +375,13 @@ pub async fn site_browser_open_v1<R: Runtime>(
     }
     *tabs = Tabs::default();
     browser.new_tab(&mut tabs);
+    let title = if language == "ru" {
+        "Нано · Браузер"
+    } else {
+        "Nano · Browser"
+    };
     let window = WindowBuilder::new(&app, WINDOW)
-        .title("Нано · Browser")
+        .title(title)
         .inner_size(1080.0, 740.0)
         .min_inner_size(460.0, 320.0)
         .visible(false)
@@ -454,7 +480,15 @@ pub async fn site_browser_action_v1<R: Runtime>(
             let url = address(&input, dev_url)?;
             match get_view(tab) {
                 Ok(view) => view.navigate(url)?,
-                Err(_) => create_site_view(&window, &browser.profile, tab, url)?,
+                Err(_) => create_site_view(
+                    &window,
+                    browser
+                        .profile
+                        .as_deref()
+                        .ok_or(SiteBrowserError::Unavailable)?,
+                    tab,
+                    url,
+                )?,
             }
         }
         SiteBrowserAction::Back { tab } => move_history(&get_view(tab)?, false)?,
@@ -510,6 +544,12 @@ mod tests {
             "https://example.org/docs"
         );
         assert!(address("http://127.0.0.1:8000/page", None).is_ok());
+        assert_eq!(
+            address("example.org/r?u=https://example.net", None)
+                .expect("address with URL in query")
+                .as_str(),
+            "https://example.org/r?u=https://example.net"
+        );
         for input in [
             "",
             "file:///C:/secret",

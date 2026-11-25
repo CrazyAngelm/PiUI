@@ -13,12 +13,12 @@ export const siteBrowserAvailable = !hostRemote
   && typeof navigator !== 'undefined'
   && (!desktopAvailable || /^(Win|Linux)/.test(navigator.platform));
 
-export function openSiteBrowser(): Promise<void> {
+export function openSiteBrowser(language: 'en' | 'ru'): Promise<void> {
   if (!desktopAvailable && !hostRemote) {
     window.open('/browser.html', '_blank', 'noopener');
     return Promise.resolve();
   }
-  return hostInvoke<void>(SITE_BROWSER_OPEN);
+  return hostInvoke<void>(SITE_BROWSER_OPEN, { language });
 }
 
 export function browserAction(request: SiteBrowserAction): Promise<SiteBrowserSnapshot> {
