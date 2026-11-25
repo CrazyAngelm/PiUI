@@ -67,6 +67,11 @@ describe('Settings → Dictation', () => {
     for (const label of ['Off', 'Nano subscription (sign in required)', 'OpenAI', 'Groq', 'Custom API']) expect(body).toContain(label);
     expect(body).not.toContain('API key');
     expect(body).not.toContain('role="alert"');
+    const microphoneLabel = body.match(/<label for="([^"]+-microphone)"[^>]*>\s*Microphone/);
+    expect(microphoneLabel?.[1]).toBeDefined();
+    expect(body).toContain(`<select id="${microphoneLabel?.[1]}"`);
+    expect(body).toContain('Default microphone');
+    expect(body).toContain('Find microphones');
     expect(html(source, signedIn)).not.toContain('(sign in required)');
     expect(html(source, signedIn)).toContain('Nano subscription');
   });

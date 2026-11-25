@@ -20,9 +20,10 @@ import {
   pickDictationMime,
 } from './dictation';
 import { PendingRecordings, type PendingRecording, type PendingStorage } from './dictationPendingStore.svelte';
-import { Dictation, type DictationEnvironment, type RecorderLike } from './dictationSession.svelte';
+import { Dictation, browserDictationEnvironment, type DictationEnvironment, type RecorderLike } from './dictationSession.svelte';
 import { retryRecording } from './dictationTransport';
 import { DictationSource, whenKeyChanges } from './dictationSource.svelte';
+import { WAV_MIME, WavRecorder } from './wavRecorder';
 
 describe('dictation guards', () => {
   it('prefers webm with opus and skips formats the recorder lacks', () => {
@@ -55,7 +56,7 @@ describe('dictation guards', () => {
   });
 
   it('refuses an empty or oversized clip', () => {
-    expect(dictationClipError(0, 100)).toBe('empty');
+    expect(dictationClipError(0, 100)).toBe('failed');
     expect(dictationClipError(101, 100)).toBe('too-large');
     expect(dictationClipError(100, 100)).toBeUndefined();
     expect(dictationClipError(5, undefined)).toBeUndefined();
@@ -65,6 +66,7 @@ describe('dictation guards', () => {
     expect(dictationFailure({ name: 'NotAllowedError' })).toBe('denied');
     expect(dictationFailure({ name: 'SecurityError' })).toBe('denied');
     expect(dictationFailure({ name: 'NotFoundError' })).toBe('no-device');
+    expect(dictationFailure({ name: 'DictationMicrophoneUnavailable' })).toBe('selected-device-unavailable');
     expect(dictationFailure(new Error('boom'))).toBe('failed');
     expect(dictationFailure(undefined)).toBe('failed');
     for (const copy of Object.values(DICTATION_ERROR_COPY)) expect(copy.length).toBeGreaterThan(10);
@@ -214,6 +216,49 @@ const settle = async (): Promise<void> => {
 };
 
 describe('dictation session', () => {
+  it('uses WAV on native Linux without probing or constructing the advertised MP4 recorder', () => {
+    const probe = vi.fn((mime: string) => mime === 'audio/mp4');
+    const constructed = vi.fn();
+    class AdvertisedRecorder {
+      static isTypeSupported = probe;
+      constructor() {
+        constructed();
+      }
+    }
+    vi.stubGlobal('MediaRecorder', AdvertisedRecorder);
+    vi.stubGlobal('AudioContext', class {});
+    const stream = {} as MediaStream;
+    try {
+      vi.stubGlobal('navigator', { platform: 'Linux x86_64', mediaDevices: { getUserMedia: vi.fn() } });
+      const linux = browserDictationEnvironment(true);
+      expect(linux.available).toBe(true);
+      expect(pickDictationMime(linux.isTypeSupported)).toBe(WAV_MIME);
+      expect(linux.createRecorder(stream, WAV_MIME)).toBeInstanceOf(WavRecorder);
+      expect(probe).not.toHaveBeenCalled();
+      expect(constructed).not.toHaveBeenCalled();
+      expect(pickDictationMime(browserDictationEnvironment(false).isTypeSupported)).toBe('audio/mp4');
+
+      for (const platform of ['Win32', 'MacIntel']) {
+        vi.stubGlobal('navigator', { platform, mediaDevices: { getUserMedia: vi.fn() } });
+        expect(pickDictationMime(browserDictationEnvironment(true).isTypeSupported)).toBe('audio/mp4');
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(['audio/mp4', WAV_MIME])('reports missing %s recording bytes as capture failure, without uploading', async (mime) => {
+    const test = rig({ supported: [mime] });
+    test.recorder.last = new Blob();
+    await test.session.start();
+    test.session.stop();
+    await settle();
+    expect(test.session.error).toBe(DICTATION_ERROR_COPY.failed);
+    expect(test.session.phase).toBe('idle');
+    expect(test.sent).toEqual([]);
+    expect(test.pending.get(SCOPE)).toBeUndefined();
+  });
+
   it('records, sends one clip and hands back the trimmed words', async () => {
     const test = rig();
     await test.session.toggle();
@@ -544,6 +589,17 @@ describe('a recording is never lost', () => {
     expect(await retryRecording(clip!, { dictate: async () => ({ text: '  ' }) }, undefined)).toMatchObject({ ok: false, reason: 'empty' });
     expect(await retryRecording(clip!, { dictate: async () => ({ text: 'x' }) }, 1)).toMatchObject({ ok: false, reason: 'too-large' });
     const sent: string[] = [];
+    const invalid = await retryRecording(
+      { blob: new Blob(), mimeType: clip!.mimeType },
+      {
+        dictate: async () => {
+          sent.push('invalid');
+          return { text: 'x' };
+        },
+      },
+      undefined,
+    );
+    expect(invalid).toMatchObject({ ok: false, reason: 'failed' });
     const retried = await retryRecording(
       clip!,
       {

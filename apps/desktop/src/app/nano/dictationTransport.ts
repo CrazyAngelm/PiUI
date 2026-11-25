@@ -53,8 +53,7 @@ export async function retryRecording(
   errorCopy: (cause: unknown) => string = dictationErrorCopy,
 ): Promise<RetryOutcome> {
   const kind = dictationClipError(recording.blob.size, maxBytes);
-  if (kind === 'too-large') return { ok: false, reason: 'too-large', error: DICTATION_ERROR_COPY[kind] };
-  if (kind !== undefined) return { ok: false, reason: 'empty', error: DICTATION_ERROR_COPY[kind] };
+  if (kind !== undefined) return { ok: false, reason: kind, error: DICTATION_ERROR_COPY[kind] };
   try {
     const audioBase64 = bytesToBase64(new Uint8Array(await recording.blob.arrayBuffer()));
     const answer = await transport.dictate({ audioBase64, mimeType: recording.mimeType });

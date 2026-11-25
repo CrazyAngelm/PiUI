@@ -5,6 +5,7 @@
   import { Button, Field, Input, Skeleton } from '../../lib/ui';
   import { DICTATION_MODEL_SUGGESTIONS, DICTATION_SOURCE_ERROR_COPY } from '../nano/dictationCopy';
   import { DictationDrafts, savedUpdate } from '../nano/dictationDrafts.svelte';
+  import { dictationMicrophoneId, loadDictationMicrophones, saveDictationMicrophoneId, type DictationMicrophone } from '../nano/dictationMicrophone';
   import { dictationSource as sharedSource, type DictationSource } from '../nano/dictationSource.svelte';
   import { nanoAccount as sharedAccount } from '../nano/nanoAccount.svelte';
 
@@ -42,6 +43,35 @@
       : undefined,
   );
 
+  let microphoneId = $state(dictationMicrophoneId() ?? '');
+  let microphones = $state.raw<DictationMicrophone[] | undefined>();
+  let microphoneBusy = $state(false);
+  let microphoneError = $state<'load' | 'save' | undefined>();
+  const missingMicrophone = $derived(microphoneId !== '' && !microphones?.some((device) => device.id === microphoneId));
+
+  async function refreshMicrophones(): Promise<void> {
+    microphoneBusy = true;
+    microphoneError = undefined;
+    try {
+      microphones = await loadDictationMicrophones();
+    } catch {
+      microphoneError = 'load';
+    } finally {
+      microphoneBusy = false;
+    }
+  }
+
+  function chooseMicrophone(event: Event & { currentTarget: HTMLSelectElement }): void {
+    const select = event.currentTarget;
+    if (saveDictationMicrophoneId(select.value)) {
+      microphoneId = select.value;
+      microphoneError = undefined;
+    } else {
+      select.value = microphoneId;
+      microphoneError = 'save';
+    }
+  }
+
   function chooseSource(event: Event & { currentTarget: HTMLSelectElement }): void {
     const select = event.currentTarget;
     const chosen = select.value as DictationSourceV1;
@@ -73,6 +103,28 @@
         <option value="groq">Groq</option>
         <option value="custom">{$t('Custom API')}</option>
       </select>
+    </Field>
+
+    <Field label={$t('Microphone')} for={`${uid}-microphone`}>
+      {#snippet action()}
+        <Button size="sm" variant="ghost" loading={microphoneBusy} onclick={() => void refreshMicrophones()}>
+          {$t(microphoneBusy ? 'Checking microphones…' : 'Find microphones')}
+        </Button>
+      {/snippet}
+      <select id={`${uid}-microphone`} class="select microphone-select" value={microphoneId} disabled={microphoneBusy} onchange={chooseMicrophone}>
+        <option value="">{$t('Default microphone')}</option>
+        {#if missingMicrophone}
+          <option value={microphoneId}>{$t(microphones === undefined ? 'Saved microphone' : 'Saved microphone (unavailable)')}</option>
+        {/if}
+        {#each microphones ?? [] as device, index (device.id)}
+          <option value={device.id}>{device.label || $t('Microphone {0}', [index + 1])}</option>
+        {/each}
+      </select>
+      {#if microphoneError}
+        <p class="detail" role="alert">{$t(microphoneError === 'load' ? 'Could not list microphones. Check microphone access and try again.' : 'Could not save the microphone selection.')}</p>
+      {:else if microphones !== undefined && missingMicrophone}
+        <p class="detail" role="status">{$t('The selected microphone is unavailable. Reconnect it or choose another in Settings → Dictation.')}</p>
+      {/if}
     </Field>
 
     {#if current}
@@ -197,6 +249,10 @@
     border-radius: var(--piui-radius-sm);
     background: var(--piui-bg);
     color: var(--piui-text);
+  }
+  .microphone-select {
+    width: 100%;
+    min-width: 0;
   }
   .select option {
     background: var(--piui-bg-raised);

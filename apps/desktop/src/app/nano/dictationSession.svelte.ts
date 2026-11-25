@@ -1,4 +1,5 @@
 import { nanoAccountError } from '../../host-api/nanoAccountClient';
+import { desktopAvailable, hostRemote } from '../../host-api/transport';
 import {
   DICTATION_BITS_PER_SECOND,
   DICTATION_CHECKPOINT_MS,
@@ -14,6 +15,7 @@ import {
   type DictationErrorKind,
   type DictationNotice,
 } from './dictation';
+import { requestDictationMicrophone } from './dictationMicrophone';
 import { WAV_MIME, WavRecorder, assembleClip, canRecordWav } from './wavRecorder';
 import { newRecordingId, type PendingReason, type PendingRecordings } from './dictationPendingStore.svelte';
 
@@ -37,14 +39,16 @@ export interface DictationEnvironment {
   clearInterval(handle: unknown): void;
 }
 
-export function browserDictationEnvironment(): DictationEnvironment {
-  const recorder = typeof MediaRecorder === 'undefined' ? undefined : MediaRecorder;
-  // Where MediaRecorder records nothing usable (the AppImage's WebKitGTK), Web Audio still gives WAV.
+export function browserDictationEnvironment(native = desktopAvailable && !hostRemote): DictationEnvironment {
+  const browser = typeof navigator === 'undefined' ? undefined : navigator;
+  // WebKitGTK can advertise MP4 but produce no audio. Native Linux records through Web Audio.
+  const nativeLinux = native && /^Linux\b/.test(browser?.platform ?? '');
+  const recorder = nativeLinux || typeof MediaRecorder === 'undefined' ? undefined : MediaRecorder;
   const wav = canRecordWav();
   return {
-    available: canRecordAudio({ mediaDevices: typeof navigator === 'undefined' ? undefined : navigator.mediaDevices, recorder: recorder ?? (wav ? WavRecorder : undefined) }),
+    available: canRecordAudio({ mediaDevices: browser?.mediaDevices, recorder: recorder ?? (wav ? WavRecorder : undefined) }),
     isTypeSupported: (mime) => (mime === WAV_MIME ? wav : (recorder?.isTypeSupported(mime) ?? false)),
-    requestMicrophone: () => navigator.mediaDevices.getUserMedia({ audio: true }),
+    requestMicrophone: requestDictationMicrophone,
     // MediaRecorder's event types are wider than the slice the session reads.
     createRecorder: (stream, mimeType) => mimeType === WAV_MIME
       ? new WavRecorder(stream)
