@@ -12,14 +12,15 @@ use windows_sys::Win32::{
     },
     UI::{
         HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
-        Input::KeyboardAndMouse::{GetAsyncKeyState, GetFocus},
+        Input::KeyboardAndMouse::{GetAsyncKeyState, GetFocus, VK_RETURN},
         WindowsAndMessaging::{
             BN_CLICKED, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, DS_CENTER, DS_MODALFRAME, DS_SETFONT,
-            DialogBoxIndirectParamW, ES_MULTILINE, ES_READONLY, ES_WANTRETURN, EndDialog, GA_ROOT,
-            GetAncestor, GetCursorPos, GetDlgItem, GetDlgItemTextW, GetForegroundWindow,
-            GetWindowThreadProcessId, IDCANCEL, IDOK, SetCursorPos, SetDlgItemTextW, WM_CLOSE,
-            WM_COMMAND, WM_INITDIALOG, WS_CAPTION, WS_CHILD, WS_EX_CLIENTEDGE, WS_POPUP,
-            WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL, WindowFromPoint,
+            DS_SETFOREGROUND, DialogBoxIndirectParamW, ES_MULTILINE, ES_READONLY, ES_WANTRETURN,
+            EndDialog, GA_ROOT, GetAncestor, GetCursorPos, GetDlgItem, GetDlgItemTextW,
+            GetForegroundWindow, GetWindowThreadProcessId, IDCANCEL, IDOK, KillTimer, SetCursorPos,
+            SetDlgItemTextW, SetTimer, USER_TIMER_MINIMUM, WM_CLOSE, WM_COMMAND, WM_INITDIALOG,
+            WM_TIMER, WS_CAPTION, WS_CHILD, WS_EX_CLIENTEDGE, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
+            WS_VISIBLE, WS_VSCROLL, WindowFromPoint,
         },
     },
 };
@@ -38,6 +39,7 @@ pub(super) fn available() -> bool {
 }
 
 const PROMPT_ID: i32 = 100;
+const APPROVAL_KEY_RELEASE: usize = 1;
 const APPROVAL_TITLE: &str = "Nano Desktop · Computer Use";
 
 fn dialog_words(words: &mut Vec<u16>, text: &str) {
@@ -71,8 +73,10 @@ fn dialog_control(
 }
 
 fn approval_dialog() -> Vec<u32> {
-    let style =
-        WS_POPUP | WS_CAPTION | WS_SYSMENU | (DS_CENTER | DS_MODALFRAME | DS_SETFONT) as u32;
+    let style = WS_POPUP
+        | WS_CAPTION
+        | WS_SYSMENU
+        | (DS_CENTER | DS_MODALFRAME | DS_SETFONT | DS_SETFOREGROUND) as u32;
     let mut words = vec![
         style as u16,
         (style >> 16) as u16,
@@ -169,10 +173,31 @@ unsafe extern "system" fn approval_proc(
                 && lparam == button as LPARAM
                 && unsafe { GetFocus() } == button
             {
-                unsafe { EndDialog(dialog, 1) };
+                if unsafe { GetAsyncKeyState(i32::from(VK_RETURN)) } < 0 {
+                    // Dialog accelerators fire on key-down. Keep consent in
+                    // this window until Enter is released, so it never
+                    // repeats into the target window after approval.
+                    if unsafe { SetTimer(dialog, APPROVAL_KEY_RELEASE, USER_TIMER_MINIMUM, None) }
+                        == 0
+                    {
+                        unsafe { EndDialog(dialog, 0) };
+                    }
+                } else {
+                    unsafe { EndDialog(dialog, 1) };
+                }
                 return 1;
             }
             0
+        }
+        WM_TIMER if wparam == APPROVAL_KEY_RELEASE => {
+            if unsafe { GetAsyncKeyState(i32::from(VK_RETURN)) } >= 0 {
+                unsafe { KillTimer(dialog, APPROVAL_KEY_RELEASE) };
+                let approve = unsafe { GetDlgItem(dialog, IDOK) };
+                if !approve.is_null() && unsafe { GetFocus() } == approve {
+                    unsafe { EndDialog(dialog, 1) };
+                }
+            }
+            1
         }
         WM_CLOSE => {
             unsafe { EndDialog(dialog, 0) };

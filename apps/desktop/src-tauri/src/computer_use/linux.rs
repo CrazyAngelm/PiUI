@@ -421,6 +421,12 @@ pub(super) fn confirm(prompt: &str) -> bool {
     let approved = dialog.run() == gtk::ResponseType::Accept;
     dialog.hide();
     dialog.close();
+    while gtk::events_pending() {
+        gtk::main_iteration_do(false);
+    }
+    if let Some(display) = gtk::gdk::Display::default() {
+        display.sync();
+    }
     approved
 }
 

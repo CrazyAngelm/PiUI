@@ -83,8 +83,9 @@
   let computerUseBusy = $state(false);
   $effect(() => {
     const id = sessionId;
+    const status = session?.status;
     computerUse = undefined;
-    if (remoteMode || store.safeMode) return;
+    if (status === undefined || remoteMode || store.safeMode) return;
     let disposed = false;
     void computerUseSettings(id).then((settings) => {
       if (!disposed) computerUse = settings;
