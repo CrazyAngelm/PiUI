@@ -4,6 +4,17 @@ All notable changes to Nano Desktop (formerly PiUI) are documented here.
 
 Nano Desktop is currently a developer preview. Versions before 1.0 may change without a stable migration promise; changes to typed host contracts remain versioned under `contracts/`.
 
+## [0.3.12] - 2026-11-25
+
+### Added
+
+- **Computer Use in local Claude Code and Hermes chats.** Share an app window and approve individual clicks, scrolling, text entry and keys on Windows and Linux X11. Access applies to the selected chat and can be revoked from its actions menu.
+
+### Fixed
+
+- **Microphone support in the Linux AppImage.** The package now includes the media plug-ins WebKit uses to capture sound.
+- **Signed updates from local Linux builds.** The release builder provides the updater keys to the signing stage and checks both Linux packages have update signatures.
+
 ## [0.3.11] - 2026-11-22
 
 ### Changed
