@@ -71,7 +71,7 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           components: rustfmt, clippy
 
@@ -164,7 +164,7 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: dtolnay/rust-toolchain@1.120.0
 
       - name: Install the Tauri system packages
         run: |
@@ -209,7 +209,7 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
