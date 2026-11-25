@@ -393,8 +393,11 @@ on the Nano web app (`meta.links.cloud`, default `https://hermes.nanoagents.ru/`
   unchanged. The recording stays in memory while it runs. A clip that could not be
   sent (failed or empty transcription, too large, cut short) is kept in the
   WebView's own storage for at most 24 hours, one per composer, until the person
-  retries it, saves it as a file or deletes it (ADR-066). WebView2's own microphone prompt applies; whether the host can
-  answer it is unverified.
+  retries it, saves it as a file or deletes it (ADR-066). Windows uses the
+  WebView2 microphone prompt. On Linux the app grants audio capture only in its
+  own WebView. The AppImage includes GStreamer plugins for microphone capture.
+  Where MediaRecorder has no supported format, the app records WAV through
+  Web Audio.
 
 ## 11. Safe mode
 

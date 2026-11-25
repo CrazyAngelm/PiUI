@@ -24,6 +24,11 @@
 #     in $PIUI_LINUX_CACHE/image/; a missing image is then loaded from it in
 #     about a minute instead of being built again.
 #   * Each phase prints its duration, and every container line its elapsed time.
+#
+# Updates: the packages carry the updater (and the AppImage a signature) only when the
+# updater key pair is available, by default the one that signs the Windows releases
+# (~/.tauri/piui-updater.key on the Windows side). Then the app's About page shows the
+# update controls. The build says "Updates: on" or "Updates: OFF" when it ends.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
@@ -46,6 +51,33 @@ esac
 out="$REPO/artifacts"
 STATE_FILE="$CACHE/last-build.state"
 
+# The updater key pair (scripts/release-config.mjs). Without it the build has no
+# updater section: the app reports "updates not configured" and its About page shows
+# no update controls. Variables in the environment win; otherwise the pair that signs
+# the Windows releases is used: PIUI_UPDATER_KEY_FILE (a WSL path), else
+# ~/.tauri/piui-updater.key of the Windows user. The container gets the pair read-only
+# and only for the release step, never for `pnpm install`, whose dependency scripts
+# also run in a container. The key's contents are never printed.
+UPDATER_KEY_FILE=""
+find_updater_key() {
+  [ -z "${PIUI_UPDATER_PUBKEY:-}${TAURI_SIGNING_PRIVATE_KEY:-}" ] || return 0
+  local file="${PIUI_UPDATER_KEY_FILE:-}" home=""
+  if [ -z "$file" ]; then
+    home="$(wslpath -u "$(cmd.exe /c 'echo %USERPROFILE%' 2> /dev/null | tr -d '\r')" 2> /dev/null || true)"
+    if [ -n "$home" ]; then file="$home/.tauri/piui-updater.key"; fi
+  fi
+  if [ -n "$file" ] && [ -f "$file" ] && [ -f "$file.pub" ]; then
+    UPDATER_KEY_FILE="$file"
+  elif [ -n "${PIUI_UPDATER_KEY_FILE:-}" ]; then
+    echo "PIUI_UPDATER_KEY_FILE must name a private key with a matching .pub file." >&2
+    exit 1
+  fi
+}
+find_updater_key
+# Only the public half identifies the pair in the build state.
+KEY_ID=""
+if [ -n "$UPDATER_KEY_FILE" ]; then KEY_ID="$(sha256sum < "$UPDATER_KEY_FILE.pub" | cut -c1-8)"; fi
+
 # What the packages are made from: the commit, the uncommitted changes to tracked
 # files, the builder's Dockerfile and whether release signing is configured (its
 # values stay out of the hash). A secret never reaches the state file.
@@ -54,7 +86,7 @@ build_state() {
     "$(git -C "$REPO" rev-parse HEAD)" \
     "$(git -C "$REPO" diff --binary HEAD | sha256sum | cut -c1-16)" \
     "$DOCKERFILE_HASH" \
-    "$(printf '%s|%s|%s' "${PIUI_UPDATER_PUBKEY:-}" "${PIUI_UPDATER_ENDPOINT:-}" "${TAURI_SIGNING_PRIVATE_KEY:+signing}" | sha256sum | cut -c1-8)"
+    "$(printf '%s|%s|%s|%s' "${PIUI_UPDATER_PUBKEY:-}" "${PIUI_UPDATER_ENDPOINT:-}" "${TAURI_SIGNING_PRIVATE_KEY:+signing}" "$KEY_ID" | sha256sum | cut -c1-8)"
 }
 STATE="$(build_state)"
 
@@ -134,32 +166,61 @@ docker image ls --format '{{.Repository}}:{{.Tag}}' piui-linux-builder 2> /dev/n
   | grep -vxF "$IMAGE" | xargs -r docker rmi > /dev/null 2>&1 || true
 phase "builder image"
 
-# Release signing variables pass through when set; otherwise the unsigned build.
-env_args=()
-for name in PIUI_UPDATER_PUBKEY PIUI_UPDATER_ENDPOINT TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
-            CARGO_BUILD_JOBS; do
-  [ -n "${!name:-}" ] && env_args+=(-e "$name")
+# Release signing variables pass through when set; without them (and without the
+# Windows key pair, see find_updater_key) it is the plain build with no updater.
+build_env_args=()
+if [ -n "${CARGO_BUILD_JOBS:-}" ]; then build_env_args=(-e CARGO_BUILD_JOBS); fi
+release_env_args=()
+for name in PIUI_UPDATER_PUBKEY PIUI_UPDATER_ENDPOINT TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
+  [ -n "${!name:-}" ] && release_env_args+=(-e "$name")
 done
 
 mkdir -p "$CACHE/cargo-registry" "$CACHE/cargo-git" "$CACHE/pnpm-store" "$CACHE/tauri"
 
-# The two [time] lines come from inside the container; every line also carries
-# the seconds since the container started, which show where a build spends time.
+# Runs a script in the builder container; extra arguments go to `docker run`. The
+# [time] lines come from inside the script; every line also carries the seconds since
+# the build started, which show where a build spends time.
 RUN_START=$SECONDS
-docker run --rm "${env_args[@]}" \
-  -v "$CHECKOUT:/src" \
-  -v "$CACHE/cargo-registry:/home/builder/.cargo/registry" \
-  -v "$CACHE/cargo-git:/home/builder/.cargo/git" \
-  -v "$CACHE/pnpm-store:/home/builder/.pnpm-store" \
-  -v "$CACHE/tauri:/home/builder/.cache/tauri" \
-  "$IMAGE" bash -c '
-    set -euo pipefail
-    t=$SECONDS; pnpm install --frozen-lockfile
-    echo "[time] pnpm install: $((SECONDS - t))s"
-    t=$SECONDS; pnpm release:linux
-    echo "[time] release:linux (frontend, cargo, bundles, checksums, cache prune): $((SECONDS - t))s"
-  ' 2>&1 | while IFS= read -r line; do printf '[%4ds] %s\n' $((SECONDS - RUN_START)) "$line"; done
+RUN_LOG="$(mktemp)"
+trap 'rm -f "$RUN_LOG"' EXIT
+run_in_container() {
+  local script="$1"
+  shift
+  docker run --rm "${build_env_args[@]}" "$@" \
+    -v "$CHECKOUT:/src" \
+    -v "$CACHE/cargo-registry:/home/builder/.cargo/registry" \
+    -v "$CACHE/cargo-git:/home/builder/.cargo/git" \
+    -v "$CACHE/pnpm-store:/home/builder/.pnpm-store" \
+    -v "$CACHE/tauri:/home/builder/.cache/tauri" \
+    "$IMAGE" bash -c "$script" 2>&1 \
+    | while IFS= read -r line; do printf '[%4ds] %s\n' $((SECONDS - RUN_START)) "$line"; done \
+    | tee -a "$RUN_LOG"
+}
+
+run_in_container 'set -euo pipefail; t=$SECONDS; pnpm install --frozen-lockfile; echo "[time] pnpm install: $((SECONDS - t))s"'
+
+key_mounts=()
+if [ -n "$UPDATER_KEY_FILE" ]; then
+  echo "Updater key pair: $UPDATER_KEY_FILE (read-only, for the release step only)"
+  key_mounts=(-v "$UPDATER_KEY_FILE:/home/builder/.tauri/piui-updater.key:ro" -v "$UPDATER_KEY_FILE.pub:/home/builder/.tauri/piui-updater.key.pub:ro")
+fi
+run_in_container 'set -euo pipefail; t=$SECONDS; pnpm release:linux; echo "[time] release:linux (frontend, cargo, bundles, checksums, cache prune): $((SECONDS - t))s"' "${release_env_args[@]}" "${key_mounts[@]}"
 phase "container build"
+
+# Updates on means the build carries plugins.updater (public key + feed) and signed
+# update artifacts; the app then shows its update controls.
+if [ -n "$UPDATER_KEY_FILE${PIUI_UPDATER_PUBKEY:-}${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+  if ! grep -q '\] Updates: on' "$RUN_LOG" \
+     || ! compgen -G "$CHECKOUT/artifacts/*_amd64.AppImage.sig" > /dev/null \
+     || ! compgen -G "$CHECKOUT/artifacts/*_amd64.deb.sig" > /dev/null; then
+    echo "Updater signing was requested, but both Linux packages were not signed." >&2
+    exit 1
+  fi
+  echo "Updates: on (AppImage and .deb signed)."
+else
+  echo "Updates: OFF. No updater key pair was found, so these packages show no update controls." >&2
+  echo "  The Windows pair is ~/.tauri/piui-updater.key; PIUI_UPDATER_KEY_FILE names another file." >&2
+fi
 
 mkdir -p "$out"
 [ -L "$out" ] && { echo "$out is a link; refusing to write into it." >&2; exit 1; }
