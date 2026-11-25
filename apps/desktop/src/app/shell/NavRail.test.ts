@@ -33,7 +33,7 @@ describe('NavRail', () => {
   it('is its own landmark with the entries in tab order', () => {
     const body = html({ name: 'home' });
     expect(bare(body).match(/<nav\b[^>]*aria-label="Main navigation"/g)).toHaveLength(1);
-    expect(buttons(body).map(label)).toEqual(['New chat', 'Search', 'Inbox', 'Pipelines', 'Runs', 'Automations', 'More']);
+    expect(buttons(body).map(label)).toEqual(['New chat', 'Search', 'Inbox', 'Pipelines', 'Runs', 'Automations', 'Browser', 'More']);
   });
 
   it('shows icons only, without captions', () => {

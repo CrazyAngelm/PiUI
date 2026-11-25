@@ -52,11 +52,19 @@ function labPluginFrames(): Plugin {
   };
 }
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [svelte(), labPluginFrames()],
   clearScreen: false,
-  // Records the initial import graph separately from lazy workspace/history chunks.
-  build: { manifest: true, minify: 'terser' },
+  // Compile browser chrome separately so Rollup cannot split the main startup
+  // bundle around code the workbench never needs to load.
+  build: {
+    manifest: mode !== 'site-browser',
+    emptyOutDir: mode !== 'site-browser',
+    minify: 'terser',
+    ...(mode === 'site-browser' && {
+      rollupOptions: { input: fileURLToPath(new URL('./browser.html', import.meta.url)) },
+    }),
+  },
   server: {
     host: host ?? '127.0.0.1',
     port: 1420,
@@ -76,4 +84,4 @@ export default defineConfig({
     // Playwright specs (e2e/) run with `pnpm test:lab`, never under Vitest.
     exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],
   },
-});
+}));

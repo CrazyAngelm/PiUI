@@ -34,6 +34,15 @@ pub struct ChatOpenLinkRequestV1 {
     language: Option<String>,
 }
 
+impl ChatOpenLinkRequestV1 {
+    pub(crate) fn for_browser(url: Url, language: String) -> Self {
+        Self {
+            url: url.into(),
+            language: Some(language),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatOpenLinkResultV1 {
@@ -151,19 +160,24 @@ where
     Ok(ChatOpenLinkResultV1 { opened: true })
 }
 
-async fn native_confirm<R: Runtime>(app: &AppHandle<R>, wording: Wording, text: String) -> bool {
+async fn native_confirm<R: Runtime>(
+    app: &AppHandle<R>,
+    parent: &'static str,
+    wording: Wording,
+    text: String,
+) -> bool {
     let dialog = rfd::AsyncMessageDialog::new()
         .set_level(rfd::MessageLevel::Info)
         .set_title(wording.title())
         .set_description(text)
         .set_buttons(rfd::MessageButtons::YesNo);
     #[cfg(windows)]
-    let dialog = match tauri::Manager::get_webview_window(app, MAIN_WINDOW) {
+    let dialog = match tauri::Manager::get_window(app, parent) {
         Some(window) => dialog.set_parent(&window),
         None => dialog,
     };
     #[cfg(not(windows))]
-    let _ = (app, MAIN_WINDOW);
+    let _ = (app, parent);
     matches!(dialog.show().await, rfd::MessageDialogResult::Yes)
 }
 
@@ -175,13 +189,22 @@ pub async fn chat_open_link_v1<R: Runtime>(
     state: State<'_, HostState>,
     request: ChatOpenLinkRequestV1,
 ) -> Result<ChatOpenLinkResultV1, ChatLinkError> {
+    open_confirmed(app, MAIN_WINDOW, state.safe_mode, request).await
+}
+
+pub(crate) async fn open_confirmed<R: Runtime>(
+    app: AppHandle<R>,
+    parent: &'static str,
+    safe_mode: bool,
+    request: ChatOpenLinkRequestV1,
+) -> Result<ChatOpenLinkResultV1, ChatLinkError> {
     open_after_confirmation(
-        state.safe_mode,
+        safe_mode,
         &DIALOG_OPEN,
         request,
         |wording, text| {
             let app = app.clone();
-            async move { native_confirm(&app, wording, text).await }
+            async move { native_confirm(&app, parent, wording, text).await }
         },
         // The launcher's exit status is read on the blocking pool, not on a
         // runtime worker or the UI thread.

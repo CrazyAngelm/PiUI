@@ -7,10 +7,13 @@
   import Clock from '@lucide/svelte/icons/clock-3';
   import Ellipsis from '@lucide/svelte/icons/ellipsis';
   import PanelLeftOpen from '@lucide/svelte/icons/panel-left-open';
-  import { t } from '../../features/locale/language';
-  import { IconButton, Menu, StatusDot, type MenuEntry } from '../../lib/ui';
+  import Globe from '@lucide/svelte/icons/globe';
+  import { language, t } from '../../features/locale/language';
+  import { IconButton, Menu, StatusDot, toasts, type MenuEntry } from '../../lib/ui';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
   import { remoteMode, pipelineSectionAvailable } from '../nano/remoteMode';
+  import { desktopAvailable, hostInvoke, hostRemote } from '../../host-api/transport';
+  import { SITE_BROWSER_OPEN } from '../../../../../contracts/site-browser-v1';
   import { useWorkspace } from './context';
   import { railCurrent, type RailItem } from './navRail';
 
@@ -23,6 +26,8 @@
   }
   let { onSearch, onNavigate = () => {}, sidebarHidden = false, onShowSidebar = undefined }: Props = $props();
   const store = useWorkspace();
+  const siteBrowserAvailable = !hostRemote && typeof navigator !== 'undefined'
+    && (!desktopAvailable || /^(Win|Linux)/.test(navigator.platform));
 
   // The optional Nano account: read once after first paint, never before.
   $effect(() => nanoAccount.startLater());
@@ -39,6 +44,15 @@
   function go(action: () => void): void {
     action();
     onNavigate();
+  }
+
+  function openBrowser(): void {
+    if (!desktopAvailable) {
+      window.open('/browser.html', '_blank', 'noopener');
+      return;
+    }
+    void hostInvoke<void>(SITE_BROWSER_OPEN, { language: $language })
+      .catch(() => toasts.error($t('Could not open the browser.')));
   }
 
   interface Entry {
@@ -115,6 +129,11 @@
       {/if}
     </span>
   {/each}
+  {#if siteBrowserAvailable && !store.safeMode}
+    <span class="rail__cell">
+      <IconButton size="lg" label={$t('Browser')} tooltipSide="right" onclick={openBrowser}><Globe /></IconButton>
+    </span>
+  {/if}
   {#if more.length}
     <Menu side="right" align="end" items={more}>
       {#snippet trigger(props)}

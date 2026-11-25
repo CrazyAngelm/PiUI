@@ -14,6 +14,8 @@ test.describe('keyboard-only operation', () => {
     await expect(page.getByRole('region', { name: 'Automations' })).toBeVisible();
 
     await page.keyboard.press('Tab');
+    await expect(lab.rail.getByRole('button', { name: 'Browser', exact: true })).toBeFocused();
+    await page.keyboard.press('Tab');
     await expect(lab.rail.getByRole('button', { name: 'More', exact: true })).toBeFocused();
     await page.keyboard.press('Tab');
     await expect(lab.sidebar.getByRole('button', { name: 'Add project' })).toBeFocused();

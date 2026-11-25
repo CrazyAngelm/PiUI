@@ -41,6 +41,7 @@ mod orchestration_run_debugging;
 mod orchestration_schedule;
 mod orchestration_scheduler;
 mod orchestration_script_test;
+mod site_browser;
 #[cfg(all(windows, debug_assertions, feature = "native-remote-workbench-test"))]
 pub use nano::remote_native_proof::run_native_remote_workbench_proof;
 #[cfg(feature = "native-prime-scheduler-test")]
@@ -427,7 +428,14 @@ fn guarded_commands<R: tauri::Runtime>(
     move |invoke| {
         let webview = invoke.message.webview_ref();
         let url = webview.url().ok();
-        if navigation_guard::refuses_command_source(webview.label(), url.as_ref()) {
+        if navigation_guard::refuses_command_source(webview.label(), url.as_ref())
+            && !site_browser::allows_chrome_command(
+                webview.label(),
+                url.as_ref(),
+                invoke.message.command(),
+                webview.app_handle().config().build.dev_url.as_ref(),
+            )
+        {
             if navigation_guard::refuses_invoke(url.as_ref()) {
                 eprintln!("event=plugin_origin_invoke_refused");
             } else {
@@ -985,6 +993,21 @@ pub fn run() -> Result<(), tauri::Error> {
                 safe_mode,
             );
             state.workspace.set_nano_host(nano_host);
+            #[cfg(debug_assertions)]
+            let chrome_profile = e2e_directories
+                .as_ref()
+                .map(|dirs| dirs.webview_data_dir.clone());
+            #[cfg(not(debug_assertions))]
+            let chrome_profile = None;
+            let browser_profile_root = if e2e_isolated {
+                Some(app_data_dir.clone())
+            } else {
+                app.path().app_local_data_dir().ok()
+            };
+            app.manage(site_browser::SiteBrowser::new(
+                browser_profile_root,
+                chrome_profile,
+            ));
             app.manage(state);
             let trigger_engine = orchestration_triggers::TriggerEngine::default();
             app.manage(trigger_engine.clone());
@@ -1057,6 +1080,8 @@ pub fn run() -> Result<(), tauri::Error> {
             workspace_api::composer_inputs::workspace_composer_inputs_v1,
             workspace_api::chat_files::workspace_chat_files_v1,
             chat_link::chat_open_link_v1,
+            site_browser::site_browser_open_v1,
+            site_browser::site_browser_action_v1,
             plugins::api::plugins_v1,
             plugins::api::plugin_command_v1,
             plugins::api::plugin_template_v1,

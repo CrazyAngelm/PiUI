@@ -42,6 +42,7 @@ async function main() {
   if (!process.argv.includes('--no-build')) {
     const { build } = await import('vite');
     await build({ root: desktopRoot, logLevel: 'warn' });
+    await build({ root: desktopRoot, mode: 'site-browser', logLevel: 'warn' });
   }
   const server = createServer(async (request, response) => {
     if (request.method !== 'GET' && request.method !== 'HEAD') {
