@@ -205,6 +205,7 @@ if [ -n "$UPDATER_KEY_FILE" ]; then
   key_mounts=(-v "$UPDATER_KEY_FILE:/home/builder/.tauri/piui-updater.key:ro" -v "$UPDATER_KEY_FILE.pub:/home/builder/.tauri/piui-updater.key.pub:ro")
 fi
 run_in_container 'set -euo pipefail; t=$SECONDS; pnpm release:linux; echo "[time] release:linux (frontend, cargo, bundles, checksums, cache prune): $((SECONDS - t))s"' "${release_env_args[@]}" "${key_mounts[@]}"
+run_in_container 'bash tools/linux-build/verify-appimage-media.sh artifacts/*_amd64.AppImage'
 phase "container build"
 
 # Updates on means the build carries plugins.updater (public key + feed) and signed

@@ -169,7 +169,10 @@ jobs:
       - name: Install the Tauri system packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf file
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            libxdo-dev libssl-dev patchelf file squashfs-tools \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-alsa
 
       - run: pnpm install --frozen-lockfile
 
@@ -178,6 +181,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm release:linux
+
+      - name: Verify the AppImage microphone plugins
+        run: bash tools/linux-build/verify-appimage-media.sh artifacts/*_amd64.AppImage
 
       - uses: actions/upload-artifact@v4
         with:
