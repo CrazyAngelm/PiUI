@@ -19,7 +19,8 @@ const UNAVAILABLE: &str = "A native X11 session is required.";
 const STALE: &str = "The selected X11 window has changed or closed.";
 const SCREENSHOT: &str = "The selected X11 window could not be captured.";
 const INPUT: &str = "The X11 input could not be sent.";
-const NOT_FOCUSED: &str = "The selected X11 window is not focused. Retry once it is active.";
+const NOT_FOCUSED: &str =
+    "The selected X11 window is not focused. Re-inspect it and retry after activation.";
 const OBSCURED: &str = "The point is covered by another X11 window.";
 const OUTSIDE: &str = "The point is outside the selected X11 window.";
 
@@ -174,52 +175,62 @@ impl Session {
     }
 
     fn activate_for_input(&self, target: &Target) -> Result<(), &'static str> {
-        self.with_server_grab(|| {
-            let id = self.checked_target(target)?;
-            if self.require_focus(id).is_ok() {
-                return Ok(());
-            }
+        let id = self.checked_target(target)?;
+        if self.require_focus(id).is_ok() {
+            return Ok(());
+        }
 
-            let root = self
-                .conn
-                .get_window_attributes(self.root)
-                .map_err(|_| INPUT)?
-                .reply()
-                .map_err(|_| INPUT)?;
-            if root
-                .all_event_masks
-                .contains(EventMask::SUBSTRUCTURE_REDIRECT)
-            {
-                // A managed desktop decides whether to honour the application's
-                // request. No user-activity timestamp is available to the helper.
-                self.conn
-                    .send_event(
-                        false,
-                        self.root,
-                        EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT,
-                        ClientMessageEvent::new(
-                            32,
-                            id,
-                            self.atoms._NET_ACTIVE_WINDOW,
-                            [1, CURRENT_TIME, NONE, 0, 0],
-                        ),
-                    )
-                    .map_err(|_| INPUT)?
-                    .check()
-                    .map_err(|_| INPUT)?;
-            } else {
-                // On an unmanaged display there is no WM to arbitrate focus.
+        let managed = self.has_window_manager()?
+            || self.with_server_grab(|| {
+                // Recheck under the grab in case a window manager just started.
+                if self.has_window_manager()? {
+                    return Ok(true);
+                }
+                let id = self.checked_target(target)?;
                 self.conn
                     .set_input_focus(InputFocus::PARENT, id, CURRENT_TIME)
                     .map_err(|_| INPUT)?
                     .check()
                     .map_err(|_| INPUT)?;
-            }
-            Ok(())
-        })?;
-        // A WM processes the request asynchronously and may refuse it. Input
-        // is never dispatched until the X server reports the selected focus.
+                Ok(false)
+            })?;
+
+        if managed {
+            // Let the WM process the application's request without a server grab.
+            // The helper has no user-activity timestamp to supply.
+            let id = self.checked_target(target)?;
+            self.conn
+                .send_event(
+                    false,
+                    self.root,
+                    EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT,
+                    ClientMessageEvent::new(
+                        32,
+                        id,
+                        self.atoms._NET_ACTIVE_WINDOW,
+                        [1, CURRENT_TIME, NONE, 0, 0],
+                    ),
+                )
+                .map_err(|_| INPUT)?
+                .check()
+                .map_err(|_| INPUT)?;
+        }
+
+        // The WM may refuse or process the request later. Dispatch requires
+        // actual X11 focus and the same target identity.
         self.require_focus(self.checked_target(target)?)
+    }
+
+    fn has_window_manager(&self) -> Result<bool, &'static str> {
+        let root = self
+            .conn
+            .get_window_attributes(self.root)
+            .map_err(|_| INPUT)?
+            .reply()
+            .map_err(|_| INPUT)?;
+        Ok(root
+            .all_event_masks
+            .contains(EventMask::SUBSTRUCTURE_REDIRECT))
     }
 
     fn require_no_held_modifiers(&self) -> Result<(), &'static str> {
@@ -330,10 +341,10 @@ impl Session {
         })
     }
 
-    fn with_server_grab(
+    fn with_server_grab<T>(
         &self,
-        operation: impl FnOnce() -> Result<(), &'static str>,
-    ) -> Result<(), &'static str> {
+        operation: impl FnOnce() -> Result<T, &'static str>,
+    ) -> Result<T, &'static str> {
         self.conn
             .grab_server()
             .map_err(|_| INPUT)?
