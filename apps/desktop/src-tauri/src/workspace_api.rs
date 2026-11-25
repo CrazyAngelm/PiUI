@@ -4114,13 +4114,12 @@ pub struct SessionTaskStopResultV1 {
 }
 
 fn supports_computer_use(record: &PersistedSession) -> bool {
-    matches!(
-        record.harness,
-        HarnessKind::ClaudeCode | HarnessKind::Hermes
-    ) && matches!(
-        record.permission_mode,
-        PermissionMode::Native | PermissionMode::FullAccess
-    ) && record.run_id.is_none()
+    record.harness == HarnessKind::ClaudeCode
+        && matches!(
+            record.permission_mode,
+            PermissionMode::Native | PermissionMode::FullAccess
+        )
+        && record.run_id.is_none()
         && record.profile_id.is_none()
         && !record.nano_connector
 }

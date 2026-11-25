@@ -597,12 +597,12 @@ WebView, мост и Pi их не видят.
 
 ## Computer Use in a local chat
 
-In the actions menu of a trusted, ordinary Claude Code or Hermes chat, choose
-**Allow Computer Use in this chat**. Stop the agent process when it is idle and
-continue the conversation to load its per-session MCP server. **Turn off
-Computer Use** revokes access immediately. Access clears when Nano Desktop
-closes. Safe mode, connected devices, managed profiles, runs and restricted
-chats cannot grant this capability.
+In the actions menu of a trusted, ordinary Claude Code chat, choose **Allow
+Computer Use in this chat**. When the chat is idle, use **Stop agent process**
+in the actions menu and continue the conversation to load its per-session MCP
+server. **Turn off Computer Use** revokes access immediately. Interrupting a
+turn or closing Nano Desktop also revokes access. Safe mode, connected devices,
+managed profiles, runs and restricted chats cannot grant this capability.
 
 The tool lists app windows with consent, then requests a screenshot of one
 window. One screenshot allows at most one separately approved click, scroll,
