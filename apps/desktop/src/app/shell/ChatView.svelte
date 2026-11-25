@@ -93,9 +93,9 @@
   });
 
   async function toggleComputerUse(): Promise<void> {
-    if (!computerUse?.available || computerUseBusy) return;
+    if ((!computerUse?.available && !computerUse?.enabled) || computerUseBusy) return;
     const id = sessionId;
-    const enabled = !computerUse.enabled;
+    const enabled = !computerUse?.enabled;
     computerUseBusy = true;
     try {
       const settings = await computerUseSettings(id, enabled);
@@ -411,7 +411,7 @@
             items={[
               { label: $t('Rename'), icon: Pencil, onSelect: beginRename },
               { label: $t('Mark…'), icon: SmilePlus, onSelect: () => (marking = true) },
-              ...(computerUse?.available && !isSidekick
+              ...((computerUse?.available || computerUse?.enabled) && !isSidekick
                 ? [{ label: computerUse.enabled ? $t('Turn off Computer Use') : $t('Allow Computer Use in this chat'), icon: Monitor, disabled: computerUseBusy, onSelect: () => void toggleComputerUse() }]
                 : []),
               { label: $t('Refresh from history'), icon: RefreshCw, onSelect: () => void store.reconcileSession(session.id) },

@@ -379,6 +379,50 @@ impl Session {
     }
 }
 
+pub(super) fn confirm(prompt: &str) -> bool {
+    use gtk::prelude::*;
+
+    if prompt.contains('\0') || gtk::init().is_err() {
+        return false;
+    }
+
+    let dialog = gtk::Dialog::builder()
+        .title("Nano Desktop · Computer Use")
+        .modal(true)
+        .default_width(560)
+        .default_height(360)
+        .build();
+    let cancel = dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    dialog.add_button("Allow", gtk::ResponseType::Accept);
+    dialog.set_default_response(gtk::ResponseType::Cancel);
+
+    let text = gtk::TextView::builder()
+        .editable(false)
+        .cursor_visible(false)
+        .wrap_mode(gtk::WrapMode::WordChar)
+        .left_margin(12)
+        .right_margin(12)
+        .top_margin(12)
+        .bottom_margin(12)
+        .build();
+    let Some(buffer) = text.buffer() else {
+        return false;
+    };
+    buffer.set_text(prompt);
+
+    let scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .build();
+    scroll.add(&text);
+    dialog.content_area().pack_start(&scroll, true, true, 0);
+    dialog.show_all();
+    cancel.grab_focus();
+    let approved = dialog.run() == gtk::ResponseType::Accept;
+    dialog.close();
+    approved
+}
+
 pub(super) fn available() -> bool {
     let Ok(session) = Session::connect() else {
         return false;

@@ -71,7 +71,7 @@ pub const WORKSPACE_EVENT_NAME: &str = "piui://workspace-event";
 /// Additive, ephemeral extension UI surface channel (workspace-extension-ui-v1).
 pub const WORKSPACE_EXTENSION_UI_EVENT: &str = "piui://workspace-extension-ui";
 pub const WORKSPACE_EXTENSION_UI_PROTOCOL: u8 = 1;
-const NATIVE_SESSION_DIRECTORY: &str = "workspace-native-v11";
+pub(crate) const NATIVE_SESSION_DIRECTORY: &str = "workspace-native-v11";
 /// Upper bound for one forwarded text delta built from already-queued deltas.
 const MAX_COALESCED_DELTA_BYTES: usize = 64 * 1024;
 /// Longest time a cached usage receipt waits for its durable registry write
@@ -2249,8 +2249,10 @@ impl WorkspaceHost {
                 && supports_computer_use(&record)
                 && let Some(server) = self.inner.computer_use.server(&record.id)
             {
-                servers.insert(0, server);
-                servers.truncate(piui_runtime::workspace_runtime::MAX_SESSION_MCP_SERVERS);
+                if servers.len() >= piui_runtime::workspace_runtime::MAX_SESSION_MCP_SERVERS {
+                    return Err(WorkspaceError::not_supported());
+                }
+                servers.push(server);
             }
             servers
         };
@@ -2821,10 +2823,12 @@ impl WorkspaceHost {
             .live_runtime(session_id)?
             .ok_or_else(WorkspaceError::closed)?;
         let _admission = state.composer_gate.lock().await;
+        let revoked = self.inner.computer_use.revoke(session_id);
         runtime
             .interrupt()
             .await
-            .map_err(|_| WorkspaceError::runtime())
+            .map_err(|_| WorkspaceError::runtime())?;
+        revoked.map_err(|_| WorkspaceError::io())
     }
 
     pub(crate) fn fusion_sidekick_model(&self, session_id: &str) -> Option<WorkspaceModel> {
@@ -4162,7 +4166,7 @@ pub fn workspace_computer_use_v1(
     Ok(ComputerUseSettingsV1 {
         protocol: 1,
         available,
-        enabled: available && grants.server(&session_id).is_some(),
+        enabled: grants.server(&session_id).is_some(),
     })
 }
 
@@ -5014,6 +5018,12 @@ async fn delete_session_command(
             return Err(WorkspaceError::conflict());
         }
     }
+    state
+        .workspace
+        .inner
+        .computer_use
+        .revoke(&session_id)
+        .map_err(|_| WorkspaceError::io())?;
     state.workspace.close_session(&session_id).await?;
     lock(&state.workspace.inner.registry)?
         .transact(|sessions| {

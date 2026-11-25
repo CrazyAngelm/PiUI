@@ -1,4 +1,4 @@
-use super::Target;
+use super::{LeaseData, Target};
 
 // Match the native bridge runner's MCP transport frame budget.
 const FRAME_BUDGET: u64 = 32 * 1024 * 1024;
@@ -100,6 +100,7 @@ fn display_text(text: &str) -> String {
 }
 
 trait Backend {
+    fn host_alive(&self, pid: u32) -> bool;
     fn windows(&self) -> Result<Vec<Target>, &'static str>;
     fn confirm(&self, prompt: &str) -> bool;
     fn capture(&self, target: &Target) -> Result<Vec<u8>, &'static str>;
@@ -110,25 +111,16 @@ pub(super) struct Desktop;
 
 #[cfg(any(windows, target_os = "linux"))]
 impl Backend for Desktop {
+    fn host_alive(&self, pid: u32) -> bool {
+        super::is_our_process(pid)
+    }
+
     fn windows(&self) -> Result<Vec<Target>, &'static str> {
         super::native::windows()
     }
 
     fn confirm(&self, prompt: &str) -> bool {
-        #[cfg(windows)]
-        {
-            return super::native::confirm(prompt);
-        }
-        #[cfg(target_os = "linux")]
-        use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
-        #[cfg(target_os = "linux")]
-        return MessageDialog::new()
-            .set_title("Nano Desktop · Computer Use")
-            .set_description(prompt)
-            .set_level(MessageLevel::Warning)
-            .set_buttons(MessageButtons::OkCancel)
-            .show()
-            == MessageDialogResult::Ok;
+        super::native::confirm(prompt)
     }
 
     fn capture(&self, target: &Target) -> Result<Vec<u8>, &'static str> {
@@ -147,40 +139,50 @@ struct Observation {
 
 struct Connection<B> {
     backend: B,
+    host_pid: u32,
     advertised: Vec<Target>,
     observation: Option<Observation>,
 }
 
 impl<B: Backend> Connection<B> {
-    fn new(backend: B) -> Self {
+    fn new(backend: B, host_pid: u32) -> Self {
         Self {
             backend,
+            host_pid,
             advertised: Vec::new(),
             observation: None,
         }
     }
 
+    fn require_lease(&self, lease: &Path) -> Result<(), &'static str> {
+        if lease.is_file() && self.backend.host_alive(self.host_pid) {
+            Ok(())
+        } else {
+            Err("Computer Use access was turned off.")
+        }
+    }
+
     fn approve(&self, lease: &Path, prompt: &str) -> Result<(), &'static str> {
-        let chat =
-            std::fs::read_to_string(lease).map_err(|_| "Computer Use access was turned off.")?;
-        let prompt = format!("Chat: {}\n\n{prompt}", display_text(&chat));
+        self.require_lease(lease)?;
+        let grant = LeaseData::load(lease).map_err(|_| "Computer Use access was turned off.")?;
+        let prompt = format!("Chat: {}\n\n{prompt}", display_text(&grant.title));
         if !self.backend.confirm(&prompt) {
             return Err("The user declined the request.");
         }
-        require_lease(lease)
+        self.require_lease(lease)
     }
 
     fn current_target(&self, target: &Target) -> Result<Target, &'static str> {
         self.backend
             .windows()?
             .into_iter()
-            .filter(Target::suitable)
+            .filter(|target| target.suitable(self.host_pid))
             .find(|window| window == target)
             .ok_or("The window changed. List windows and inspect again.")
     }
 
     fn call(&mut self, lease: &Path, request: Request) -> Result<Vec<Value>, &'static str> {
-        require_lease(lease)?;
+        self.require_lease(lease)?;
         match request {
             Request::Windows {} => {
                 self.observation = None;
@@ -190,7 +192,7 @@ impl<B: Backend> Connection<B> {
                     .backend
                     .windows()?
                     .into_iter()
-                    .filter(Target::suitable)
+                    .filter(|target| target.suitable(self.host_pid))
                     .collect();
                 Ok(vec![text(json!({
                     "windows": self.advertised.iter().map(|window| json!({
@@ -222,7 +224,7 @@ impl<B: Backend> Connection<B> {
                         "The window image exceeds the native transport capacity. Resize it and inspect again.",
                     );
                 }
-                require_lease(lease)?;
+                self.require_lease(lease)?;
                 let id = uuid::Uuid::new_v4().to_string();
                 let description = json!({
                     "snapshot": id, "window": target.id, "app": display_text(&target.app),
@@ -262,19 +264,11 @@ impl<B: Backend> Connection<B> {
                     action.describe(), display_text(&target.app), display_text(&target.title)
                 ))?;
                 let target = self.current_target(&target)?;
-                require_lease(lease)?;
+                self.require_lease(lease)?;
                 self.backend.perform(&target, &action)?;
                 Ok(vec![text(json!({"performed": true, "window": target.id}))])
             }
         }
-    }
-}
-
-fn require_lease(lease: &Path) -> Result<(), &'static str> {
-    if lease.is_file() {
-        Ok(())
-    } else {
-        Err("Computer Use access was turned off.")
     }
 }
 
@@ -309,10 +303,11 @@ fn tool() -> Value {
 pub(super) fn serve(
     input: impl BufRead,
     mut output: impl Write,
+    host_pid: u32,
     lease: &Path,
     backend: Desktop,
 ) -> io::Result<()> {
-    serve_with(input, &mut output, lease, backend)
+    serve_with(input, &mut output, host_pid, lease, backend)
 }
 
 // The protocol uses the MCP stdio line frame. Stop reading when the client
@@ -321,10 +316,11 @@ pub(super) fn serve(
 fn serve_with<B: Backend>(
     mut input: impl BufRead,
     output: &mut impl Write,
+    host_pid: u32,
     lease: &Path,
     backend: B,
 ) -> io::Result<()> {
-    let mut connection = Connection::new(backend);
+    let mut connection = Connection::new(backend, host_pid);
     let mut frame = Vec::new();
     loop {
         frame.clear();
@@ -401,7 +397,9 @@ mod tests {
         fn create() -> Self {
             let path =
                 std::env::temp_dir().join(format!("piui-cua-{}.lease", uuid::Uuid::new_v4()));
-            std::fs::write(&path, "Fixture chat").expect("fixture lease");
+            let grant =
+                serde_json::to_vec(&LeaseData::capture("Fixture chat")).expect("fixture data");
+            std::fs::write(&path, grant).expect("fixture lease");
             Self(path)
         }
     }
@@ -418,6 +416,10 @@ mod tests {
     }
 
     impl Backend for TestDesktop {
+        fn host_alive(&self, _: u32) -> bool {
+            true
+        }
+
         fn windows(&self) -> Result<Vec<Target>, &'static str> {
             Ok(vec![self.target.borrow().clone()])
         }
@@ -435,20 +437,23 @@ mod tests {
     }
 
     fn fixture() -> Connection<TestDesktop> {
-        Connection::new(TestDesktop {
-            target: RefCell::new(Target {
-                id: 7,
-                pid: std::process::id().wrapping_add(1),
-                app: "editor".into(),
-                title: "Fixture window".into(),
-                x: 0,
-                y: 0,
-                width: 300,
-                height: 200,
-            }),
-            allow: Cell::new(true),
-            performed: Cell::new(0),
-        })
+        Connection::new(
+            TestDesktop {
+                target: RefCell::new(Target {
+                    id: 7,
+                    pid: std::process::id().wrapping_add(1),
+                    app: "editor".into(),
+                    title: "Fixture window".into(),
+                    x: 0,
+                    y: 0,
+                    width: 300,
+                    height: 200,
+                }),
+                allow: Cell::new(true),
+                performed: Cell::new(0),
+            },
+            std::process::id(),
+        )
     }
 
     fn inspect(connection: &mut Connection<TestDesktop>, lease: &Path) -> String {

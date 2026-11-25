@@ -15,9 +15,12 @@ fn main() -> Result<(), tauri::Error> {
             piui_desktop_lib::COMPUTER_USE_HELPER_FLAG,
         ))
     {
-        let status = match (args.next(), args.next()) {
-            (Some(lease), None) => {
-                piui_desktop_lib::run_computer_use_helper(std::path::Path::new(&lease))
+        let pid = args
+            .next()
+            .and_then(|pid| pid.to_str()?.parse::<u32>().ok());
+        let status = match (pid, args.next(), args.next()) {
+            (Some(pid), Some(lease), None) => {
+                piui_desktop_lib::run_computer_use_helper(pid, std::path::Path::new(&lease))
             }
             _ => Err(std::io::Error::other("Invalid Computer Use invocation.")),
         };
