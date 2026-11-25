@@ -7,10 +7,12 @@
   import Clock from '@lucide/svelte/icons/clock-3';
   import Ellipsis from '@lucide/svelte/icons/ellipsis';
   import PanelLeftOpen from '@lucide/svelte/icons/panel-left-open';
+  import Globe from '@lucide/svelte/icons/globe';
   import { t } from '../../features/locale/language';
-  import { IconButton, Menu, StatusDot, type MenuEntry } from '../../lib/ui';
+  import { IconButton, Menu, StatusDot, toasts, type MenuEntry } from '../../lib/ui';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
   import { remoteMode, pipelineSectionAvailable } from '../nano/remoteMode';
+  import { openSiteBrowser, siteBrowserAvailable } from '../../host-api/siteBrowserClient';
   import { useWorkspace } from './context';
   import { railCurrent, type RailItem } from './navRail';
 
@@ -39,6 +41,10 @@
   function go(action: () => void): void {
     action();
     onNavigate();
+  }
+
+  function openBrowser(): void {
+    void openSiteBrowser().catch(() => toasts.error($t('Could not open the browser.')));
   }
 
   interface Entry {
@@ -115,6 +121,11 @@
       {/if}
     </span>
   {/each}
+  {#if siteBrowserAvailable && !store.safeMode}
+    <span class="rail__cell">
+      <IconButton size="lg" label={$t('Browser')} tooltipSide="right" onclick={openBrowser}><Globe /></IconButton>
+    </span>
+  {/if}
   {#if more.length}
     <Menu side="right" align="end" items={more}>
       {#snippet trigger(props)}

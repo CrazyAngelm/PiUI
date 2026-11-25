@@ -47,7 +47,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["net"] }
 uuid.workspace = true
 zeroize = "1.9"
-tauri = { version = "=2.11.5", features = ["tray-icon"] }
+tauri = { version = "=2.11.5", features = ["tray-icon", "unstable"] }
 rfd = "0.17.2"
 # Signed updates. Registered only when the build config carries the updater
 # public key and an HTTPS endpoint (see app_update.rs and docs/RELEASING.md).
@@ -66,12 +66,14 @@ enigo = "=0.6.1"
 png = "=0.18.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+gtk = "=0.18.2"
 x11rb = { version = "=0.13.2", features = ["xtest", "composite"] }
 # The main window answers WebKitGTK's microphone permission request for
 # dictation (linux_media_permission.rs); the version wry already links.
 webkit2gtk = { version = "=2.0.2", features = ["v2_40"] }
 
 [target.'cfg(windows)'.dependencies]
+webview2-com = "=0.38.2"
 xcap = { version = "=0.9.10", features = ["wgc"] }
 # The quoted HKCU Run value for "start PiUI when I sign in".
 winreg = "=0.10.1"

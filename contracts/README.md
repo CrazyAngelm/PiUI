@@ -508,3 +508,10 @@ compatible; a protocol 2 host explicitly passes `--with-protocol-2`. Desktop
 delegates agent-request admission to the shared pure function with its existing
 error mapping. Server execution support is a separate integration stage. See
 ADR-059 and `fixtures/unified-shell/graph/kernel-v2/` for the boundary and proof.
+
+## Embedded site browser (ADR-081)
+
+`site-browser-v1.ts` defines the local window launch, tab actions, snapshots,
+and change notifications. The main window can open the browser. Only the
+packaged toolbar can issue tab commands. External pages and remote viewers
+have no browser commands.
