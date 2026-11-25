@@ -12,7 +12,8 @@
   import { IconButton, Menu, StatusDot, toasts, type MenuEntry } from '../../lib/ui';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
   import { remoteMode, pipelineSectionAvailable } from '../nano/remoteMode';
-  import { openSiteBrowser, siteBrowserAvailable } from '../../host-api/siteBrowserClient';
+  import { desktopAvailable, hostInvoke, hostRemote } from '../../host-api/transport';
+  import { SITE_BROWSER_OPEN } from '../../../../../contracts/site-browser-v1';
   import { useWorkspace } from './context';
   import { railCurrent, type RailItem } from './navRail';
 
@@ -25,6 +26,8 @@
   }
   let { onSearch, onNavigate = () => {}, sidebarHidden = false, onShowSidebar = undefined }: Props = $props();
   const store = useWorkspace();
+  const siteBrowserAvailable = !hostRemote && typeof navigator !== 'undefined'
+    && (!desktopAvailable || /^(Win|Linux)/.test(navigator.platform));
 
   // The optional Nano account: read once after first paint, never before.
   $effect(() => nanoAccount.startLater());
@@ -44,7 +47,12 @@
   }
 
   function openBrowser(): void {
-    void openSiteBrowser($language).catch(() => toasts.error($t('Could not open the browser.')));
+    if (!desktopAvailable) {
+      window.open('/browser.html', '_blank', 'noopener');
+      return;
+    }
+    void hostInvoke<void>(SITE_BROWSER_OPEN, { language: $language })
+      .catch(() => toasts.error($t('Could not open the browser.')));
   }
 
   interface Entry {

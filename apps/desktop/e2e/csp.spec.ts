@@ -41,6 +41,16 @@ test('the server applies the app CSP from tauri.conf.json', async ({ request }) 
   expect(APP_CSP).not.toMatch(/'unsafe-inline'|'unsafe-eval'/);
 });
 
+test('browser chrome starts from its production entry under the app CSP', async ({ page }) => {
+  const response = await page.goto('/browser.html');
+  expect(response?.headers()['content-security-policy']).toBe(APP_CSP);
+  const address = page.getByRole('textbox', { name: 'Website address' });
+  await address.fill('example.org');
+  await address.press('Enter');
+  await expect(address).toHaveValue('https://example.org/');
+  expect(await violations(page)).toEqual([]);
+});
+
 test('chat file previews load from blob: URLs under the app CSP', async ({ lab, page }) => {
   // Only images and media may come from blob: URLs; scripts and styles may not.
   expect(APP_CSP).toContain("img-src 'self' asset: blob:;");

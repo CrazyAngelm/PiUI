@@ -2,24 +2,11 @@ import {
   SITE_BROWSER_ACTION,
   SITE_BROWSER_CHANGED,
   SITE_BROWSER_DOWNLOAD_BLOCKED,
-  SITE_BROWSER_OPEN,
   SITE_BROWSER_POPUP_BLOCKED,
   type SiteBrowserAction,
   type SiteBrowserSnapshot,
 } from '../../../../contracts/site-browser-v1';
 import { desktopAvailable, hostInvoke, hostListen, hostRemote } from './transport';
-
-export const siteBrowserAvailable = !hostRemote
-  && typeof navigator !== 'undefined'
-  && (!desktopAvailable || /^(Win|Linux)/.test(navigator.platform));
-
-export function openSiteBrowser(language: 'en' | 'ru'): Promise<void> {
-  if (!desktopAvailable && !hostRemote) {
-    window.open('/browser.html', '_blank', 'noopener');
-    return Promise.resolve();
-  }
-  return hostInvoke<void>(SITE_BROWSER_OPEN, { language });
-}
 
 export function browserAction(request: SiteBrowserAction): Promise<SiteBrowserSnapshot> {
   if (!desktopAvailable && !hostRemote) return labAction(request);
