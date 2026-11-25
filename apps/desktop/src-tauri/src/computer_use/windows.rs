@@ -56,7 +56,7 @@ fn dialog_control(
     label: &str,
 ) {
     // Every DLGITEMTEMPLATE starts on a DWORD boundary.
-    if words.len() % 2 != 0 {
+    if !words.len().is_multiple_of(2) {
         words.push(0);
     }
     let style = style | WS_CHILD | WS_VISIBLE | WS_TABSTOP;
@@ -125,7 +125,7 @@ fn approval_dialog() -> Vec<u32> {
     );
 
     // DLGTEMPLATE itself must also start on a DWORD boundary.
-    if words.len() % 2 != 0 {
+    if !words.len().is_multiple_of(2) {
         words.push(0);
     }
     words
