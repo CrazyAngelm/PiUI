@@ -604,13 +604,14 @@ server. **Turn off Computer Use** revokes access immediately. Interrupting a
 turn or closing Nano Desktop also revokes access. Safe mode, connected devices,
 managed profiles, runs and restricted chats cannot grant this capability.
 
-The tool lists app windows with consent, then requests a screenshot of one
-window. One screenshot allows at most one separately approved click, scroll,
-key or text action. The user approves the named window and exact action in a
-native dialog. Input requires that same window to be active and pointer actions
-also check which window is under the point. The helper captures windows rather
-than the whole display and uses no hosted process or global harness config.
-Approved images go to the chat and its chosen model.
+**Full access** lets the agent list windows, capture a window and act without
+interactive approvals. **Native permissions** use Claude Code's approval
+settings. Computer Use is unavailable in **Read-only** and **Workspace write**.
+
+The agent gets one click, scroll, key press or text entry per screenshot. The
+helper requests focus for the selected window and checks that focus before
+sending input. Pointer actions also check which window is under the point.
+Screenshots of individual windows go to the chat and its chosen model.
 
 Windows uses Windows Graphics Capture via XCap. Linux uses the X Composite and
 XTEST extensions in an X11 session. A compositor using Wayland has a different

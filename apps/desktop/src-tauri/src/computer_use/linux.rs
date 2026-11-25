@@ -2,8 +2,9 @@ use enigo::{Direction, Enigo, Keyboard, Settings};
 use x11rb::connection::Connection;
 use x11rb::protocol::composite::{ConnectionExt as _, Redirect};
 use x11rb::protocol::xproto::{
-    AtomEnum, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ConnectionExt as _, GetImageReply,
-    ImageFormat, ImageOrder, KeyButMask, MapState, VisualClass, Window,
+    AtomEnum, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ClientMessageEvent, ConnectionExt as _,
+    EventMask, GetImageReply, ImageFormat, ImageOrder, InputFocus, KeyButMask, MapState,
+    VisualClass, Window,
 };
 use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
@@ -18,12 +19,14 @@ const UNAVAILABLE: &str = "A native X11 session is required.";
 const STALE: &str = "The selected X11 window has changed or closed.";
 const SCREENSHOT: &str = "The selected X11 window could not be captured.";
 const INPUT: &str = "The X11 input could not be sent.";
-const NOT_FOCUSED: &str = "Focus the selected X11 window before sending input.";
+const NOT_FOCUSED: &str =
+    "The selected X11 window is not focused. Re-inspect it and retry after activation.";
 const OBSCURED: &str = "The point is covered by another X11 window.";
 const OUTSIDE: &str = "The point is outside the selected X11 window.";
 
 x11rb::atom_manager! {
     Atoms: AtomsCookie {
+        _NET_ACTIVE_WINDOW,
         _NET_CLIENT_LIST,
         _NET_WM_PID,
         _NET_WM_NAME,
@@ -171,6 +174,65 @@ impl Session {
         }
     }
 
+    fn activate_for_input(&self, target: &Target) -> Result<(), &'static str> {
+        let id = self.checked_target(target)?;
+        if self.require_focus(id).is_ok() {
+            return Ok(());
+        }
+
+        let managed = self.has_window_manager()?
+            || self.with_server_grab(|| {
+                // Recheck under the grab in case a window manager just started.
+                if self.has_window_manager()? {
+                    return Ok(true);
+                }
+                let id = self.checked_target(target)?;
+                self.conn
+                    .set_input_focus(InputFocus::PARENT, id, CURRENT_TIME)
+                    .map_err(|_| INPUT)?
+                    .check()
+                    .map_err(|_| INPUT)?;
+                Ok(false)
+            })?;
+
+        if managed {
+            // Let the WM process the application's request without a server grab.
+            // The helper has no user-activity timestamp to supply.
+            let id = self.checked_target(target)?;
+            self.conn
+                .send_event(
+                    false,
+                    self.root,
+                    EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT,
+                    ClientMessageEvent::new(
+                        32,
+                        id,
+                        self.atoms._NET_ACTIVE_WINDOW,
+                        [1, CURRENT_TIME, NONE, 0, 0],
+                    ),
+                )
+                .map_err(|_| INPUT)?
+                .check()
+                .map_err(|_| INPUT)?;
+        }
+
+        // The WM may refuse or process the request later. Dispatch requires
+        // actual X11 focus and the same target identity.
+        self.require_focus(self.checked_target(target)?)
+    }
+
+    fn has_window_manager(&self) -> Result<bool, &'static str> {
+        let root = self
+            .conn
+            .get_window_attributes(self.root)
+            .map_err(|_| INPUT)?
+            .reply()
+            .map_err(|_| INPUT)?;
+        Ok(root
+            .all_event_masks
+            .contains(EventMask::SUBSTRUCTURE_REDIRECT))
+    }
+
     fn require_no_held_modifiers(&self) -> Result<(), &'static str> {
         let modifiers = self
             .conn
@@ -273,14 +335,22 @@ impl Session {
     ) -> Result<(), &'static str> {
         // Keep other clients from changing focus or stacking order between
         // the hit test and the synthetic button events.
+        self.with_server_grab(|| {
+            self.checked_target(target)
+                .and_then(|id| self.pointer_input(target, id, x, y, button))
+        })
+    }
+
+    fn with_server_grab<T>(
+        &self,
+        operation: impl FnOnce() -> Result<T, &'static str>,
+    ) -> Result<T, &'static str> {
         self.conn
             .grab_server()
             .map_err(|_| INPUT)?
             .check()
             .map_err(|_| INPUT)?;
-        let result = self
-            .checked_target(target)
-            .and_then(|id| self.pointer_input(target, id, x, y, button));
+        let result = operation();
         self.conn
             .ungrab_server()
             .map_err(|_| INPUT)?
@@ -341,15 +411,15 @@ impl Session {
             .map_err(|_| INPUT)
     }
 
-    fn keyboard_input(&self, id: Window, action: &Action) -> Result<(), &'static str> {
+    fn keyboard_input(&self, target: &Target, action: &Action) -> Result<(), &'static str> {
         let mut keyboard = Enigo::new(&Settings::default()).map_err(|_| INPUT)?;
-        self.require_focus(id)?;
         self.require_no_held_modifiers()?;
+        self.require_focus(self.checked_target(target)?)?;
         match action {
             Action::Type { text } => {
                 for character in text.chars() {
-                    self.require_focus(id)?;
                     self.require_no_held_modifiers()?;
+                    self.require_focus(self.checked_target(target)?)?;
                     keyboard
                         .key(enigo::Key::Unicode(character), Direction::Click)
                         .map_err(|_| INPUT)?;
@@ -377,57 +447,6 @@ impl Session {
             _ => Err(INPUT),
         }
     }
-}
-
-pub(super) fn confirm(prompt: &str) -> bool {
-    use gtk::prelude::*;
-
-    if prompt.contains('\0') || gtk::init().is_err() {
-        return false;
-    }
-
-    let dialog = gtk::Dialog::builder()
-        .title("Nano Desktop · Computer Use")
-        .modal(true)
-        .default_width(560)
-        .default_height(360)
-        .build();
-    let cancel = dialog.add_button("Cancel", gtk::ResponseType::Cancel);
-    dialog.add_button("Allow", gtk::ResponseType::Accept);
-    dialog.set_default_response(gtk::ResponseType::Cancel);
-
-    let text = gtk::TextView::builder()
-        .editable(false)
-        .cursor_visible(false)
-        .wrap_mode(gtk::WrapMode::WordChar)
-        .left_margin(12)
-        .right_margin(12)
-        .top_margin(12)
-        .bottom_margin(12)
-        .build();
-    let Some(buffer) = text.buffer() else {
-        return false;
-    };
-    buffer.set_text(prompt);
-
-    let scroll = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .vscrollbar_policy(gtk::PolicyType::Automatic)
-        .build();
-    scroll.add(&text);
-    dialog.content_area().pack_start(&scroll, true, true, 0);
-    dialog.show_all();
-    cancel.grab_focus();
-    let approved = dialog.run() == gtk::ResponseType::Accept;
-    dialog.hide();
-    dialog.close();
-    while gtk::events_pending() {
-        gtk::main_iteration_do(false);
-    }
-    if let Some(display) = gtk::gdk::Display::default() {
-        display.sync();
-    }
-    approved
 }
 
 pub(super) fn available() -> bool {
@@ -470,7 +489,18 @@ pub(super) fn windows() -> Result<Vec<Target>, &'static str> {
 }
 
 pub(super) fn perform(target: &Target, action: &Action) -> Result<(), &'static str> {
+    match action {
+        Action::Click { x, y } | Action::Scroll { x, y, .. }
+            if *x >= target.width || *y >= target.height =>
+        {
+            return Err(OUTSIDE);
+        }
+        Action::Scroll { lines: 0, .. } => return Ok(()),
+        _ => {}
+    }
+
     let session = Session::connect()?;
+    session.activate_for_input(target)?;
     match action {
         Action::Click { x, y } => session.pointer_action(target, *x, *y, 1),
         Action::Scroll { x, y, lines } => {
@@ -480,9 +510,7 @@ pub(super) fn perform(target: &Target, action: &Action) -> Result<(), &'static s
             }
             Ok(())
         }
-        Action::Type { .. } | Action::Key { .. } => {
-            session.keyboard_input(session.checked_target(target)?, action)
-        }
+        Action::Type { .. } | Action::Key { .. } => session.keyboard_input(target, action),
     }
 }
 

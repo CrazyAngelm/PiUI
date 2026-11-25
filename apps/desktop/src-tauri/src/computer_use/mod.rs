@@ -94,7 +94,6 @@ pub(crate) struct Grants {
 #[derive(Deserialize, Serialize)]
 struct LeaseData {
     host_pid: u32,
-    title: String,
     #[cfg(target_os = "linux")]
     display: Option<String>,
     #[cfg(target_os = "linux")]
@@ -102,10 +101,9 @@ struct LeaseData {
 }
 
 impl LeaseData {
-    fn capture(title: &str) -> Self {
+    fn capture() -> Self {
         Self {
             host_pid: std::process::id(),
-            title: title.to_owned(),
             #[cfg(target_os = "linux")]
             display: std::env::var("DISPLAY").ok(),
             #[cfg(target_os = "linux")]
@@ -120,7 +118,7 @@ impl LeaseData {
 
     #[cfg(target_os = "linux")]
     fn setup_x11(&self) {
-        // Main's helper dispatch invokes this once, before connecting GTK/X11
+        // Main's helper dispatch invokes this once, before connecting X11
         // or creating any worker. Restore only the originating local display.
         unsafe {
             if let Some(value) = &self.display {
@@ -129,7 +127,6 @@ impl LeaseData {
             if let Some(value) = &self.xauthority {
                 std::env::set_var("XAUTHORITY", value);
             }
-            std::env::set_var("GDK_BACKEND", "x11");
         }
     }
 }
@@ -142,7 +139,7 @@ impl Drop for Lease {
 }
 
 impl Grants {
-    pub(crate) fn enable(&self, chat: &str, title: &str, directory: &Path) -> io::Result<()> {
+    pub(crate) fn enable(&self, chat: &str, directory: &Path) -> io::Result<()> {
         let mut slots = self
             .slots
             .lock()
@@ -154,7 +151,7 @@ impl Grants {
                 .create_new(true)
                 .open(&path)?;
             let lease = Lease(path);
-            serde_json::to_writer(file, &LeaseData::capture(title)).map_err(io::Error::other)?;
+            serde_json::to_writer(file, &LeaseData::capture()).map_err(io::Error::other)?;
             slots.insert(chat.to_owned(), lease);
         }
         Ok(())
