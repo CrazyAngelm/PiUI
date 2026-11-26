@@ -6,6 +6,8 @@ mod protocol;
 mod linux;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+mod windows_pointer;
 #[cfg(target_os = "linux")]
 use linux as native;
 #[cfg(windows)]

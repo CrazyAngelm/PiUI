@@ -40,6 +40,15 @@ export interface SessionActivityView {
 
 const LIVE_STATUSES: readonly string[] = ['starting', 'idle', 'running', 'stopping'];
 const TURN_STATUSES: readonly string[] = ['starting', 'running', 'stopping'];
+const COMPUTER_USE_TOOL = 'mcp__nano-computer-use__computer_use';
+
+export function hasActiveComputerUseRequest(snapshot: SessionSnapshot | undefined): boolean {
+  return snapshot?.session.harness === 'claude-code'
+    && (snapshot.session.status === 'running' || snapshot.session.status === 'stopping')
+    && snapshot.blocks.some((block) =>
+      block.kind === 'tool' && block.status === 'streaming' && block.toolName === COMPUTER_USE_TOOL);
+}
+
 const KINDS: readonly SessionTaskKind[] = ['agent', 'command', 'task'];
 const STATUSES: readonly SessionTaskStatus[] = ['running', 'completed', 'failed', 'stopped'];
 /** Finished items kept per group; the list shows what runs, not a history. */

@@ -30,7 +30,7 @@
   import { ChatFilesStore } from '../chat/files/chatFiles.svelte';
   import { createChatFilePlacer } from '../chat/files/placeChatFiles';
   import { errorMessage } from '../workspaceStore.svelte';
-  import { sessionActivity } from '../chat/activity/sessionActivity';
+  import { hasActiveComputerUseRequest, sessionActivity } from '../chat/activity/sessionActivity';
   import SearchIcon from '@lucide/svelte/icons/search';
   import GitCompare from '@lucide/svelte/icons/git-compare';
   import ArrowRightLeft from '@lucide/svelte/icons/arrow-right-left';
@@ -79,16 +79,19 @@
   const store = useWorkspace();
 
   const session = $derived(store.catalog.sessions.find((item) => item.id === sessionId));
-  let computerUse = $state<ComputerUseSettings | undefined>();
+  let computerUseGrant = $state<{ sessionId: string; settings: ComputerUseSettings } | undefined>();
+  const computerUse = $derived(computerUseGrant?.sessionId === sessionId ? computerUseGrant.settings : undefined);
   let computerUseBusy = $state(false);
   $effect(() => {
     const id = sessionId;
     const status = session?.status;
-    computerUse = undefined;
-    if (status === undefined || remoteMode || store.safeMode) return;
+    if (status === undefined || remoteMode || store.safeMode) {
+      computerUseGrant = undefined;
+      return;
+    }
     let disposed = false;
     void computerUseSettings(id).then((settings) => {
-      if (!disposed) computerUse = settings;
+      if (!disposed) computerUseGrant = { sessionId: id, settings };
     }).catch(() => undefined);
     return () => { disposed = true; };
   });
@@ -100,7 +103,7 @@
     computerUseBusy = true;
     try {
       const settings = await computerUseSettings(id, enabled);
-      if (sessionId === id) computerUse = settings;
+      if (sessionId === id) computerUseGrant = { sessionId: id, settings };
       if (settings.enabled) toasts.success($t('Computer Use will be available after the agent process restarts.'));
     } catch {
       toasts.error($t('Could not change Computer Use access.'));
@@ -110,6 +113,8 @@
   }
 
   const snapshot = $derived(store.snapshots[sessionId]);
+  const computerUseActive = $derived(!remoteMode && !store.safeMode
+    && computerUse?.enabled === true && hasActiveComputerUseRequest(snapshot));
   // The selected chat reports through the store's single fields, a chat in a pane through its own.
   const loadingNow = $derived(store.loadingFor(sessionId));
   const loadError = $derived(store.errorFor(sessionId));
@@ -353,7 +358,7 @@
 
 {#if session}
   <div class="chat" class:chat--details={roomy && detailsOpen && !reviewOpen} class:chat--review={roomy && reviewOpen} bind:clientWidth={width}>
-    <section class="chat__main" aria-labelledby={active ? 'chat-title' : undefined} aria-label={active ? undefined : session.title} bind:clientWidth={mainWidth}>
+    <section class="chat__main" class:chat__main--computer-use={computerUseActive} aria-labelledby={active ? 'chat-title' : undefined} aria-label={active ? undefined : session.title} bind:clientWidth={mainWidth}>
       <header class="chat__head">
         <HarnessMark kind={session.harness} size={20} decorative={false} />
         {#if sessionMark}<Mark mark={sessionMark} size={18} />{/if}
@@ -467,6 +472,12 @@
           {/if}
         </div>
       </header>
+
+      <div class="chat__computer-use-status" role="status">
+        {#if computerUseActive}
+          <span><Monitor size={16} aria-hidden="true" />{$t('Computer Use request active')}</span>
+        {/if}
+      </div>
 
       {#if loadError}
         <div class="banner" role="alert">
@@ -630,6 +641,23 @@
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+  }
+  .chat__main--computer-use {
+    outline: 2px solid var(--piui-warning);
+    outline-offset: -2px;
+  }
+  .chat__computer-use-status {
+    flex: none;
+  }
+  .chat__computer-use-status span {
+    display: flex;
+    align-items: center;
+    gap: var(--piui-space-2);
+    padding: var(--piui-space-2) var(--piui-space-4);
+    border-bottom: 1px solid var(--piui-warning-border);
+    background: var(--piui-warning-surface);
+    color: var(--piui-warning-text);
+    font-size: var(--piui-text-sm);
   }
   .chat__head {
     display: flex;

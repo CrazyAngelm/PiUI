@@ -614,6 +614,13 @@ helper requests focus for the selected window and checks that focus before
 sending input. Pointer actions also check which window is under the point.
 Screenshots of individual windows go to the chat and its chosen model.
 
+While Claude Code is handling a Computer Use request, the local chat shows a
+highlighted border and a status message. The status also covers requests
+waiting for native approval and disappears when the call returns, fails or is
+interrupted. On Windows, a short outline highlights the real pointer position
+after an agent click or scroll. The outline neither takes focus nor changes the
+system cursor.
+
 Windows uses Windows Graphics Capture via XCap. Linux uses the X Composite and
 XTEST extensions in an X11 session. A compositor using Wayland has a different
 capture and input permission model and this integration keeps the tool

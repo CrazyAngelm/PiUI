@@ -31,6 +31,7 @@ import { LabRunScheduler } from './orchestration/runScheduler';
 import { scriptTestHandlers } from './orchestration/scriptTestFake';
 import { runDebuggingHandlers } from './orchestration/runDebuggingFake';
 import { buildSeed, type SeedActivity } from './scenarios';
+import { demoSessionId } from './scenarios/demoChats';
 import { sessionTasksHandlers } from './sessionTasksFake';
 import { sessionToolsHandlers } from './sessionToolsFake';
 import { createLabSessionLinks } from './sessionLinksFake';
@@ -149,6 +150,19 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
   const signedOut = options.claudeSignedOut
     ?? (typeof window !== 'undefined' && claudeSignedOutFromSearch(window.location.search));
   const seed = signedOut ? withSignedOutClaude(buildSeed(scenario)) : buildSeed(scenario);
+  // The fixture projects a native request without granting access to a desktop.
+  const computerUseFixture = !seed.safeMode && typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('computer-use') === 'active'
+    ? seed.sessions.find((record) => record.id === demoSessionId('keymap'))
+    : undefined;
+  let computerUseEnabled = computerUseFixture?.live !== undefined;
+  if (computerUseFixture?.live !== undefined) {
+    computerUseFixture.live.status = 'running';
+    computerUseFixture.blocks.push({
+      id: 'lab-computer-use', kind: 'tool', label: 'Computer Use', status: 'streaming',
+      toolName: 'mcp__nano-computer-use__computer_use',
+    });
+  }
   const state: LabState = {
     scenario,
     safeMode: seed.safeMode,
@@ -209,8 +223,11 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ...piHistoryHandlers(runtime, seed.nativeHistory ?? EMPTY_NATIVE_HISTORY, bus),
     ...extensionHandlers(scenario === 'empty' ? [] : demoExtensions()),
     ...backgroundHandlers(state),
-    // Lab has no OS desktop. Keep the capability unavailable there.
-    workspace_computer_use_v1: () => ({ protocol: 1, available: false, enabled: false }),
+    workspace_computer_use_v1: ({ sessionId, enabled }) => {
+      const available = computerUseFixture !== undefined && sessionId === computerUseFixture.id;
+      if (available && typeof enabled === 'boolean') computerUseEnabled = enabled;
+      return { protocol: 1, available, enabled: available && computerUseEnabled };
+    },
     ...interactiveAnswersHandlers(state),
     ...attentionHandlers(),
     ...acpHandlers(runtime, bus),

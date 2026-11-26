@@ -30,6 +30,21 @@ async function axeBlocking(page: Page, selector: string): Promise<readonly { id:
 }
 
 test.describe('chat activity', () => {
+  test('an active Computer Use request stays visible until the turn is stopped from the keyboard', async ({ lab, page }) => {
+    await lab.open('demo', '&computer-use=active');
+    await lab.chat(CLAUDE_CHAT).click();
+    const notice = page.getByRole('status').filter({ hasText: 'Computer Use request active' });
+    await expect(notice).toBeVisible();
+
+    const stop = page.getByRole('button', { name: 'Stop turn', exact: true });
+    await stop.focus();
+    await expect(stop).toBeFocused();
+    await page.keyboard.press('Enter');
+
+    await expect(notice).toHaveCount(0);
+    lab.expectNoErrors();
+  });
+
   test('the details panel leads with the running agents and commands, background ones included', async ({ lab }) => {
     await lab.open('demo');
     await lab.chat(CLAUDE_CHAT).click();
