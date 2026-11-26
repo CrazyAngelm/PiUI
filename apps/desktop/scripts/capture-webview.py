@@ -17,8 +17,7 @@ import zlib
 
 
 def browser_dock(hwnd: int, action: str) -> dict:
-    # The caller already matched this HWND to the controller-owned PiUI E2E
-    # process. Query only its UI Automation subtree, never the desktop.
+    # Query the toolbar child of the controller-owned PiUI E2E window.
     command = f"""
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -37,19 +36,12 @@ function Find($label) {{
 }}
 $button = Find 'Close browser panel'
 $address = Find 'Website address'
-$page = Find 'Site fixture page'
 $visible = $null -ne $button -and -not $button.Current.IsOffscreen
-$focused = $visible -and ($null -ne $address) -and $address.Current.HasKeyboardFocus
-$pageVisible = $null -ne $page -and -not $page.Current.IsOffscreen
 $state = @{{
-    visible=$visible; focused=$focused; pageVisible=$pageVisible
-    closeX=$null; addressY=$null; pageX=$null; pageY=$null
-}}
-if ($visible) {{ $state.closeX = $button.Current.BoundingRectangle.Left }}
-if ($null -ne $address) {{ $state.addressY = $address.Current.BoundingRectangle.Bottom }}
-if ($pageVisible) {{
-    $state.pageX = $page.Current.BoundingRectangle.Left
-    $state.pageY = $page.Current.BoundingRectangle.Top
+    closeButtonFound=($null -ne $button)
+    closeButtonVisible=$visible
+    addressFound=($null -ne $address)
+    addressFocused=(($null -ne $address) -and $address.Current.HasKeyboardFocus)
 }}
 if ('{action}' -eq 'close') {{
     if (-not $visible) {{ throw 'The owned browser panel is not visible.' }}
@@ -69,6 +61,53 @@ $state | ConvertTo-Json -Compress
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
     return json.loads(result.stdout)
+
+
+def browser_layout(user, hwnd: int, pid: int, action: str) -> dict:
+    client = w.RECT()
+    origin = w.POINT()
+    user.GetClientRect.argtypes = [w.HWND, c.POINTER(w.RECT)]
+    user.ClientToScreen.argtypes = [w.HWND, c.POINTER(w.POINT)]
+    if not (user.GetClientRect(hwnd, c.byref(client)) and user.ClientToScreen(hwnd, c.byref(origin))):
+        raise RuntimeError("Could not read the owned browser panel window bounds.")
+
+    # Wry gives every WebView2 controller its own direct child HWND, so the
+    # visible site is measurable without inspecting its accessibility tree.
+    class_name = "WRY_WEBVIEW"
+    child_callback = c.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
+    user.EnumChildWindows.argtypes = [w.HWND, child_callback, w.LPARAM]
+    user.GetParent.argtypes = [w.HWND]
+    user.GetParent.restype = w.HWND
+    user.GetClassNameW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
+    user.GetWindowRect.argtypes = [w.HWND, c.POINTER(w.RECT)]
+    views = []
+    toolbar = None
+
+    @child_callback
+    def visit(child, _):
+        nonlocal toolbar
+        if user.GetParent(child) != hwnd or not user.IsWindowVisible(child):
+            return True
+        owner = w.DWORD()
+        user.GetWindowThreadProcessId(child, c.byref(owner))
+        name = c.create_unicode_buffer(len(class_name) + 2)
+        if owner.value != pid or not user.GetClassNameW(child, name, len(name)) or name.value != class_name:
+            return True
+        rect = w.RECT()
+        if user.GetWindowRect(child, c.byref(rect)):
+            x, y = rect.left - origin.x, rect.top - origin.y
+            views.append([x, y, rect.right - rect.left, rect.bottom - rect.top])
+            if x == client.right // 2 and y == 0:
+                toolbar = child
+        return True
+
+    user.EnumChildWindows(hwnd, visit, 0)
+    state = {"client": [client.right, client.bottom], "views": sorted(views)}
+    if toolbar is not None:
+        state["toolbar"] = browser_dock(toolbar, action)
+    elif action == "close":
+        raise RuntimeError("Could not locate the owned browser toolbar.")
+    return state
 
 
 def capture(parent_pid: int, output: Path | None, resize: tuple[int, int] | None = None, resize_only: bool = False,
@@ -139,15 +178,7 @@ def capture(parent_pid: int, output: Path | None, resize: tuple[int, int] | None
         raise RuntimeError("Expected one visible owned PiUI E2E window.")
     hwnd = windows[0]
     if browser_dock_action is not None:
-        result = browser_dock(hwnd, browser_dock_action)
-        client = w.RECT()
-        origin = w.POINT()
-        user.GetClientRect.argtypes = [w.HWND, c.POINTER(w.RECT)]
-        user.ClientToScreen.argtypes = [w.HWND, c.POINTER(w.POINT)]
-        if not (user.GetClientRect(hwnd, c.byref(client)) and user.ClientToScreen(hwnd, c.byref(origin))):
-            raise RuntimeError("Could not read the owned browser panel window bounds.")
-        result["splitX"] = origin.x + client.right // 2
-        return result
+        return browser_layout(user, hwnd, next(iter(children)), browser_dock_action)
     # Measure only the same verified app and its snapshot descendants. Working
     # sets include shared pages: report their SUM, not unique physical memory.
     owned_pids = set(children)

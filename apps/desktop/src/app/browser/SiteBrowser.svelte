@@ -28,6 +28,10 @@
   });
 
   $effect(() => {
+    addressField?.focus();
+  });
+
+  $effect(() => {
     let disposed = false;
     let stopChanges: (() => void) | undefined;
     let stopNotices: (() => void) | undefined;
@@ -43,10 +47,7 @@
       if (disposed) unlisten();
       else stopNotices = unlisten;
     }).catch(() => { notice = 'Could not read browser tabs.'; });
-    void refresh().then(async () => {
-      await tick();
-      if (!disposed) addressField?.focus();
-    });
+    void refresh();
     return () => {
       disposed = true;
       stopChanges?.();
