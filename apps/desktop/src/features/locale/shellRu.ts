@@ -211,6 +211,7 @@ export const shellRu: Readonly<Record<string, string>> = {
   "Turn off Computer Use": "Отключить управление компьютером",
   "Computer Use will be available after the agent process restarts.": "Перезапустите процесс агента, чтобы он получил доступ к управлению компьютером.",
   "Could not change Computer Use access.": "Не удалось изменить доступ к управлению компьютером.",
+  "Computer Use request active": "Агент вызвал управление компьютером",
   "Stop the running turn": "Остановить текущий ход",
   "Supports fast mode": "Поддерживает быстрый режим",
   "Supports reasoning levels": "Поддерживает уровни размышлений",

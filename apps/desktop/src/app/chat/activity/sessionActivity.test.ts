@@ -2,7 +2,7 @@ import { forgetBlockStarts, noteBlockStart } from '../../../features/workspace/b
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { SessionSnapshot } from '../../../host-api/workspaceClient';
 import type { SessionTaskV1 } from '../../../../../../contracts/workspace-session-tasks-v1';
-import { elapsedLabel, sessionActivity, usageLine, type ActivityItem } from './sessionActivity';
+import { elapsedLabel, hasActiveComputerUseRequest, sessionActivity, usageLine, type ActivityItem } from './sessionActivity';
 
 beforeEach(forgetBlockStarts);
 
@@ -37,6 +37,30 @@ const task = (patch: Partial<SessionTaskV1> & { id: string }): SessionTaskV1 => 
 });
 
 const tool = (patch: Partial<Block> & { id: string }): Block => ({ kind: 'tool', label: 'Tool', status: 'streaming', ...patch });
+
+describe('Computer Use tool activity', () => {
+  const toolName = 'mcp__nano-computer-use__computer_use';
+  const active = tool({ id: 'computer-use', toolName });
+
+  it('shows an in-flight request from the managed Claude Code tool', () => {
+    expect(hasActiveComputerUseRequest(snapshot('running', [active]))).toBe(true);
+    expect(hasActiveComputerUseRequest(snapshot('stopping', [active]))).toBe(true);
+  });
+
+  it.each(['complete', 'failed', 'interrupted'] as const)('clears an %s request', (status) => {
+    expect(hasActiveComputerUseRequest(snapshot('running', [{ ...active, status }]))).toBe(false);
+    expect(hasActiveComputerUseRequest(snapshot('stopping', [{ ...active, status }]))).toBe(false);
+  });
+
+  it('ignores stale, cancelled and unrelated tool activity', () => {
+    expect(hasActiveComputerUseRequest(undefined)).toBe(false);
+    expect(hasActiveComputerUseRequest(snapshot('idle', [active]))).toBe(false);
+    expect(hasActiveComputerUseRequest(snapshot('closed', [active]))).toBe(false);
+    expect(hasActiveComputerUseRequest(snapshot('running', [tool({ id: 'other', toolName: 'mcp__other__computer_use' })]))).toBe(false);
+    const other = snapshot('running', [active]);
+    expect(hasActiveComputerUseRequest({ ...other, session: { ...other.session, harness: 'codex' } })).toBe(false);
+  });
+});
 
 describe('sessionActivity: which sessions are live', () => {
   const tasks = [task({ id: 'a', kind: 'agent' })];

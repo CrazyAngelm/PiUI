@@ -194,7 +194,7 @@ pub(super) fn perform(target: &Target, action: &Action) -> Result<(), &'static s
         None
     };
     require_no_held_input()?;
-    if let Some((x, y)) = pointer {
+    let pointer = if let Some((x, y)) = pointer {
         // Moving the pointer can trigger hover UI or change window geometry.
         find_window(target)?;
         let position = point(target, x, y)?;
@@ -204,7 +204,10 @@ pub(super) fn perform(target: &Target, action: &Action) -> Result<(), &'static s
         {
             return Err("The pointer moved. Inspect the window again.");
         }
-    }
+        Some(position)
+    } else {
+        None
+    };
     require_focus(target)?;
     match action {
         Action::Click { .. } => input.button(Button::Left, Direction::Click),
@@ -212,5 +215,9 @@ pub(super) fn perform(target: &Target, action: &Action) -> Result<(), &'static s
         Action::Scroll { lines, .. } => input.scroll(i32::from(*lines), Axis::Vertical),
         Action::Key { key } => input.key(key_code(*key), Direction::Click),
     }
-    .map_err(refusal)
+    .map_err(refusal)?;
+    if let Some(position) = pointer {
+        super::windows_pointer::mark(position);
+    }
+    Ok(())
 }
