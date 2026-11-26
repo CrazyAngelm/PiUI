@@ -14,6 +14,17 @@ afterEach(() => {
 });
 
 describe('UI Lab chat links', () => {
+  it('routes chat links to the built-in browser and refuses safe mode and app origins', async () => {
+    const request = { url: 'https://example.com/docs?q=1', language: 'en' };
+    expect(await labHost().invoke('site_browser_open_link_v1', { request })).toBe(true);
+    expect(window.__piuiLabChatLinks).toEqual({ calls: [], embedded: [request.url] });
+    expect(await code(labHost('safe').invoke('site_browser_open_link_v1', { request }))).toBe('UNAVAILABLE');
+    expect(await code(labHost().invoke('site_browser_open_link_v1', {
+      request: { ...request, url: 'https://tauri.localhost./browser.html' },
+    }))).toBe('INVALID_ADDRESS');
+    expect(window.__piuiLabChatLinks?.embedded).toEqual([request.url]);
+  });
+
   it('opens nothing, records the call and says which site it would open', async () => {
     const host = labHost();
     expect(await open(host, { url: 'https://example.com/docs?q=1', language: 'en' })).toEqual({ opened: false });

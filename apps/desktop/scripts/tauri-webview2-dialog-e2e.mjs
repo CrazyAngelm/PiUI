@@ -14,6 +14,7 @@ import { runAvatarWebview2Proof } from './avatar-webview2-e2e.mjs';
 import { runConversationWebview2Proof } from './conversation-webview2-e2e.mjs';
 import { runPluginStyleWebview2Proof, seedPluginStyleFixture } from './plugin-style-webview2-e2e.mjs';
 import { runComposerWebview2Proof } from './composer-webview2-e2e.mjs';
+import { runSiteBrowserWebview2Proof } from './site-browser-webview2-e2e.mjs';
 
 // Default: the new shell proof. `--agent-api` runs the agent API proof with
 // the native workspace fixture instead.
@@ -24,6 +25,8 @@ const AVATAR_SCENARIO = process.argv.includes('--avatar');
 const CONVERSATION_SCENARIO = process.argv.includes('--conversation');
 const PLUGIN_STYLE_SCENARIO = process.argv.includes('--plugin-style');
 const COMPOSER_SCENARIO = process.argv.includes('--composer');
+const DEFAULT_SHELL_SCENARIO = SHELL_SCENARIO && !AVATAR_SCENARIO && !CONVERSATION_SCENARIO
+  && !PLUGIN_STYLE_SCENARIO && !COMPOSER_SCENARIO;
 if (COMPOSER_SCENARIO && (PLUGIN_STYLE_SCENARIO || CONVERSATION_SCENARIO || AVATAR_SCENARIO || AGENT_API_SCENARIO)) throw new Error('--composer is an independent normal or safe-start proof.');
 if (PLUGIN_STYLE_SCENARIO && (CONVERSATION_SCENARIO || AVATAR_SCENARIO || AGENT_API_SCENARIO)) throw new Error('--plugin-style is an independent normal or safe-start proof.');
 if (CONVERSATION_SCENARIO && (AVATAR_SCENARIO || AGENT_API_SCENARIO || SAFE_ONLY)) throw new Error('--conversation is an independent normal-start proof.');
@@ -1075,11 +1078,12 @@ wire_api = "responses"
         : await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
             harness: { fixture, ownedChild: app }, mode: 'normal',
             commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot });
+      if (DEFAULT_SHELL_SCENARIO) normalResult.checks.push(...await runSiteBrowserWebview2Proof({ automation, safe: false, fixture, startupBoundMs: STARTUP_BOUND_MS }));
       if (AGENT_API_SCENARIO) normalResult.checks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, automation, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
 
       if (!AVATAR_SCENARIO && !CONVERSATION_SCENARIO && !PLUGIN_STYLE_SCENARIO && !COMPOSER_SCENARIO) {
-      // A separate contained process proves that safe mode prevents the same
-      // project from exposing a live runtime surface.
+      // Stopping the contained normal app closes its site-browser window too.
+      // A separate process proves safe mode against the same fixture.
       await terminateContained(app, 'Tauri WebView2');
       app = undefined;
       const safeModeMinimumGeneration = automation.generation;
@@ -1108,6 +1112,7 @@ wire_api = "responses"
           harness: { fixture, ownedChild: app }, mode: 'safe', freshSafe: SAFE_ONLY,
           commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot });
     const safeChecks = safeResult.checks;
+    if (DEFAULT_SHELL_SCENARIO) safeChecks.push(...await runSiteBrowserWebview2Proof({ automation, safe: true, fixture, startupBoundMs: STARTUP_BOUND_MS }));
     if (AGENT_API_SCENARIO) safeChecks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, safe: true, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
     if (!AGENT_API_SCENARIO) assertPrimeRuntimeWasNotLaunched(fixture);
     passReport = {

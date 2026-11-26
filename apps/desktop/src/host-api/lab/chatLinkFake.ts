@@ -1,4 +1,5 @@
 import { CHAT_LINK_MAX_BYTES, type ChatLinkErrorCode, type ChatOpenLinkResultV1 } from '../../../../../contracts/chat-link-v1';
+import { SITE_BROWSER_OPEN_LINK, type SiteBrowserOpenLinkRequestV1 } from '../../../../../contracts/site-browser-v1';
 import { get } from 'svelte/store';
 import { toasts } from '../../lib/ui/toast.svelte';
 import { t } from '../../features/locale/language';
@@ -14,6 +15,7 @@ import type { LabState } from './labState';
  */
 export interface LabChatLinksRecord {
   calls: { url: string; host: string }[];
+  embedded: string[];
 }
 
 declare global {
@@ -24,6 +26,13 @@ declare global {
 }
 
 const requestSchema = object({ url: string, language: option(enumOf(['en', 'ru'])) });
+const embeddedSchema = object({ url: string, language: enumOf(['en', 'ru']) });
+
+function hostIsInternal(hostname: string): boolean {
+  return hostname === 'tauri.localhost' || hostname.endsWith('.tauri.localhost')
+    || hostname === 'piui-plugin.localhost' || hostname.endsWith('.piui-plugin.localhost')
+    || hostname === 'asset.localhost' || hostname === 'ipc.localhost';
+}
 
 const refusal = (code: ChatLinkErrorCode): { readonly code: ChatLinkErrorCode } => ({ code });
 
@@ -42,13 +51,28 @@ function validLink(value: string): URL | undefined {
 
 export function chatLinkHandlers(state: LabState): LabHandlers {
   return {
+    [SITE_BROWSER_OPEN_LINK]: (args): boolean => {
+      const request = decodeArgument<SiteBrowserOpenLinkRequestV1>(args, 'request', embeddedSchema);
+      if (state.safeMode) throw { code: 'UNAVAILABLE' };
+      const url = validLink(request.url);
+      const hostname = url?.hostname.replace(/\.+$/, '') ?? '';
+      if (!url || hostIsInternal(hostname) || (typeof window !== 'undefined' && url.origin === window.location.origin)) {
+        throw { code: 'INVALID_ADDRESS' };
+      }
+      if (typeof window !== 'undefined') {
+        const record = (window.__piuiLabChatLinks ??= { calls: [], embedded: [] });
+        record.embedded.push(url.href);
+      }
+      toasts.show({ title: get(t)('Would open {0}', [url.hostname]) });
+      return true;
+    },
     chat_open_link_v1: (args): ChatOpenLinkResultV1 => {
       const request = decodeArgument<{ url: string; language?: 'en' | 'ru' | null }>(args, 'request', requestSchema);
       if (state.safeMode) throw refusal('SAFE_MODE');
       const url = validLink(request.url);
       if (url === undefined) throw refusal('INVALID_LINK');
       if (typeof window !== 'undefined') {
-        const record = (window.__piuiLabChatLinks ??= { calls: [] });
+        const record = (window.__piuiLabChatLinks ??= { calls: [], embedded: [] });
         record.calls.push({ url: url.href, host: url.hostname });
       }
       toasts.show({ title: get(t)('Would open {0}', [url.hostname]) });

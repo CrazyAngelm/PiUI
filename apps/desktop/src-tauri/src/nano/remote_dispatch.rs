@@ -93,6 +93,16 @@ pub(crate) const SHELL_CONTRACTS: ShellContracts = ShellContracts {
     models: 19,
 };
 
+#[cfg(test)]
+#[test]
+fn remote_workbench_cannot_open_the_local_site_browser() {
+    let arguments = json!({ "request": { "url": "https://example.org/", "language": "en" } });
+    assert!(matches!(
+        admit("site_browser_open_link_v1", &arguments),
+        Err(Refusal::NotAllowed)
+    ));
+}
+
 /// Why a request was not admitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Refusal {

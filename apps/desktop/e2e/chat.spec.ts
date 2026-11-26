@@ -52,6 +52,34 @@ test.describe('new chat', () => {
     await expect(page.getByRole('button', { name: 'GPT Lab 5 Codex High' })).toBeVisible();
   });
 
+  test('keyboard activation opens a chat link through the built-in browser', async ({ lab, page }) => {
+    await lab.open();
+    await page.evaluate(async (path) => {
+      const { workspaceHost }: typeof import('../src/host-api/workspaceClient') = await import(path);
+      const request = workspaceHost.request;
+      workspaceHost.request = async (command) => {
+        const result = await request(command);
+        if (command.type !== 'openSession' || result.type !== 'session') return result;
+        return { ...result, snapshot: { ...result.snapshot, blocks: [...result.snapshot.blocks, {
+          id: 'site-browser-link',
+          kind: 'assistant',
+          status: 'complete',
+          label: 'Assistant',
+          text: '[Browser fixture](https://example.com/docs?q=1)',
+        }] } };
+      };
+    }, '/src/host-api/workspaceClient.ts');
+    await lab.chat(/Route host calls through one transport/).click();
+    const link = page.getByRole('link', { name: 'Browser fixture' });
+    await link.focus();
+    await page.keyboard.press('Enter');
+    await expect(lab.toast('Would open example.com')).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.__piuiLabChatLinks)).toEqual({
+      calls: [],
+      embedded: ['https://example.com/docs?q=1'],
+    });
+  });
+
   test('a restricted project asks for trust instead of starting', async ({ lab, page }) => {
     await lab.open();
     const composer = home(page);

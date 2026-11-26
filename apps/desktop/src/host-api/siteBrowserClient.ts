@@ -2,11 +2,18 @@ import {
   SITE_BROWSER_ACTION,
   SITE_BROWSER_CHANGED,
   SITE_BROWSER_DOWNLOAD_BLOCKED,
+  SITE_BROWSER_OPEN_LINK,
   SITE_BROWSER_POPUP_BLOCKED,
   type SiteBrowserAction,
   type SiteBrowserSnapshot,
+  type SiteBrowserOpenLinkRequestV1,
+  type SiteBrowserOpenLinkResultV1,
 } from '../../../../contracts/site-browser-v1';
 import { desktopAvailable, hostInvoke, hostListen, hostRemote } from './transport';
+
+export function openSiteBrowserLink(request: SiteBrowserOpenLinkRequestV1): Promise<SiteBrowserOpenLinkResultV1> {
+  return hostInvoke(SITE_BROWSER_OPEN_LINK, { request });
+}
 
 export function browserAction(request: SiteBrowserAction): Promise<SiteBrowserSnapshot> {
   if (!desktopAvailable && !hostRemote) return labAction(request);
