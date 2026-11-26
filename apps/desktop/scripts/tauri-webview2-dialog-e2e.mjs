@@ -1100,6 +1100,7 @@ wire_api = "responses"
       browserDock: (action) => ownedWindowOperation(['--browser-dock', action]),
     };
     let normalResult = { checks: [], screenshots: [] };
+    let dockMeasurements;
     if (!SAFE_ONLY) {
       const apiWorkspace = AGENT_API_SCENARIO ? await setupAgentWorkspace(agentConnection, fixture.primeProjectCanonical) : undefined;
       normalResult = AGENT_API_SCENARIO ? { checks: [], cleanup: {workspaceId: apiWorkspace} }
@@ -1110,12 +1111,16 @@ wire_api = "responses"
         : await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
             harness: { fixture, ownedChild: app }, mode: 'normal',
             commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot });
-      if (DEFAULT_SHELL_SCENARIO) normalResult.checks.push(...await runSiteBrowserWebview2Proof({
-        automation, safe: false, fixture, browserDock: workspaceCallbacks.browserDock,
-        resizeWindow: workspaceCallbacks.resizeWindow, startupBoundMs: STARTUP_BOUND_MS,
-        workspaceId: normalResult.cleanup.workspaceId,
-        formDialog: (action) => ownedWindowOperation(['--browser-form', action]),
-      }));
+      if (DEFAULT_SHELL_SCENARIO) {
+        const browser = await runSiteBrowserWebview2Proof({
+          automation, safe: false, fixture, browserDock: workspaceCallbacks.browserDock,
+          resizeWindow: workspaceCallbacks.resizeWindow, startupBoundMs: STARTUP_BOUND_MS,
+          workspaceId: normalResult.cleanup.workspaceId,
+          formDialog: (action) => ownedWindowOperation(['--browser-form', action]),
+        });
+        normalResult.checks.push(...browser.checks);
+        dockMeasurements = browser.dockMeasurements;
+      }
       if (AGENT_API_SCENARIO) normalResult.checks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, automation, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
 
       if (!AVATAR_SCENARIO && !CONVERSATION_SCENARIO && !PLUGIN_STYLE_SCENARIO && !COMPOSER_SCENARIO) {
@@ -1149,7 +1154,10 @@ wire_api = "responses"
           harness: { fixture, ownedChild: app }, mode: 'safe', freshSafe: SAFE_ONLY,
           commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot });
     const safeChecks = safeResult.checks;
-    if (DEFAULT_SHELL_SCENARIO) safeChecks.push(...await runSiteBrowserWebview2Proof({ automation, safe: true, fixture, startupBoundMs: STARTUP_BOUND_MS }));
+    if (DEFAULT_SHELL_SCENARIO) {
+      const browser = await runSiteBrowserWebview2Proof({ automation, safe: true, fixture, startupBoundMs: STARTUP_BOUND_MS });
+      safeChecks.push(...browser.checks);
+    }
     if (AGENT_API_SCENARIO) safeChecks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, safe: true, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
     if (!AGENT_API_SCENARIO) assertPrimeRuntimeWasNotLaunched(fixture);
     passReport = {
@@ -1159,6 +1167,7 @@ wire_api = "responses"
       native: normalResult.native,
       timings: { normal: normalResult.timings, safe: safeResult.timings },
       ownedWindowMeasurements,
+      dockMeasurements,
       screenshots: [...(normalResult.screenshots ?? []), ...(safeResult.screenshots ?? [])],
       webviewVersion: automation.currentPage?.webviewVersion ?? 'unknown',
       executableSha256,
