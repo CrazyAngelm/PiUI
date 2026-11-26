@@ -4,6 +4,17 @@ All notable changes to Nano Desktop (formerly PiUI) are documented here.
 
 Nano Desktop is currently a developer preview. Versions before 1.0 may change without a stable migration promise; changes to typed host contracts remain versioned under `contracts/`.
 
+## [0.3.16] - 2026-11-27
+
+### Added
+
+- **Computer Use is visible in local Claude Code chats.** The chat shows when Computer Use is active. On Windows, a ring follows the pointer during agent actions.
+- **Resume a browser form after a manual step on Windows.** In a local Claude Code chat, approve the site and one text field, finish your step, then send Ready so the agent can fill the approved field in the original tab.
+
+### Changed
+
+- **Chat links open inside Nano Desktop.** On Windows, the browser opens beside the chat and keeps its tabs when the panel is closed.
+
 ## [0.3.15] - 2026-11-27
 
 ### Fixed
@@ -438,7 +449,8 @@ PiUI is now a desktop workbench for native agent harnesses and multi-agent pipel
 - Added cache-first session discovery, bounded transcript rendering, explicit project trust, personal chats, and typed local Pi RPC streaming.
 - Added safe rebuildable indexing, versioned host contracts, extension manifest validation, fake runtime scenarios, and platform/security foundations.
 
-[Unreleased]: https://github.com/CrazyAngelm/PiUI/compare/v0.3.15...HEAD
+[Unreleased]: https://github.com/CrazyAngelm/PiUI/compare/v0.3.16...HEAD
+[0.3.16]: https://github.com/CrazyAngelm/PiUI/compare/v0.3.15...v0.3.16
 [0.3.15]: https://github.com/CrazyAngelm/PiUI/compare/v0.3.14...v0.3.15
 [0.3.14]: https://github.com/CrazyAngelm/PiUI/compare/v0.3.13...v0.3.14
 [0.3.13]: https://github.com/CrazyAngelm/PiUI/compare/v0.3.12...v0.3.13
