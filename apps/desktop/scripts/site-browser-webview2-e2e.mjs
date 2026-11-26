@@ -81,6 +81,7 @@ async function startSite() {
         if (firstConnection) firstConnection.writeHead(204).end();
         break;
       case '/form':
+        observations.set(`form:${url.searchParams.get('tab')}:requested`, true);
         response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(`
           <!doctype html><meta charset="utf-8"><title>Form fixture</title>
           <form>
@@ -161,7 +162,7 @@ function assertSiteProfile(fixture) {
 }
 
 export async function runSiteBrowserWebview2Proof({
-  automation, safe, fixture, browserDock, resizeWindow, startupBoundMs, workspaceId, confirmForm,
+  automation, safe, fixture, browserDock, resizeWindow, startupBoundMs, workspaceId, formDialog,
 }) {
   const site = await startSite();
   const invoke = (url) => automation.evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(OPEN_LINK)}, {
@@ -209,27 +210,54 @@ export async function runSiteBrowserWebview2Proof({
     const { id: sessionId } = initial.session;
     const snapshot = async () => (await workspace({ type: 'snapshot', sessionId })).snapshot;
     const replyCount = (current) => [...JSON.stringify(current.blocks).matchAll(/BROWSER_FORM_RESULT/g)].length;
-    async function send(text, confirm = false) {
+    const enqueue = (text) => ipc('workspace_composer_v19', { command: {
+      type: 'send', sessionId, requestId: randomUUID(), text, mode: 'prompt', attachments: [],
+    } });
+    async function inspectApproval(proposal) {
+      const dialog = await waitFor(async () => {
+        const reading = await formDialog('read');
+        return reading.status === 'shown' ? reading : null;
+      }, 'the native approval details');
+      const canonical = new URL(proposal.url);
+      assert.equal(dialog.details, `Адрес:\r\n${canonical.href}\r\n\r\nПоле:\r\nОрганизация\r\n\r\nЗначение:\r\n${proposal.value}`);
+      assert(!site.observations.has(`form:${canonical.searchParams.get('tab')}:requested`),
+        'The browser requested the site before native approval.');
+    }
+    async function send(text, beforeReply) {
       const before = replyCount(await snapshot());
-      await ipc('workspace_composer_v19', { command: {
-        type: 'send', sessionId, requestId: randomUUID(), text, mode: 'prompt', attachments: [],
-      } });
-      if (confirm) await waitFor(async () => (await confirmForm()).status === 'confirmed' ? true : null, 'native form approval');
+      await enqueue(text);
+      if (beforeReply) await beforeReply();
       const result = await waitFor(async () => {
         const current = await snapshot();
         return replyCount(current) > before && current.session.status === 'idle' ? current : null;
       }, 'the end of the Claude form-tool turn');
       return JSON.stringify(result.blocks.filter((block) => JSON.stringify(block).includes('BROWSER_FORM_RESULT')).at(-1));
     }
-    const tool = (args, confirm) => send('fixture-browser-form ' + JSON.stringify(args), confirm);
+    const toolPrompt = (args) => 'fixture-browser-form ' + JSON.stringify(args);
+    const tool = (args, answer) => send(toolPrompt(args), answer && (async () => {
+      await inspectApproval(args);
+      assert.equal((await formDialog(answer)).status, 'answered');
+    }));
     const proposed = 'Approved organization';
-    const open = (tab) => tool({ op: 'open', url: site.origin + '/form?tab=' + tab, field: 'organization', value: proposed }, true);
+    const proposal = (tab, parameters = '', value = proposed) =>
+      ({ op: 'open', url: site.origin + '/form?tab=' + tab + parameters, field: 'organization', value });
+    const open = (tab) => tool(proposal(tab), 'approve');
     const siteSnapshot = (tab) => {
       site.actions.set(tab, 'snapshot');
       return observed(`form:${tab}:snapshot`);
     };
     const ok = /BROWSER_FORM_RESULT.*ok\\?":true/;
+    let closed = false;
     try {
+      const declined = proposal('declined', '&next=' + 'Ж'.repeat(200), 'Élodie '.repeat(1024) + 'Север');
+      assert.match(await tool(declined, 'cancel'), /not-approved/);
+      assert(!site.observations.has('form:declined:requested'), 'The browser opened a declined address.');
+      const credentials = proposal('credentials');
+      credentials.url = credentials.url.replace('://', '://@');
+      assert.match(await tool(credentials), /invalid-address/);
+      assert.match(await tool(proposal('hidden-control', '', 'Север\u202eLtd')), /invalid-value/);
+      assert(!site.observations.has('form:hidden-control:requested'), 'The hidden text triggered navigation.');
+
       assert.match(await open('owned'), ok);
       assert.match(await tool({ op: 'fill' }), /awaiting-person/);
       site.actions.set('owned', 'manual');
@@ -253,10 +281,19 @@ export async function runSiteBrowserWebview2Proof({
       await observed('form:replacement:loaded');
       assert.match(await send('Готово'), /document-changed/);
       assert.deepEqual(await siteSnapshot('replacement'), { manual: '', organization: '' }, 'The host wrote in a replacement document.');
-      return ['webview2-claude-form-handoff-after-local-ready', 'webview2-form-keeps-manual-input-and-bound-tab',
-        'webview2-form-refuses-occupied-field-and-replacement-document'];
-    } finally {
+      const pending = proposal('closed-session');
+      await enqueue(toolPrompt(pending));
+      await inspectApproval(pending);
       await workspace({ type: 'closeSession', sessionId });
+      closed = true;
+      await waitFor(async () => (await formDialog('read')).status === 'waiting' ? true : null,
+        'closing the owned native approval with the session');
+      assert(!site.observations.has('form:closed-session:requested'), 'Closing the session opened the pending site.');
+      return ['webview2-claude-form-handoff-after-local-ready', 'webview2-form-keeps-manual-input-and-bound-tab',
+        'webview2-form-refuses-occupied-field-and-replacement-document',
+        'webview2-form-approval-displays-full-address-and-value-and-retires-on-close'];
+    } finally {
+      if (!closed) await workspace({ type: 'closeSession', sessionId });
     }
   }
   try {

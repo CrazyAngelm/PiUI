@@ -109,7 +109,7 @@ pub(crate) fn validate_link(raw: &str) -> Result<Url, ChatLinkError> {
 }
 
 /// Holds the single confirmation slot until dropped.
-struct DialogTurn<'a>(&'a AtomicBool);
+pub(crate) struct DialogTurn<'a>(&'a AtomicBool);
 
 impl<'a> DialogTurn<'a> {
     fn acquire(slot: &'a AtomicBool) -> Option<Self> {
@@ -126,6 +126,11 @@ impl Drop for DialogTurn<'_> {
 }
 
 static DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
+
+#[cfg(windows)]
+pub(crate) fn browser_confirmation_turn() -> Option<DialogTurn<'static>> {
+    DialogTurn::acquire(&DIALOG_OPEN)
+}
 
 /// Validation, the single dialog slot, the question and the launch, with the
 /// dialog and the launcher injected so the order of the checks is testable.

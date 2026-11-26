@@ -1114,7 +1114,7 @@ wire_api = "responses"
         automation, safe: false, fixture, browserDock: workspaceCallbacks.browserDock,
         resizeWindow: workspaceCallbacks.resizeWindow, startupBoundMs: STARTUP_BOUND_MS,
         workspaceId: normalResult.cleanup.workspaceId,
-        confirmForm: () => ownedWindowOperation(['--confirm-browser-form']),
+        formDialog: (action) => ownedWindowOperation(['--browser-form', action]),
       }));
       if (AGENT_API_SCENARIO) normalResult.checks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, automation, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
 

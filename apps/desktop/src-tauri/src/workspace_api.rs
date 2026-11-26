@@ -5772,33 +5772,26 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                 } => {
                     let runtime = Arc::clone(&runtime);
                     #[cfg(windows)]
-                    let form = state.browser_form.as_ref().and_then(|form| {
+                    let mut form = state.browser_form.as_ref().and_then(|form| {
                         form.begin(request_id.clone())
-                            .map(|cancellation| (form.clone(), cancellation))
+                            .map(|request| (form.clone(), request))
                     });
                     #[cfg(not(windows))]
                     let _ = operation;
                     let task = tokio::spawn(async move {
                         #[cfg(windows)]
-                        let result = match form.as_ref() {
-                            Some((form, cancellation)) => {
-                                form.handle(&request_id, operation, cancellation.clone())
-                                    .await
-                            }
+                        let result = match form.as_mut() {
+                            Some((form, request)) => form.handle(request, operation).await,
                             None => serde_json::json!({"ok": false, "code": "unavailable"}),
                         };
                         #[cfg(not(windows))]
                         let result = serde_json::json!({"ok": false, "code": "unavailable"});
-                        let sent = runtime
-                            .browser_form_response(request_id.clone(), result)
-                            .await;
+                        let sent = runtime.browser_form_response(request_id, result).await;
                         #[cfg(not(windows))]
                         let _ = sent;
                         #[cfg(windows)]
-                        if sent.is_err()
-                            && let Some((form, _)) = form
-                        {
-                            form.cancel(&request_id);
+                        if let Some((_, request)) = form.as_mut() {
+                            request.response_sent(sent.is_ok());
                         }
                     });
                     if let Ok(mut tasks) = state.coordinator_tasks.lock() {

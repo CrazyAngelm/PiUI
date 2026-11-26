@@ -636,21 +636,26 @@ async fn run_composer_from(
                         && crate::site_browser::form::is_ready_message(&text)
                 });
                 #[cfg(windows)]
-                let staged = match form {
-                    Some(form) => {
-                        let gate = live.composer_gate.lock().await;
-                        let id = (!host.workspace.record(&id)?.composer.contains(&request_id))
-                            .then(|| request_id.clone());
-                        Some((form, gate, id))
-                    }
+                let gate = match form {
+                    Some(_) => Some(live.composer_gate.lock().await),
                     None => None,
+                };
+                #[cfg(windows)]
+                let staged = if let Some(form) = form
+                    && !host.workspace.record(&id)?.composer.contains(&request_id)
+                {
+                    Some((form, request_id.clone()))
+                } else {
+                    None
                 };
                 host.workspace
                     .enqueue_message(&id, request_id, text, &attachments)?;
                 #[cfg(windows)]
-                if let Some((form, _gate, Some(request_id))) = staged {
+                if let Some((form, request_id)) = staged {
                     form.stage_ready(request_id);
                 }
+                #[cfg(windows)]
+                drop(gate);
                 if !host.workspace.record(&id)?.composer.paused {
                     live.composer_paused.store(false, Ordering::Release);
                 }
