@@ -118,7 +118,11 @@ pub(super) fn set_open<R: Runtime>(
         }
     };
     let focus = |open| {
-        if let Some(target) = if open { Some(&chrome) } else { workbench.as_ref() } {
+        if let Some(target) = if open {
+            Some(&chrome)
+        } else {
+            workbench.as_ref()
+        } {
             let _ = target.set_focus();
         }
     };
