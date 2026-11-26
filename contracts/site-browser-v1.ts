@@ -11,6 +11,8 @@ export interface SiteBrowserOpenLinkRequestV1 {
 export type SiteBrowserOpenLinkResultV1 = boolean;
 
 export const SITE_BROWSER_OPEN = 'site_browser_open_v1';
+/** Windows-only. The trusted browser toolbar can close the dock without dropping tabs. */
+export const SITE_BROWSER_HIDE = 'site_browser_hide_v1';
 export const SITE_BROWSER_ACTION = 'site_browser_action_v1';
 export const SITE_BROWSER_CHANGED = 'piui://site-browser-changed-v1';
 export const SITE_BROWSER_POPUP_BLOCKED = 'piui://site-browser-popup-blocked-v1';

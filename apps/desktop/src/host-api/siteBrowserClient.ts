@@ -2,6 +2,7 @@ import {
   SITE_BROWSER_ACTION,
   SITE_BROWSER_CHANGED,
   SITE_BROWSER_DOWNLOAD_BLOCKED,
+  SITE_BROWSER_HIDE,
   SITE_BROWSER_OPEN_LINK,
   SITE_BROWSER_POPUP_BLOCKED,
   type SiteBrowserAction,
@@ -13,6 +14,10 @@ import { desktopAvailable, hostInvoke, hostListen, hostRemote } from './transpor
 
 export function openSiteBrowserLink(request: SiteBrowserOpenLinkRequestV1): Promise<SiteBrowserOpenLinkResultV1> {
   return hostInvoke(SITE_BROWSER_OPEN_LINK, { request });
+}
+
+export function hideSiteBrowser(): Promise<void> {
+  return hostInvoke(SITE_BROWSER_HIDE);
 }
 
 export function browserAction(request: SiteBrowserAction): Promise<SiteBrowserSnapshot> {

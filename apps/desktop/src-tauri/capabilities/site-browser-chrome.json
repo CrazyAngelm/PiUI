@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "site-browser-chrome",
-  "description": "Receives browser change events in the packaged toolbar only.",
+  "description": "Receives browser change events in the browser toolbar WebView only.",
   "webviews": ["site-browser-chrome"],
   "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
 }

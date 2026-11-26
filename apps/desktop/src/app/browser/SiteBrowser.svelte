@@ -9,7 +9,7 @@
   import { tick } from 'svelte';
   import type { SiteBrowserAction, SiteBrowserSnapshot } from '../../../../../contracts/site-browser-v1';
   import { language, t } from '../../features/locale/language';
-  import { browserAction, onBrowserChange, onBrowserNotice } from '../../host-api/siteBrowserClient';
+  import { browserAction, hideSiteBrowser, onBrowserChange, onBrowserNotice } from '../../host-api/siteBrowserClient';
   import { desktopAvailable } from '../../host-api/transport';
   import { IconButton } from '../../lib/ui';
 
@@ -21,9 +21,14 @@
   let editing = $state(false);
   let notice = $state('');
   let revision = 0;
+  const docked = desktopAvailable && typeof navigator !== 'undefined' && /^Win/.test(navigator.platform);
 
   $effect(() => {
     if (!editing) address = active?.url ?? '';
+  });
+
+  $effect(() => {
+    addressField?.focus();
   });
 
   $effect(() => {
@@ -42,7 +47,7 @@
       if (disposed) unlisten();
       else stopNotices = unlisten;
     }).catch(() => { notice = 'Could not read browser tabs.'; });
-    void refresh().then(() => { if (!disposed) addressField?.focus(); });
+    void refresh();
     return () => {
       disposed = true;
       stopChanges?.();
@@ -91,7 +96,16 @@
     void run({ action: 'navigate', tab: snapshot.active, address: input });
   }
 
+  function hideDock(): void {
+    void hideSiteBrowser().catch(() => { notice = 'Could not complete the browser action.'; });
+  }
+
   function keydown(event: KeyboardEvent): void {
+    if (docked && event.key === 'Escape' && !event.defaultPrevented) {
+      event.preventDefault();
+      hideDock();
+      return;
+    }
     if (!event.ctrlKey && !event.metaKey) return;
     if (event.key.toLowerCase() === 'l') {
       event.preventDefault();
@@ -120,6 +134,11 @@
       {/each}
     </div>
     <IconButton label={$t('New tab')} title={$t('New tab')} size="sm" tooltip={false} onclick={() => void run({ action: 'new' })}><Plus /></IconButton>
+    {#if docked}
+      <div class="close-dock">
+        <IconButton label={$t('Close browser panel')} title={$t('Close browser panel')} size="sm" tooltip={false} onclick={hideDock}><X /></IconButton>
+      </div>
+    {/if}
   </div>
   <div class="navigation">
     {#if active}
@@ -161,6 +180,7 @@
   .tab-label { gap: 6px; padding: 0 7px; align-self: stretch; color: var(--piui-text); }
   .tab-label :global(svg) { flex: none; }
   .tab-label span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .close-dock { margin-inline-start: auto; flex: none; }
   .navigation { gap: 4px; }
   form { flex: 1; min-width: 0; }
   input {
