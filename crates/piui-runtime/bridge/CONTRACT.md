@@ -260,6 +260,28 @@ the adapter emits `unsupported-sessions-tool-resume`, registers no new tool,
 and refuses sessions calls without invoking the host. A saved sessions tool
 continues to work normally. Board and Fusion resume behavior is unchanged.
 
+## Site form handoff (v1)
+
+A Windows desktop host can opt an ordinary Claude Code session into the
+`browserForm` host tool. The seventh adapter factory argument is
+`browserFormRequest(operation, {signal?})`. Claude exposes it as
+`mcp__piui-workspace__browser_form` through the existing per-session server.
+
+`open` takes exactly `{op:"open",url,field,value}`. The field is
+`given-name`, `family-name`, or `organization`. The host shows those
+details to the person before opening a new site tab. The local composer
+advances that same session's approved step on delivery of a plain `Готово`
+or `Ready` message. `fill` takes exactly `{op:"fill"}` and applies the
+single approved value to the same field in the same document.
+
+The runner emits `browserFormRequest` with `requestId` and `operation`.
+The host derives the owning session from the emitting runtime and replies
+with `browserFormResponse` and `{requestId,result}`. Replies are
+`{ok:true}` or `{ok:false,code}`. A disconnected, interrupted or retired
+request emits `browserFormCancel` and its `requestId` before the pending
+bridge request is retired. A successful open ends its tool request while the
+session retains its pending handoff.
+
 ## File events (chat files)
 
 An additive event tells the host that a tool block touched a file, so the chat

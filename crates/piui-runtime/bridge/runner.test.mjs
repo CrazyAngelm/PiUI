@@ -128,6 +128,35 @@ test("sessions requests are opt-in, validated before the host and round-trip onc
   off.input.end();
 });
 
+test("browser form requests cannot carry a replacement field or outlive the MCP call", async () => {
+  const abort = new AbortController();
+  let refused;
+  const bridge = harness(async (_config, _emit, _coordinator, _board, _sidekick, _sessions, form) => ({
+    prompt() {
+      void form({ op: "fill", field: "organization" }).catch(error => { refused = error.bridgeCode; });
+      void form({ op: "fill" }, { signal: abort.signal }).catch(() => {});
+      return { accepted: true };
+    },
+    dispose() {},
+  }));
+  bridge.send({ ...config, params: { ...config.params, hostTools: ["browserForm"] } });
+  await bridge.wait(1);
+  bridge.send({ id: "prompt", method: "prompt", params: {} });
+  await bridge.wait(3);
+  assert.equal(refused, "invalid-operation");
+  const requests = bridge.frames.filter(frame => frame.event?.type === "browserFormRequest");
+  assert.equal(requests.length, 1);
+  const { requestId } = requests[0].event;
+  assert.deepEqual(requests[0].event.operation, { op: "fill" });
+  abort.abort();
+  await bridge.wait(4);
+  assert.deepEqual(bridge.frames.at(-1).event, { type: "browserFormCancel", requestId });
+  bridge.send({ id: "answer", method: "browserFormResponse", params: { requestId, result: { ok: true } } });
+  await bridge.wait(5);
+  assert.equal(bridge.frames.at(-1).error.code, "stale-browser-form-request");
+  bridge.input.end();
+});
+
 test("initializes once and rejects a duplicate", async () => {
   let created = 0;
   const bridge = harness(async () => { created += 1; return { dispose() {} }; });

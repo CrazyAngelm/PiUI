@@ -19,7 +19,7 @@ use std::sync::Arc;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use super::{NanoHost, commands};
 use crate::api;
@@ -393,7 +393,13 @@ pub(crate) async fn run(app: &AppHandle, admitted: Admitted) -> Result<Value, Va
         }
         Admitted::Composer(command) => {
             let state = state!();
-            to_json(composer::workspace_composer_v19(app.clone(), state, command).await)
+            let app = app.clone();
+            to_json(
+                composer::run_composer(state.inner(), command, move |id| {
+                    let _ = app.emit("piui://composer-v19", id);
+                })
+                .await,
+            )
         }
         Admitted::HarnessModels(request) => {
             let state = state!();

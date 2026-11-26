@@ -893,6 +893,8 @@ struct LiveState {
     network_access: bool,
     orchestrated: bool,
     sessions_admitted: bool,
+    #[cfg(windows)]
+    browser_form: Option<Arc<crate::site_browser::form::Handoff>>,
     /// Non-fatal notices (host-decided or reported by the adapter).
     notices: Mutex<Vec<NativeNoticeCode>>,
     /// The adapter vets the text of its turn errors (fixed summaries, never
@@ -1232,6 +1234,8 @@ struct SpawnedStart {
     network_access: bool,
     orchestrated: bool,
     sessions_admitted: bool,
+    #[cfg(windows)]
+    browser_form: Option<crate::site_browser::form::Factory>,
     publisher: WorkspaceEventPublisher,
     created: bool,
     /// Where this session's chat files may be served from (ADR-074).
@@ -1339,6 +1343,8 @@ struct WorkspaceHostInner {
     fusion: Mutex<Option<Arc<dyn FusionSessionHooks>>>,
     /// Linked-chat broker; unset until app setup.
     session_links: Mutex<Option<Arc<dyn SessionLinksHooks>>>,
+    #[cfg(windows)]
+    browser_forms: Mutex<Option<crate::site_browser::form::Factory>>,
     /// Interactive-answer instructions for direct chats (ADR-067).
     interactive_answers: AtomicBool,
     /// The Nano account, relay and launch data (ADR-048); unset until the app
@@ -1393,6 +1399,8 @@ impl WorkspaceHost {
                 board: Mutex::new(None),
                 fusion: Mutex::new(None),
                 session_links: Mutex::new(None),
+                #[cfg(windows)]
+                browser_forms: Mutex::new(None),
                 interactive_answers: AtomicBool::new(false),
                 nano: Mutex::new(None),
                 acp: AcpAgents::open(app_data_dir)?,
@@ -1433,6 +1441,13 @@ impl WorkspaceHost {
     pub(crate) fn set_board_hooks(&self, hooks: Arc<dyn BoardSessionHooks>) {
         if let Ok(mut slot) = self.inner.board.lock() {
             *slot = Some(hooks);
+        }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn set_browser_forms(&self, factory: crate::site_browser::form::Factory) {
+        if let Ok(mut slot) = self.inner.browser_forms.lock() {
+            *slot = Some(factory);
         }
     }
 
@@ -2231,6 +2246,15 @@ impl WorkspaceHost {
         let fusion = self
             .fusion_hooks()
             .and_then(|hooks| hooks.setup(&record.id));
+        #[cfg(windows)]
+        let browser_form = (!managed
+            && !orchestrated
+            && fusion.is_none()
+            && !record.nano_connector
+            && record.harness == HarnessKind::ClaudeCode
+            && record.permission_mode == PermissionMode::Native)
+            .then(|| self.inner.browser_forms.lock().ok()?.clone())
+            .flatten();
         let sidekick = fusion.as_ref().is_some_and(|setup| setup.sidekick);
         // A shell-less Claude Code sidekick gets an enforced built-in tool set
         // (no shell, no MCP), new and reopened alike (ADR-076).
@@ -2285,6 +2309,10 @@ impl WorkspaceHost {
         if sessions_admitted {
             host_tools.push(HostTool::Sessions);
             instructions = merge_instructions(instructions, Some(LINKED_CHATS_INSTRUCTIONS));
+        }
+        #[cfg(windows)]
+        if browser_form.is_some() {
+            host_tools.push(HostTool::BrowserForm);
         }
         if self.inner.interactive_answers.load(Ordering::Relaxed)
             && !sidekick
@@ -2478,6 +2506,8 @@ impl WorkspaceHost {
                 network_access,
                 orchestrated,
                 sessions_admitted,
+                #[cfg(windows)]
+                browser_form,
                 publisher,
                 created,
                 files_scope,
@@ -2528,6 +2558,8 @@ impl WorkspaceHost {
             network_access,
             orchestrated,
             sessions_admitted,
+            #[cfg(windows)]
+            browser_form,
             publisher,
             created: _,
             files_scope,
@@ -2568,6 +2600,8 @@ impl WorkspaceHost {
             network_access,
             orchestrated,
             sessions_admitted,
+            #[cfg(windows)]
+            browser_form: browser_form.map(|factory| factory()),
             notices: Mutex::new(notices),
             reports_turn_cause: matches!(record.harness, HarnessKind::Pi | HarnessKind::Nano),
             turn_cause: Mutex::new(TurnCause::default()),
@@ -2824,6 +2858,10 @@ impl WorkspaceHost {
             .ok_or_else(WorkspaceError::closed)?;
         let _admission = state.composer_gate.lock().await;
         let revoked = self.inner.computer_use.revoke(session_id);
+        #[cfg(windows)]
+        if let Some(form) = &state.browser_form {
+            form.revoke();
+        }
         runtime
             .interrupt()
             .await
@@ -5727,6 +5765,51 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                     }
                     continue;
                 }
+                NativeEvent::BrowserFormRequest {
+                    request_id,
+                    operation,
+                } => {
+                    let runtime = Arc::clone(&runtime);
+                    #[cfg(windows)]
+                    let mut form = state.browser_form.as_ref().and_then(|form| {
+                        form.begin(request_id.clone())
+                            .map(|request| (form.clone(), request))
+                    });
+                    #[cfg(not(windows))]
+                    let _ = operation;
+                    let task = tokio::spawn(async move {
+                        #[cfg(windows)]
+                        let result = match form.as_mut() {
+                            Some((form, request)) => form.handle(request, operation).await,
+                            None => serde_json::json!({"ok": false, "code": "unavailable"}),
+                        };
+                        #[cfg(not(windows))]
+                        let result = serde_json::json!({"ok": false, "code": "unavailable"});
+                        let sent = runtime.browser_form_response(request_id, result).await;
+                        #[cfg(not(windows))]
+                        let _ = sent;
+                        #[cfg(windows)]
+                        if let Some((_, request)) = form.as_mut() {
+                            request.response_sent(sent.is_ok());
+                        }
+                    });
+                    if let Ok(mut tasks) = state.coordinator_tasks.lock() {
+                        tasks.retain(|task| !task.is_finished());
+                        tasks.push(task);
+                    } else {
+                        task.abort();
+                    }
+                    continue;
+                }
+                NativeEvent::BrowserFormCancel { request_id } => {
+                    #[cfg(not(windows))]
+                    let _ = request_id;
+                    #[cfg(windows)]
+                    if let Some(form) = &state.browser_form {
+                        form.cancel(&request_id);
+                    }
+                    continue;
+                }
                 NativeEvent::SidekickRequest {
                     request_id,
                     operation,
@@ -5966,6 +6049,10 @@ fn board_unavailable_result() -> serde_json::Value {
 }
 
 fn abort_coordinator_tasks(state: &LiveState) {
+    #[cfg(windows)]
+    if let Some(form) = &state.browser_form {
+        form.revoke();
+    }
     if let Ok(mut tasks) = state.coordinator_tasks.lock() {
         for task in tasks.drain(..) {
             task.abort();

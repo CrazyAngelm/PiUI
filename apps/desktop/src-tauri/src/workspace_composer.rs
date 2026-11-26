@@ -522,6 +522,10 @@ impl WorkspaceHost {
                 };
             *lock(&state.composer_waiting)? = Some(generation);
             let epoch = self.person_message_epoch(id);
+            #[cfg(windows)]
+            if let Some(form) = &state.browser_form {
+                form.admit_ready(&item.id, &text);
+            }
             let result = runtime
                 .prompt_with_images(text, PromptMode::Prompt, images)
                 .await;
@@ -545,7 +549,7 @@ pub async fn workspace_composer_v19(
     state: State<'_, HostState>,
     command: ComposerCommand,
 ) -> Result<ComposerSnapshot, WorkspaceError> {
-    run_composer(state.inner(), command, move |id| {
+    run_composer_from(state.inner(), command, true, move |id| {
         let _ = app.emit("piui://composer-v19", id);
     })
     .await
@@ -556,6 +560,15 @@ pub async fn workspace_composer_v19(
 pub(crate) async fn run_composer(
     host: &HostState,
     command: ComposerCommand,
+    notify: impl Fn(&str) + Send + Sync + 'static,
+) -> Result<ComposerSnapshot, WorkspaceError> {
+    run_composer_from(host, command, false, notify).await
+}
+
+async fn run_composer_from(
+    host: &HostState,
+    command: ComposerCommand,
+    #[cfg_attr(not(windows), allow(unused_variables))] local: bool,
     notify: impl Fn(&str) + Send + Sync + 'static,
 ) -> Result<ComposerSnapshot, WorkspaceError> {
     if host.safe_mode {
@@ -616,8 +629,33 @@ pub(crate) async fn run_composer(
                     hooks.person_message(id.clone()).await;
                 }
             } else {
+                #[cfg(windows)]
+                let form = live.browser_form.as_ref().filter(|_| {
+                    local
+                        && attachments.is_empty()
+                        && crate::site_browser::form::is_ready_message(&text)
+                });
+                #[cfg(windows)]
+                let gate = match form {
+                    Some(_) => Some(live.composer_gate.lock().await),
+                    None => None,
+                };
+                #[cfg(windows)]
+                let staged = if let Some(form) = form
+                    && !host.workspace.record(&id)?.composer.contains(&request_id)
+                {
+                    Some((form, request_id.clone()))
+                } else {
+                    None
+                };
                 host.workspace
                     .enqueue_message(&id, request_id, text, &attachments)?;
+                #[cfg(windows)]
+                if let Some((form, request_id)) = staged {
+                    form.stage_ready(request_id);
+                }
+                #[cfg(windows)]
+                drop(gate);
                 if !host.workspace.record(&id)?.composer.paused {
                     live.composer_paused.store(false, Ordering::Release);
                 }

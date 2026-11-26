@@ -1,5 +1,8 @@
 //! A local toolbar and separate, unprivileged site views (ADR-081).
 
+#[cfg(windows)]
+pub(crate) mod form;
+
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::sync::atomic::AtomicBool;
@@ -50,6 +53,21 @@ pub struct SiteBrowser {
 struct Tabs {
     ids: Vec<u32>,
     active: Option<u32>,
+    #[cfg(windows)]
+    form_documents: std::collections::HashMap<u32, std::sync::Weak<form::Document>>,
+}
+
+#[cfg(windows)]
+impl Drop for Tabs {
+    fn drop(&mut self) {
+        for document in self
+            .form_documents
+            .values()
+            .filter_map(std::sync::Weak::upgrade)
+        {
+            document.revoke();
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -326,7 +344,7 @@ fn create_site_view<R: Runtime>(
     window: &Window<R>,
     profile: &Path,
     tab: u32,
-    url: Url,
+    target: LinkTarget,
 ) -> Result<(), SiteBrowserError> {
     let mut directories = std::fs::DirBuilder::new();
     directories.recursive(true);
@@ -341,16 +359,28 @@ fn create_site_view<R: Runtime>(
     let dev_url = window.app_handle().config().build.dev_url.clone();
     let popup_app = window.app_handle().clone();
     let download_app = popup_app.clone();
-    let builder = WebviewBuilder::new(tab_label(tab), WebviewUrl::External(url))
+    #[cfg(windows)]
+    let (navigation_document, loaded_document) = (target.document.clone(), target.document);
+    let builder = WebviewBuilder::new(tab_label(tab), WebviewUrl::External(target.url))
         .data_directory(profile.to_owned())
         .devtools(false)
-        .on_navigation(move |url| site_navigation(url, dev_url.as_ref()))
+        .on_navigation(move |url| {
+            #[cfg(windows)]
+            if let Some(document) = &navigation_document {
+                document.on_navigation(url);
+            }
+            site_navigation(url, dev_url.as_ref())
+        })
         .on_new_window(move |_, _| {
             signal(&popup_app, POPUP_BLOCKED);
             NewWindowResponse::Deny
         })
-        .on_page_load(|view, event| {
+        .on_page_load(move |view, event| {
             if event.event() == tauri::webview::PageLoadEvent::Finished {
+                #[cfg(windows)]
+                if let Some(document) = &loaded_document {
+                    document.on_loaded(event.url());
+                }
                 signal(view.app_handle(), CHANGED);
             }
         })
@@ -381,7 +411,9 @@ pub async fn site_browser_open_v1<R: Runtime>(
     if !SUPPORTED || host.safe_mode || host.is_shutting_down() {
         return Err(SiteBrowserError::Unavailable);
     }
-    open_browser(&app, &browser, &language, None).await
+    open_browser(&app, &browser, &language, None)
+        .await
+        .map(|_| ())
 }
 
 /// Opens a clicked chat link in the isolated browser. Only an unsupported OS
@@ -400,7 +432,7 @@ pub async fn site_browser_open_link_v1<R: Runtime>(
     if !SUPPORTED {
         return Ok(false);
     }
-    open_browser(&app, &browser, &request.language, Some(url)).await?;
+    open_browser(&app, &browser, &request.language, Some(url.into())).await?;
     Ok(true)
 }
 
@@ -409,8 +441,8 @@ async fn open_browser<R: Runtime>(
     app: &AppHandle<R>,
     browser: &SiteBrowser,
     _language: &str,
-    link: Option<Url>,
-) -> Result<(), SiteBrowserError> {
+    link: Option<LinkTarget>,
+) -> Result<Option<u32>, SiteBrowserError> {
     let mut tabs = browser.tabs.lock().await;
     let window = app
         .get_window(WINDOW)
@@ -428,16 +460,22 @@ async fn open_browser<R: Runtime>(
     let was_open = browser.dock_open.load(Ordering::Acquire);
     // Reserve the right half before adding a visible child WebView.
     dock::set_open(&window, browser, tabs.active, true)?;
-    if let Some(url) = link {
-        if let Err(error) = open_link_tab(browser, &mut tabs, &window, url) {
-            let _ = dock::set_open(&window, browser, tabs.active, was_open);
-            return Err(error);
+    let tab = if let Some(target) = link {
+        match open_link_tab(browser, &mut tabs, &window, target) {
+            Ok(tab) => Some(tab),
+            Err(error) => {
+                let _ = dock::set_open(&window, browser, tabs.active, was_open);
+                return Err(error);
+            }
         }
-    } else if tabs.active.is_none() {
-        browser.new_tab(&mut tabs);
-    }
+    } else {
+        if tabs.active.is_none() {
+            browser.new_tab(&mut tabs);
+        }
+        None
+    };
     signal(app, CHANGED);
-    Ok(())
+    Ok(tab)
 }
 
 #[cfg(not(windows))]
@@ -445,8 +483,8 @@ async fn open_browser<R: Runtime>(
     app: &AppHandle<R>,
     browser: &SiteBrowser,
     language: &str,
-    link: Option<Url>,
-) -> Result<(), SiteBrowserError> {
+    link: Option<LinkTarget>,
+) -> Result<Option<u32>, SiteBrowserError> {
     let mut tabs = browser.tabs.lock().await;
     let existing = app
         .get_window(WINDOW)
@@ -455,42 +493,64 @@ async fn open_browser<R: Runtime>(
         window.unminimize()?;
         window.set_focus()?;
         if let Some(url) = link {
-            open_link_tab(browser, &mut tabs, &window, url)?;
+            let tab = open_link_tab(browser, &mut tabs, &window, url)?;
             signal(app, CHANGED);
+            return Ok(Some(tab));
         }
-        return Ok(());
+        return Ok(None);
     }
 
     let window = create_browser_window(app, browser, language)?;
     let mut initial = Tabs::default();
     let result = match link {
-        Some(url) => open_link_tab(browser, &mut initial, &window, url),
+        Some(url) => open_link_tab(browser, &mut initial, &window, url).map(Some),
         None => {
             browser.new_tab(&mut initial);
-            Ok(())
+            Ok(None)
         }
     };
-    if let Err(error) = result.and_then(|()| window.show().map_err(Into::into)) {
-        let _ = window.destroy();
-        return Err(error);
-    }
+    let tab = match result.and_then(|tab| window.show().map(|()| tab).map_err(Into::into)) {
+        Ok(tab) => tab,
+        Err(error) => {
+            let _ = window.destroy();
+            return Err(error);
+        }
+    };
     *tabs = initial;
     signal(app, CHANGED);
-    Ok(())
+    Ok(tab)
+}
+
+struct LinkTarget {
+    url: Url,
+    #[cfg(windows)]
+    document: Option<std::sync::Arc<form::Document>>,
+}
+
+impl From<Url> for LinkTarget {
+    fn from(url: Url) -> Self {
+        Self {
+            url,
+            #[cfg(windows)]
+            document: None,
+        }
+    }
 }
 
 fn open_link_tab<R: Runtime>(
     browser: &SiteBrowser,
     tabs: &mut Tabs,
     window: &Window<R>,
-    url: Url,
-) -> Result<(), SiteBrowserError> {
+    target: LinkTarget,
+) -> Result<u32, SiteBrowserError> {
     let profile = browser
         .profile
         .as_deref()
         .ok_or(SiteBrowserError::Unavailable)?;
     let id = browser.next_id.fetch_add(1, Ordering::Relaxed);
-    if let Err(error) = create_site_view(window, profile, id, url)
+    #[cfg(windows)]
+    let form_document = target.document.as_ref().map(std::sync::Arc::downgrade);
+    if let Err(error) = create_site_view(window, profile, id, target)
         .and_then(|()| visibility(window, Some(id)).map_err(Into::into))
     {
         if let Some(view) = window.get_webview(&tab_label(id)) {
@@ -500,7 +560,11 @@ fn open_link_tab<R: Runtime>(
         return Err(error);
     }
     tabs.push(id);
-    Ok(())
+    #[cfg(windows)]
+    if let Some(document) = form_document {
+        tabs.form_documents.insert(id, document);
+    }
+    Ok(id)
 }
 
 #[cfg(not(windows))]
@@ -626,6 +690,14 @@ pub async fn site_browser_action_v1<R: Runtime>(
             if let Ok(view) = get_view(tab) {
                 view.close()?;
             }
+            #[cfg(windows)]
+            if let Some(document) = tabs
+                .form_documents
+                .remove(&tab)
+                .and_then(|document| document.upgrade())
+            {
+                document.revoke();
+            }
             tabs.ids.remove(position);
             if tabs.active == Some(tab) {
                 tabs.active = tabs.ids.get(position).or_else(|| tabs.ids.last()).copied();
@@ -652,7 +724,7 @@ pub async fn site_browser_action_v1<R: Runtime>(
                         .as_deref()
                         .ok_or(SiteBrowserError::Unavailable)?,
                     tab,
-                    url,
+                    url.into(),
                 )?,
             }
         }

@@ -950,6 +950,27 @@ pub enum HostTool {
     Sidekick,
     /// Linked chats (`SessionsToolOperationV1`, contracts/session-links-v1.ts).
     Sessions,
+    /// User-approved ordinary form input in a host-owned site tab.
+    BrowserForm,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BrowserFormField {
+    GivenName,
+    FamilyName,
+    Organization,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "camelCase", deny_unknown_fields)]
+pub enum BrowserFormOperation {
+    Open {
+        url: String,
+        field: BrowserFormField,
+        value: String,
+    },
+    Fill,
 }
 
 /// Who asked for one `sidekick` call, added by the bridge
@@ -1168,6 +1189,15 @@ pub enum NativeEvent {
     SessionsRequest {
         request_id: String,
         operation: Map<String, Value>,
+    },
+    /// The emitting live session owns this request. The operation carries no
+    /// session, tab, selector, script, or browser protocol authority.
+    BrowserFormRequest {
+        request_id: String,
+        operation: BrowserFormOperation,
+    },
+    BrowserFormCancel {
+        request_id: String,
     },
     /// A Fusion lead's `sidekick` tool call (shape-checked by the bridge;
     /// the host parses it again). Answer exactly once with
@@ -2448,6 +2478,21 @@ impl NativeRuntime {
         }
         self.request(
             "sessionsResponse",
+            json!({ "requestId": request_id, "result": result }),
+            REQUEST_TIMEOUT,
+            false,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn browser_form_response(
+        &self,
+        request_id: String,
+        result: Value,
+    ) -> Result<(), NativeRuntimeError> {
+        self.request(
+            "browserFormResponse",
             json!({ "requestId": request_id, "result": result }),
             REQUEST_TIMEOUT,
             false,
