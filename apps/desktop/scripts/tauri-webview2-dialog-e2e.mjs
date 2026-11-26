@@ -1066,6 +1066,7 @@ wire_api = "responses"
       resizeWindow: async ({ width, height }) => {
         await ownedWindowOperation(['--resize', String(width), String(height), '--resize-only']);
       },
+      browserDock: (action) => ownedWindowOperation(['--browser-dock', action]),
     };
     let normalResult = { checks: [], screenshots: [] };
     if (!SAFE_ONLY) {
@@ -1078,7 +1079,10 @@ wire_api = "responses"
         : await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
             harness: { fixture, ownedChild: app }, mode: 'normal',
             commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot });
-      if (DEFAULT_SHELL_SCENARIO) normalResult.checks.push(...await runSiteBrowserWebview2Proof({ automation, safe: false, fixture, startupBoundMs: STARTUP_BOUND_MS }));
+      if (DEFAULT_SHELL_SCENARIO) normalResult.checks.push(...await runSiteBrowserWebview2Proof({
+        automation, safe: false, fixture, browserDock: workspaceCallbacks.browserDock,
+        resizeWindow: workspaceCallbacks.resizeWindow, startupBoundMs: STARTUP_BOUND_MS,
+      }));
       if (AGENT_API_SCENARIO) normalResult.checks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, automation, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
 
       if (!AVATAR_SCENARIO && !CONVERSATION_SCENARIO && !PLUGIN_STYLE_SCENARIO && !COMPOSER_SCENARIO) {

@@ -197,6 +197,7 @@ export const shellRu: Readonly<Record<string, string>> = {
   "Browser toolbar": "Панель браузера",
   "Browser tabs": "Вкладки браузера",
   "Close browser tab": "Закрыть вкладку браузера",
+  "Close browser panel": "Закрыть панель браузера",
   "New tab": "Новая вкладка",
   "Forward": "Вперёд",
   "Reload page": "Обновить страницу",

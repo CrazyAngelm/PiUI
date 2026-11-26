@@ -7,7 +7,8 @@ import { join, relative } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const OPEN_LINK = 'site_browser_open_link_v1';
-const FIRST_PAGE = `<!doctype html><title>First site fixture</title><script src="/probe.js"></script>`;
+const FIRST_PAGE = `<!doctype html><title>First site fixture</title>
+<button>Site fixture page</button><script src="/probe.js"></script>`;
 
 async function startSite() {
   let secondLoaded = false;
@@ -33,17 +34,34 @@ async function startSite() {
         response.end(`
           (async () => {
             const tauri = window.__TAURI_INTERNALS__;
-            const observed = typeof tauri?.invoke !== 'function' ? 'unavailable'
-              : await tauri.invoke(${JSON.stringify(OPEN_LINK)}, {
+            async function probe(command, args) {
+              if (typeof tauri?.invoke !== 'function') return 'unavailable';
+              return tauri.invoke(command, args).then(() => 'allowed', () => 'denied');
+            }
+            const probes = {
+              link: probe(${JSON.stringify(OPEN_LINK)}, {
                   request: { url: location.origin + '/unexpected', language: 'en' },
-                }).then(() => 'allowed', () => 'denied');
-            await fetch('/site-authority?observed=' + observed);
+              }),
+              tabs: probe('site_browser_action_v1', { request: { action: 'read' } }),
+              events: probe('plugin:event|listen', { event: 'piui://site-browser-changed-v1',
+                target: { kind: 'Any' }, handler: tauri?.transformCallback?.(() => {}) ?? 0 }),
+            };
+            const results = await Promise.all(Object.entries(probes)
+              .map(async ([command, result]) => [command, await result]));
+            await fetch('/site-authority?' + new URLSearchParams(results));
+            function reportViewport() { return fetch('/site-width?value=' + innerWidth); }
+            addEventListener('resize', reportViewport);
+            await reportViewport();
             if ((await fetch('/first-tab-pending')).ok) await fetch('/first-tab-retained');
           })();
         `);
         break;
       case '/site-authority':
-        observations.set('site-authority', url.searchParams.get('observed'));
+        observations.set('site-authority', Object.fromEntries(url.searchParams));
+        response.writeHead(204).end();
+        break;
+      case '/site-width':
+        observations.set('site-width', Number(url.searchParams.get('value')));
         response.writeHead(204).end();
         break;
       case '/first-tab-pending':
@@ -89,14 +107,14 @@ function assertSiteProfile(fixture) {
   assert(readdirSync(actual).length > 0, 'WebView2 did not use the dedicated browser-profile.');
 }
 
-export async function runSiteBrowserWebview2Proof({ automation, safe, fixture, startupBoundMs }) {
+export async function runSiteBrowserWebview2Proof({ automation, safe, fixture, browserDock, resizeWindow, startupBoundMs }) {
   const site = await startSite();
   const invoke = (url) => automation.evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(OPEN_LINK)}, {
     request: { url: ${JSON.stringify(url)}, language: 'en' },
   }).then(opened => ({ opened }), error => ({ code: error.code }))`);
-  const deadline = performance.now() + startupBoundMs;
   const shellCookie = JSON.stringify(site.shellCookie);
   async function waitFor(read, label) {
+    const deadline = performance.now() + startupBoundMs;
     do {
       const value = await read();
       if (value !== undefined && value !== null) return value;
@@ -105,6 +123,14 @@ export async function runSiteBrowserWebview2Proof({ automation, safe, fixture, s
     throw new Error(`The WebView2 site fixture did not observe ${label}.`);
   }
   const observed = (key) => waitFor(() => site.observations.get(key), key);
+  const workbench = () => automation.evaluate(`(() => {
+    const composer = document.querySelector('main#main textarea[aria-label="Message"]');
+    return {
+      width: innerWidth, height: innerHeight, focus: document.hasFocus(),
+      composerFocused: composer !== null && composer === document.activeElement,
+      composerReady: Boolean(composer?.getBoundingClientRect().width && !composer.disabled),
+    };
+  })()`);
   async function openThroughChat(path) {
     await automation.evaluate(`(() => {
       globalThis.__piuiSiteBrowserProof = null;
@@ -134,21 +160,62 @@ export async function runSiteBrowserWebview2Proof({ automation, safe, fixture, s
       document.cookie = ${shellCookie} + '; Path=/; SameSite=Lax';
       return document.cookie.split('; ').includes(${shellCookie});
     })()`), 'The trusted shell could not set the comparison cookie.');
+    await automation.evaluate(`(() => {
+      document.querySelector('main#main textarea[aria-label="Message"]')?.focus();
+      return true;
+    })()`);
+    const beforeDock = await workbench();
+    assert(beforeDock.composerFocused, 'The workbench could not focus its composer before opening the browser.');
     assert.equal(await openThroughChat('/first'), true);
+    const split = await waitFor(async () => {
+      const layout = await workbench();
+      return layout.composerReady && !layout.focus && layout.width < beforeDock.width ? layout : undefined;
+    }, 'the visible chat composer left of the dock');
+    await waitFor(async () => {
+      const dock = await browserDock('state');
+      return dock.visible && dock.focused && dock.closeX >= dock.splitX && dock.pageVisible
+        && dock.pageX >= dock.splitX && dock.pageY >= dock.addressY ? dock : undefined;
+    }, 'the focused browser toolbar on the right side of the owned window');
+    const mainHide = await automation.evaluate(`window.__TAURI_INTERNALS__.invoke('site_browser_hide_v1')
+      .then(() => 'accepted', error => error.code)`);
+    assert.equal(mainHide, 'UNAVAILABLE', 'The main WebView can hide the dock without the toolbar.');
     assert.equal(await observed('separate-shell-profile'), true, 'The site received the trusted shell cookie.');
     const authority = await observed('site-authority');
-    assert(['unavailable', 'denied'].includes(authority), 'The untrusted site could invoke the chat link route.');
+    for (const command of ['link', 'tabs', 'events']) {
+      assert(['unavailable', 'denied'].includes(authority[command]), `The site obtained IPC access to ${command}.`);
+    }
+    const resizedWidth = beforeDock.width === 1024 ? 1180 : 1024;
+    await resizeWindow({ width: resizedWidth, height: beforeDock.height });
+    await waitFor(async () => {
+      const left = (await workbench()).width;
+      const right = site.observations.get('site-width');
+      return left !== split.width && Math.abs(left - right) <= 1 && Math.abs(left + right - resizedWidth) <= 1
+        ? left : undefined;
+    }, 'both visible browser and workbench viewports to resize with the window');
     await observed('first-tab-pending');
+    await browserDock('close');
+    await waitFor(async () => {
+      const layout = await workbench();
+      return layout.focus && layout.composerFocused && layout.composerReady && Math.abs(layout.width - resizedWidth) <= 1
+        ? layout : undefined;
+    }, 'the visible, focused workbench restored to full width');
+    const closed = await browserDock('state');
+    assert(!closed.visible && !closed.pageVisible, 'The closed browser still exposes its toolbar or site.');
     assert.equal(await openThroughChat('/second'), true);
+    await waitFor(async () => {
+      const layout = await workbench();
+      return layout.composerReady && Math.abs(layout.width - resizedWidth / 2) <= 1 ? layout : undefined;
+    }, 'the reopened dock beside the workbench');
     assert.equal(await observed('shared-profile'), true, 'Site tabs used different browsing profiles.');
     assert.equal(await observed('first-tab-retained'), true, 'Opening the second link discarded the first tab.');
     assert(!site.observations.has('unexpected'), 'The untrusted page caused a navigation.');
     assertSiteProfile(fixture);
     return [
       'webview2-trusted-main-opens-new-and-existing-site-browser',
+      'webview2-browser-dock-resizes-both-views-and-restores-workbench-on-close',
       'webview2-site-browser-reuses-profile-and-preserves-tabs',
       'webview2-site-browser-profile-excludes-shell-cookie',
-      authority === 'denied' ? 'webview2-site-page-ipc-rejected' : 'webview2-site-page-ipc-bridge-absent',
+      authority.link === 'denied' ? 'webview2-site-page-ipc-rejected' : 'webview2-site-page-ipc-bridge-absent',
       'webview2-chat-link-host-refuses-invalid-and-app-origins',
     ];
   } finally {

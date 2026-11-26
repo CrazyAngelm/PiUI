@@ -1128,6 +1128,7 @@ pub fn run() -> Result<(), tauri::Error> {
             chat_link::chat_open_link_v1,
             site_browser::site_browser_open_v1,
             site_browser::site_browser_open_link_v1,
+            site_browser::site_browser_hide_v1,
             site_browser::site_browser_action_v1,
             plugins::api::plugins_v1,
             plugins::api::plugin_command_v1,

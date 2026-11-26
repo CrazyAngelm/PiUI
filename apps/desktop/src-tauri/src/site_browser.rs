@@ -1,24 +1,34 @@
 //! A local toolbar and separate, unprivileged site views (ADR-081).
 
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use serde::{Deserialize, Serialize};
 use tauri::webview::{NewWindowResponse, WebviewBuilder};
 use tauri::{
-    AppHandle, Emitter, EventTarget, LogicalPosition, LogicalSize, Manager, Runtime, State, Url,
-    Webview, WebviewUrl, Window, window::WindowBuilder,
+    AppHandle, Emitter, EventTarget, Manager, Runtime, State, Url, Webview, WebviewUrl, Window,
 };
-#[cfg(not(target_os = "linux"))]
-use tauri::{Rect, WindowEvent};
+#[cfg(not(windows))]
+use tauri::{LogicalPosition, LogicalSize, Rect, window::WindowBuilder};
 use tokio::sync::Mutex;
 
 use crate::chat_link::{self, ChatOpenLinkRequestV1};
 use crate::nano::browser;
 use crate::state::HostState;
 
+#[cfg(windows)]
+mod dock;
+
+#[cfg(windows)]
+const WINDOW: &str = "main";
+#[cfg(not(windows))]
 const WINDOW: &str = "site-browser";
 const CHROME: &str = "site-browser-chrome";
+const TAB_PREFIX: &str = "site-browser-tab-";
+const ACTION: &str = "site_browser_action_v1";
+const HIDE: &str = "site_browser_hide_v1";
 const CHROME_FILE: &str = "browser.html";
 const CHANGED: &str = "piui://site-browser-changed-v1";
 const POPUP_BLOCKED: &str = "piui://site-browser-popup-blocked-v1";
@@ -32,6 +42,8 @@ pub struct SiteBrowser {
     chrome_profile: Option<PathBuf>,
     next_id: AtomicU32,
     tabs: Mutex<Tabs>,
+    #[cfg(windows)]
+    dock_open: AtomicBool,
 }
 
 #[derive(Default)]
@@ -100,6 +112,8 @@ impl SiteBrowser {
             chrome_profile,
             next_id: AtomicU32::new(1),
             tabs: Mutex::new(Tabs::default()),
+            #[cfg(windows)]
+            dock_open: AtomicBool::new(false),
         }
     }
 
@@ -148,7 +162,7 @@ pub(crate) fn allows_chrome_command(
     dev_url: Option<&Url>,
 ) -> bool {
     label == CHROME
-        && command == "site_browser_action_v1"
+        && (command == ACTION || (cfg!(windows) && command == HIDE))
         && url.is_some_and(|url| chrome_origin(url, dev_url))
 }
 
@@ -193,7 +207,7 @@ fn chat_site_url(input: &str, dev_url: Option<&Url>) -> Result<Url, SiteBrowserE
 }
 
 fn tab_label(tab: u32) -> String {
-    format!("site-browser-tab-{tab}")
+    format!("{TAB_PREFIX}{tab}")
 }
 
 fn signal<R: Runtime>(app: &AppHandle<R>, name: &str) {
@@ -256,22 +270,6 @@ fn move_history<R: Runtime>(view: &Webview<R>, forward: bool) -> tauri::Result<(
     })
 }
 
-#[cfg(not(target_os = "linux"))]
-fn configure_layout<R: Runtime>(chrome: &Webview<R>) -> tauri::Result<()> {
-    let window = chrome.window();
-    apply_layout(&window)?;
-    let resized = window.clone();
-    window.on_window_event(move |event| {
-        if matches!(
-            event,
-            WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }
-        ) {
-            let _ = apply_layout(&resized);
-        }
-    });
-    Ok(())
-}
-
 #[cfg(target_os = "linux")]
 fn configure_layout<R: Runtime>(chrome: &Webview<R>) -> tauri::Result<()> {
     chrome.with_webview(|platform| {
@@ -288,39 +286,40 @@ fn configure_layout<R: Runtime>(chrome: &Webview<R>) -> tauri::Result<()> {
     })
 }
 
-#[cfg(not(target_os = "linux"))]
-fn apply_layout<R: Runtime>(window: &Window<R>) -> tauri::Result<()> {
+#[cfg(not(windows))]
+fn browser_bounds<R: Runtime>(window: &Window<R>, toolbar: bool) -> tauri::Result<Rect> {
     let size = window
         .inner_size()?
         .to_logical::<f64>(window.scale_factor()?);
-    for view in window.webviews() {
-        let (top, height) = if view.label() == CHROME {
-            (0.0, CHROME_HEIGHT)
-        } else {
-            (CHROME_HEIGHT, (size.height - CHROME_HEIGHT).max(0.0))
-        };
-        view.set_bounds(Rect {
-            position: LogicalPosition::new(0.0, top).into(),
-            size: LogicalSize::new(size.width, height).into(),
-        })?;
-    }
-    Ok(())
+    let (top, height) = if toolbar {
+        (0.0, CHROME_HEIGHT)
+    } else {
+        (CHROME_HEIGHT, (size.height - CHROME_HEIGHT).max(0.0))
+    };
+    Ok(Rect {
+        position: LogicalPosition::new(0.0, top).into(),
+        size: LogicalSize::new(size.width, height).into(),
+    })
 }
+
+#[cfg(windows)]
+use dock::bounds as browser_bounds;
 
 fn visibility<R: Runtime>(window: &Window<R>, active: Option<u32>) -> tauri::Result<()> {
     let selected = active.map(tab_label);
+    let mut result = Ok(());
     for view in window.webviews() {
-        if view.label() != CHROME && Some(view.label()) != selected.as_deref() {
-            view.hide()?;
+        if view.label().starts_with(TAB_PREFIX) && Some(view.label()) != selected.as_deref() {
+            result = result.and(view.hide());
         }
     }
     if let Some(view) = selected
         .as_deref()
         .and_then(|label| window.get_webview(label))
     {
-        view.show()?;
+        result = result.and(view.show());
     }
-    Ok(())
+    result
 }
 
 fn create_site_view<R: Runtime>(
@@ -363,15 +362,11 @@ fn create_site_view<R: Runtime>(
         });
     #[cfg(windows)]
     // Wry disables SmartScreen by default. Keep it enabled on arbitrary sites.
-    let builder = builder.additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI");
-    let size = window
-        .inner_size()?
-        .to_logical::<f64>(window.scale_factor()?);
-    let view = window.add_child(
-        builder,
-        LogicalPosition::new(0.0, CHROME_HEIGHT),
-        LogicalSize::new(size.width, (size.height - CHROME_HEIGHT).max(0.0)),
-    )?;
+    let builder = builder
+        .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI")
+        .focused(false);
+    let bounds = browser_bounds(window, false)?;
+    let view = window.add_child(builder, bounds.position, bounds.size)?;
     watch_address(&view)?;
     Ok(())
 }
@@ -409,6 +404,43 @@ pub async fn site_browser_open_link_v1<R: Runtime>(
     Ok(true)
 }
 
+#[cfg(windows)]
+async fn open_browser<R: Runtime>(
+    app: &AppHandle<R>,
+    browser: &SiteBrowser,
+    _language: &str,
+    link: Option<Url>,
+) -> Result<(), SiteBrowserError> {
+    let mut tabs = browser.tabs.lock().await;
+    let window = app
+        .get_window(WINDOW)
+        .ok_or(SiteBrowserError::Unavailable)?;
+    window.unminimize()?;
+    window.set_focus()?;
+    if window.get_webview(CHROME).is_none() {
+        let chrome = add_toolbar(&window, browser)?;
+        if let Err(error) = dock::configure(&chrome) {
+            let _ = chrome.close();
+            return Err(error.into());
+        }
+        *tabs = Tabs::default();
+    }
+    let was_open = browser.dock_open.load(Ordering::Acquire);
+    // Reserve the right half before adding a visible child WebView.
+    dock::set_open(&window, browser, tabs.active, true)?;
+    if let Some(url) = link {
+        if let Err(error) = open_link_tab(browser, &mut tabs, &window, url) {
+            let _ = dock::set_open(&window, browser, tabs.active, was_open);
+            return Err(error);
+        }
+    } else if tabs.active.is_none() {
+        browser.new_tab(&mut tabs);
+    }
+    signal(app, CHANGED);
+    Ok(())
+}
+
+#[cfg(not(windows))]
 async fn open_browser<R: Runtime>(
     app: &AppHandle<R>,
     browser: &SiteBrowser,
@@ -471,6 +503,7 @@ fn open_link_tab<R: Runtime>(
     Ok(())
 }
 
+#[cfg(not(windows))]
 fn create_browser_window<R: Runtime>(
     app: &AppHandle<R>,
     browser: &SiteBrowser,
@@ -487,7 +520,21 @@ fn create_browser_window<R: Runtime>(
         .min_inner_size(460.0, 320.0)
         .visible(false)
         .build()?;
-    let dev_url = app.config().build.dev_url.clone();
+    let result = add_toolbar(&window, browser).and_then(|chrome| {
+        #[cfg(target_os = "linux")]
+        configure_layout(&chrome)?;
+        let _ = chrome;
+        Ok(())
+    });
+    if let Err(error) = result {
+        let _ = window.destroy();
+        return Err(error.into());
+    }
+    Ok(window)
+}
+
+fn add_toolbar<R: Runtime>(window: &Window<R>, browser: &SiteBrowser) -> tauri::Result<Webview<R>> {
+    let dev_url = window.app_handle().config().build.dev_url.clone();
     let chrome = WebviewBuilder::new(CHROME, WebviewUrl::App(CHROME_FILE.into()))
         .devtools(false)
         .on_navigation(move |url| chrome_origin(url, dev_url.as_ref()))
@@ -496,21 +543,39 @@ fn create_browser_window<R: Runtime>(
         Some(directory) => chrome.data_directory(directory.clone()),
         None => chrome,
     };
-    let result = window
-        .inner_size()
-        .and_then(|size| Ok(size.to_logical::<f64>(window.scale_factor()?)))
-        .and_then(|size| {
-            window.add_child(
-                chrome,
-                LogicalPosition::new(0.0, 0.0),
-                LogicalSize::new(size.width, CHROME_HEIGHT),
-            )
-        });
-    if let Err(error) = result.and_then(|chrome| configure_layout(&chrome)) {
-        let _ = window.destroy();
-        return Err(error.into());
+    #[cfg(windows)]
+    let chrome = chrome.focused(false);
+    let bounds = browser_bounds(window, true)?;
+    window.add_child(chrome, bounds.position, bounds.size)
+}
+
+#[tauri::command]
+pub async fn site_browser_hide_v1<R: Runtime>(
+    chrome: Webview<R>,
+    host: State<'_, HostState>,
+    browser: State<'_, SiteBrowser>,
+) -> Result<(), SiteBrowserError> {
+    if !allows_chrome_command(
+        chrome.label(),
+        chrome.url().ok().as_ref(),
+        HIDE,
+        chrome.app_handle().config().build.dev_url.as_ref(),
+    ) || host.safe_mode
+        || host.is_shutting_down()
+    {
+        return Err(SiteBrowserError::Unavailable);
     }
-    Ok(window)
+    #[cfg(windows)]
+    {
+        let tabs = browser.tabs.lock().await;
+        dock::set_open(&chrome.window(), &browser, tabs.active, false)?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = browser;
+        Err(SiteBrowserError::Unavailable)
+    }
 }
 
 #[tauri::command]
@@ -521,18 +586,18 @@ pub async fn site_browser_action_v1<R: Runtime>(
     request: SiteBrowserAction,
 ) -> Result<SiteBrowserSnapshot, SiteBrowserError> {
     let dev_url = chrome.app_handle().config().build.dev_url.as_ref();
-    if !allows_chrome_command(
-        chrome.label(),
-        chrome.url().ok().as_ref(),
-        "site_browser_action_v1",
-        dev_url,
-    ) || host.safe_mode
+    if !allows_chrome_command(chrome.label(), chrome.url().ok().as_ref(), ACTION, dev_url)
+        || host.safe_mode
         || host.is_shutting_down()
     {
         return Err(SiteBrowserError::Unavailable);
     }
     let window = chrome.window();
     let mut tabs = browser.tabs.lock().await;
+    #[cfg(windows)]
+    if !matches!(&request, SiteBrowserAction::Read) && !browser.dock_open.load(Ordering::Acquire) {
+        return Err(SiteBrowserError::Unavailable);
+    }
     let get_view = |tab| {
         window
             .get_webview(&tab_label(tab))
@@ -743,5 +808,31 @@ mod tests {
             "site_browser_action_v1",
             None
         ));
+    }
+
+    #[test]
+    fn only_the_local_windows_toolbar_can_hide_the_dock() {
+        let local = Url::parse("http://tauri.localhost/browser.html").expect("toolbar");
+        let remote = Url::parse("https://example.org/browser.html").expect("site");
+        assert_eq!(
+            allows_chrome_command(CHROME, Some(&local), HIDE, None),
+            cfg!(windows)
+        );
+        for (label, url) in [
+            ("main", &local),
+            ("site-browser-tab-1", &local),
+            (CHROME, &remote),
+        ] {
+            assert!(!allows_chrome_command(label, Some(url), HIDE, None));
+        }
+    }
+
+    #[test]
+    fn main_events_are_scoped_to_the_workbench_webview_not_its_window() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json"))
+                .expect("main capability");
+        assert_eq!(capability["webviews"], serde_json::json!(["main"]));
+        assert!(capability.get("windows").is_none());
     }
 }

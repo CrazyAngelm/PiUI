@@ -1,19 +1,68 @@
-"""Capture only the client area of the app directly owned by an E2E Job runner.
+"""Inspect the window of the app directly owned by the Windows E2E Job.
 
-Windows-only, standard library. Never captures the desktop or another process.
-Run from the native E2E harness; PrintWindow failure is not replaced by a screen grab.
+Capture only its client area. The browser dock proof queries only the same
+owned window through UI Automation. Never fall back to a desktop screenshot.
 """
 import argparse
+import base64
 import ctypes as c
 from ctypes import wintypes as w
 import json
+import os
 from pathlib import Path
 import struct
+import subprocess
 import sys
 import zlib
 
 
-def capture(parent_pid: int, output: Path | None, resize: tuple[int, int] | None = None, resize_only: bool = False) -> dict:
+def browser_dock(hwnd: int, action: str) -> dict:
+    # The caller already matched this HWND to the controller-owned PiUI E2E
+    # process. Query only its UI Automation subtree, never the desktop.
+    command = f"""
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$element = [System.Windows.Automation.AutomationElement]
+$root = $element::FromHandle([IntPtr]{hwnd})
+$scope = [System.Windows.Automation.TreeScope]::Descendants
+function Find($label) {{
+    $condition = [System.Windows.Automation.PropertyCondition]::new($element::NameProperty, $label)
+    $root.FindFirst($scope, $condition)
+}}
+$button = Find 'Close browser panel'
+$address = Find 'Website address'
+$page = Find 'Site fixture page'
+$visible = $null -ne $button -and -not $button.Current.IsOffscreen
+$focused = $visible -and ($null -ne $address) -and $address.Current.HasKeyboardFocus
+$pageVisible = $null -ne $page -and -not $page.Current.IsOffscreen
+$state = @{{
+    visible=$visible; focused=$focused; pageVisible=$pageVisible
+    closeX=if ($visible) {{$button.Current.BoundingRectangle.Left}}
+    addressY=if ($null -ne $address) {{$address.Current.BoundingRectangle.Bottom}}
+    pageX=if ($pageVisible) {{$page.Current.BoundingRectangle.Left}}
+    pageY=if ($pageVisible) {{$page.Current.BoundingRectangle.Top}}
+}}
+if ('{action}' -eq 'close') {{
+    if (-not $visible) {{ throw 'The owned browser panel is not visible.' }}
+    $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+}}
+$state | ConvertTo-Json -Compress
+"""
+    executable = Path(os.environ["SystemRoot"]) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    encoded = base64.b64encode(command.encode("utf-16-le")).decode("ascii")
+    # The owning Windows E2E Job enforces its command bound for this process tree.
+    result = subprocess.run(
+        [executable, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+        check=True,
+        capture_output=True,
+        text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    return json.loads(result.stdout)
+
+
+def capture(parent_pid: int, output: Path | None, resize: tuple[int, int] | None = None, resize_only: bool = False,
+            browser_dock_action: str | None = None) -> dict:
     if sys.platform != "win32":
         raise RuntimeError("Window capture requires Windows.")
     user = c.WinDLL("user32", use_last_error=True)
@@ -79,6 +128,16 @@ def capture(parent_pid: int, output: Path | None, resize: tuple[int, int] | None
     if len(windows) != 1:
         raise RuntimeError("Expected one visible owned PiUI E2E window.")
     hwnd = windows[0]
+    if browser_dock_action is not None:
+        result = browser_dock(hwnd, browser_dock_action)
+        client = w.RECT()
+        origin = w.POINT()
+        user.GetClientRect.argtypes = [w.HWND, c.POINTER(w.RECT)]
+        user.ClientToScreen.argtypes = [w.HWND, c.POINTER(w.POINT)]
+        if not (user.GetClientRect(hwnd, c.byref(client)) and user.ClientToScreen(hwnd, c.byref(origin))):
+            raise RuntimeError("Could not read the owned browser panel window bounds.")
+        result["splitX"] = origin.x + client.right // 2
+        return result
     # Measure only the same verified app and its snapshot descendants. Working
     # sets include shared pages: report their SUM, not unique physical memory.
     owned_pids = set(children)
@@ -209,11 +268,16 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path)
     parser.add_argument("--resize", nargs=2, type=int, metavar=("WIDTH", "HEIGHT"))
     parser.add_argument("--resize-only", action="store_true")
+    parser.add_argument("--browser-dock", choices=("state", "close"))
     args = parser.parse_args()
     if args.resize_only and args.resize is None:
         parser.error("--resize-only requires --resize")
     try:
-        print(json.dumps(capture(args.parent_pid, args.output, tuple(args.resize) if args.resize else None, args.resize_only)))
-    except (OSError, RuntimeError) as error:
+        print(json.dumps(capture(args.parent_pid, args.output, tuple(args.resize) if args.resize else None,
+                                 args.resize_only, args.browser_dock)))
+    except subprocess.CalledProcessError as error:
+        print(json.dumps({"status": "failed", "reason": error.stderr.strip()}))
+        raise SystemExit(1)
+    except (OSError, RuntimeError, ValueError) as error:
         print(json.dumps({"status": "failed", "reason": str(error)}))
         raise SystemExit(1)
