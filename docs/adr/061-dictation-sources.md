@@ -19,6 +19,9 @@ dictation button is shown whenever the chosen source can transcribe now.
   address, model and API key come from the host's own settings and credential
   store. The WebView makes no network call and the CSP is unchanged.
   `nano_dictation_v1` is unchanged and is used when the source is Nano.
+  Native Linux uses Web Audio WAV because WebKitGTK can declare MP4 support
+  and return an empty clip. Other supported platforms keep their existing
+  format preference. An empty recording is reported as a recording failure.
 - **Settings are host-owned** (`dictation-v1.json` in the app data folder,
   contract `contracts/dictation-v1.ts`): source, models, the custom base
   address, an optional language hint. The WebView reads a view of them with

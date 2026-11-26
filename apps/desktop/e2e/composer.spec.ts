@@ -300,6 +300,23 @@ test.describe('attachments', () => {
     await expect(composer.getByRole('list', { name: 'Attached images' })).toHaveCount(0);
   });
 
+  for (const kind of ['drop', 'paste'] as const) {
+    test(`a file ${kind} on a restricted new-chat project offers trust review`, async ({ lab, page }) => {
+      await lab.open();
+      const composer = home(page);
+      await composer.getByRole('button', { name: /^Project and permissions: piui/ }).click();
+      await page.getByRole('radio', { name: /^legacy-repo/ }).check();
+      await page.keyboard.press('Escape');
+      await expect(composer.getByText('This folder is restricted. Trust it to let agents work on its files.')).toBeVisible();
+
+      await deliverImage(page, kind, 'restricted.png');
+      const dialog = page.getByRole('dialog', { name: 'Trust legacy-repo?' });
+      await expect(dialog).toBeVisible();
+      await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await expect(composer.getByRole('list', { name: 'Attached images' })).toHaveCount(0);
+    });
+  }
+
   test('an image dropped on an open chat is queued with the message', async ({ lab, page }) => {
     await lab.open();
     const message = await openChat(lab, /Route host calls through one transport/);

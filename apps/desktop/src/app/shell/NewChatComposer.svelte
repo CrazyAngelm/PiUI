@@ -20,6 +20,7 @@
   import { errorMessage } from '../workspaceStore.svelte';
   import { WorkspaceOperationError, workspaceError } from '../../host-api/workspaceClient';
   import AttachButton from '../chat/composer/AttachButton.svelte';
+  import { insertAtCaret } from '../nano/dictation';
   import { dictationSource } from '../nano/dictationSource.svelte';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
   import { remoteMode } from '../nano/remoteMode';
@@ -565,7 +566,7 @@
     loadPipelineCode();
     // Files dropped on the desktop window belong to the desktop; a remote browser takes text only.
     const unregister = remoteMode ? () => undefined : composerDropTargets.register((dropId) => {
-      if (workspaceId && trusted) void attachments.redeem(workspaceId, dropId, imageState);
+      if (canAttach()) void attachments.redeem(workspaceId, dropId, imageState);
     });
     return () => {
       unregister();
@@ -786,12 +787,12 @@
   const loadPending = () => import('../nano/DictationPending.svelte');
   const dictationScope = $derived(`new:${workspaceId || 'personal'}`);
 
-  /** Dictated words go in at the caret. The helper arrives with the dictation button. */
-  function dictated(words: string): Promise<void> {
-    return import('../nano/dictation').then(({ insertAtCaret }) => {
-      const next = insertAtCaret(text, textarea?.selectionStart ?? caret, words);
-      return place(next.text, next.caret);
-    });
+  /** Dictated words go in at the caret of the draft that requested them. */
+  function dictated(words: string, origin: string): boolean {
+    if (origin !== dictationScope) return false;
+    const next = insertAtCaret(text, textarea?.selectionStart ?? caret, words);
+    void place(next.text, next.caret);
+    return true;
   }
 
   function choose(index: number): void {
@@ -1057,12 +1058,15 @@
         const target = workspaceId;
         void import('../chat/composer/clipboardImages')
           .then(({ clipboardImages }) => clipboardImages())
-          .then((images) => (images.length ? attachments.paste(target, images, imageState) : undefined));
+          .then((images) => {
+            if (!images.length || !textarea?.isConnected || workspaceId !== target || !canAttach()) return;
+            return attachments.paste(target, images, imageState);
+          });
       }
       return;
     }
     event.preventDefault();
-    if (remoteMode) return;
+    if (remoteMode || !canAttach()) return;
     void attachments.paste(workspaceId, files, imageState);
   }
 
@@ -1070,18 +1074,19 @@
 
   function dropped(event: DragEvent): void {
     htmlDragging = false;
-    if (!carriesFiles(event) || !workspaceId) return;
+    if (!carriesFiles(event)) return;
     event.preventDefault();
-    if (remoteMode) return;
+    if (remoteMode || !canAttach()) return;
     void attachments.paste(workspaceId, [...(event.dataTransfer?.files ?? [])], imageState);
   }
 
+  function canAttach(): boolean {
+    if (workspace && !trusted) onTrust(workspace);
+    return Boolean(workspaceId && trusted);
+  }
+
   function pick(): void {
-    if (workspace && !trusted) {
-      onTrust(workspace);
-      return;
-    }
-    if (workspaceId) void attachments.pick(workspaceId, imageState);
+    if (canAttach()) void attachments.pick(workspaceId, imageState);
   }
 
   function insertReferences(): void {
@@ -1116,11 +1121,11 @@
   class="composer"
   data-nano-composer="surface"
   class:composer--busy={busy}
-  class:composer--drop={htmlDragging || composerDropTargets.dragging}
+  class:composer--drop={workspace && (htmlDragging || composerDropTargets.dragging)}
   ondragover={(event) => {
     if (!carriesFiles(event)) return;
     event.preventDefault();
-    htmlDragging = !remoteMode;
+    htmlDragging = !remoteMode && Boolean(workspace);
   }}
   ondragleave={() => (htmlDragging = false)}
   ondrop={dropped}
@@ -1196,7 +1201,9 @@
   </div>
   {#if !remoteMode}
     {#await loadPending() then { default: DictationPending }}
-      <DictationPending scope={dictationScope} onText={dictated} disabled={busy || store.safeMode} />
+      {#key dictationScope}
+        <DictationPending scope={dictationScope} onText={dictated} disabled={busy || store.safeMode} />
+      {/key}
     {/await}
   {/if}
   <div data-nano-composer="bar">
@@ -1283,7 +1290,9 @@
     <div class="actions">
       {#if dictationSource.available && !remoteMode}
         {#await loadDictate() then { default: DictateButton }}
-          <DictateButton bind:this={dictate} bind:active={dictationActive} onText={dictated} onSend={() => void send()} scope={dictationScope} disabled={busy || store.safeMode} />
+          {#key dictationScope}
+            <DictateButton bind:this={dictate} bind:active={dictationActive} onText={dictated} onSend={() => void send()} scope={dictationScope} disabled={busy || store.safeMode} />
+          {/key}
         {/await}
       {/if}
       <!-- While dictating, this one button (and Enter) stops the recording and sends what was said. -->
@@ -1298,7 +1307,7 @@
       </button>
     </div>
   </div>
-  {#if htmlDragging || composerDropTargets.dragging}
+  {#if workspace && (htmlDragging || composerDropTargets.dragging)}
     <div class="composer__drop" aria-hidden="true">{$t('Drop images or files to attach')}</div>
   {/if}
 </div>

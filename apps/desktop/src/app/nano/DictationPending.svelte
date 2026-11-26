@@ -17,7 +17,7 @@
     /** The composer this bar belongs to; the same string the dictation button of that composer gets. */
     scope: string;
     /** Receives the recognized words; the composer puts them at its caret. */
-    onText: (text: string) => void;
+    onText: (text: string, scope: string) => boolean | void;
     disabled?: boolean;
     /** Test seams. */
     client?: Pick<NanoAccountClient, 'dictate'>;
@@ -27,9 +27,9 @@
   }
   let { scope, onText, disabled = false, client = nanoAccountHost, provider = dictationHost, source = sharedSource, pending = dictationPending }: Props = $props();
 
-  // A clip this window is still recording or sending is not offered for retry.
-  const recording = $derived(pending.visible(scope));
   let working = $state<'retry' | 'save' | undefined>();
+  // Keep progress visible here while other composers cannot retry the same clip.
+  const recording = $derived(working === 'retry' ? pending.get(scope) : pending.visible(scope));
   let confirming = $state(false);
   let alive = true;
 
@@ -47,19 +47,26 @@
 
   async function retry(): Promise<void> {
     const current = recording;
-    if (current === undefined || working !== undefined) return;
+    if (current === undefined || working !== undefined || pending.visible(current.scope)?.id !== current.id) return;
+    pending.hold(current.id);
     working = 'retry';
-    const outcome = await retryRecording(current, dictationTransport(source, client, provider), source.maxBytes);
-    working = undefined;
-    if (outcome.ok) {
-      // A composer that went away cannot take the words: the clip stays then, so nothing is lost.
-      if (!alive) return;
-      onText(outcome.text);
-      await pending.remove(scope, current.id);
-    } else {
-      // Only while the clip is still the one that was retried: a removed or replaced one stays gone.
-      await pending.replace(scope, current.id, { ...current, reason: outcome.reason, error: outcome.error });
-      toasts.show({ tone: 'warning', title: $t('Dictation did not finish'), description: $t(outcome.error), duration: 6000 });
+    try {
+      const outcome = await retryRecording(current, dictationTransport(source, client, provider), source.maxBytes);
+      if (pending.get(current.scope)?.id !== current.id) return;
+      if (outcome.ok) {
+        // A composer that went away cannot take the words: leave the clip available there.
+        if (alive && scope === current.scope && onText(outcome.text, current.scope) !== false) {
+          await pending.remove(current.scope, current.id);
+        }
+      } else {
+        await pending.replace(current.scope, current.id, { ...current, reason: outcome.reason, error: outcome.error });
+        if (alive && scope === current.scope) {
+          toasts.show({ tone: 'warning', title: $t('Dictation did not finish'), description: $t(outcome.error), duration: 6000 });
+        }
+      }
+    } finally {
+      pending.release(current.id);
+      working = undefined;
     }
   }
 

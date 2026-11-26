@@ -1,6 +1,6 @@
 {
   "name": "piui",
-  "version": "0.3.13",
+  "version": "0.3.14",
   "private": true,
   "description": "A desktop workbench for native agent harnesses and multi-agent pipelines",
   "license": "MIT",

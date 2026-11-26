@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { workspaceHost } from '../host-api/workspaceClient';
+import { workspaceHost, type SessionSnapshot, type WorkspaceEvent } from '../host-api/workspaceClient';
 import { WorkspaceStore } from './workspaceStore.svelte';
 import * as settingsApi from '../host-api/runtimeSettings';
 import * as composerApi from '../host-api/composerClient';
@@ -395,6 +395,61 @@ describe('WorkspaceStore split panes', () => {
 
     store.setShownSessions([]);
     expect(store.paneErrors, 'a chat that leaves the screen forgets its error').toEqual({});
+    store.dispose();
+  });
+
+  it('checks or dismisses a chat error without clearing an error in another pane', async () => {
+    const { store, first, second } = await twoChats();
+    await store.openSession(first, { navigate: false });
+    store.setShownSessions([second]);
+    store.sessionError = 'The Pi runtime could not authenticate the selected model.';
+    store.paneErrors = { [second]: 'Other chat failed.' };
+    const snapshot = vi.spyOn(workspaceHost, 'snapshot');
+    snapshot.mockRejectedValueOnce(new Error('Refresh failed.'));
+
+    await store.checkSessionStatus(first);
+    expect(store.errorFor(first)).toBe('Refresh failed.');
+    const refresh = store.reconcileSession(first);
+    await store.checkSessionStatus(first);
+    await refresh;
+    expect(snapshot.mock.calls).toEqual([[first], [first]]);
+    expect(store.errorFor(first)).toBeUndefined();
+    expect(store.errorFor(second)).toBe('Other chat failed.');
+
+    store.dismissSessionError(second);
+    expect(store.errorFor(second)).toBeUndefined();
+    expect(snapshot.mock.calls).toEqual([[first], [first]]);
+    store.dispose();
+  });
+
+  it('preserves an identical runtime error reported while checking status', async () => {
+    let emit = (_event: WorkspaceEvent): void => {};
+    vi.spyOn(workspaceHost, 'listen').mockImplementation(async (handler) => {
+      emit = handler;
+      return () => undefined;
+    });
+    const store = new WorkspaceStore();
+    await store.start();
+    const session = store.catalog.sessions.find((chat) => chat.harness === 'pi' && chat.status === 'closed' && !chat.runId)!;
+    await store.openSession(session.id, { navigate: false });
+    const message = 'The Pi runtime could not authenticate the selected model.';
+    async function reportError(): Promise<void> {
+      const revision = store.snapshots[session.id]!.revision + 1;
+      emit({ protocol: 15, sessionId: session.id, revision, event: { type: 'error', message } });
+      await vi.waitFor(() => expect(store.snapshots[session.id]!.revision).toBe(revision));
+    }
+
+    await reportError();
+    expect(store.errorFor(session.id)).toBe(message);
+    let finishSnapshot!: (snapshot: SessionSnapshot) => void;
+    const deferred = new Promise<SessionSnapshot>((resolve) => { finishSnapshot = resolve; });
+    vi.spyOn(workspaceHost, 'snapshot').mockReturnValueOnce(deferred);
+    const check = store.checkSessionStatus(session.id);
+    await reportError();
+    finishSnapshot(store.snapshots[session.id]!);
+    await check;
+
+    expect(store.errorFor(session.id)).toBe(message);
     store.dispose();
   });
 

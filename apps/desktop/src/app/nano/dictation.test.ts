@@ -20,7 +20,7 @@ import {
   pickDictationMime,
 } from './dictation';
 import { PendingRecordings, type PendingRecording, type PendingStorage } from './dictationPendingStore.svelte';
-import { Dictation, type DictationEnvironment, type RecorderLike } from './dictationSession.svelte';
+import { Dictation, browserDictationEnvironment, type DictationEnvironment, type RecorderLike } from './dictationSession.svelte';
 import { retryRecording } from './dictationTransport';
 import { DictationSource, whenKeyChanges } from './dictationSource.svelte';
 
@@ -33,6 +33,18 @@ describe('dictation guards', () => {
     expect(pickDictationMime(() => {
       throw new Error('probe failed');
     })).toBeUndefined();
+  });
+
+  it('chooses WAV on native Linux even when MediaRecorder claims it can produce MP4', () => {
+    vi.stubGlobal('navigator', { platform: 'Linux x86_64', mediaDevices: { getUserMedia: vi.fn() } });
+    vi.stubGlobal('AudioContext', class {});
+    vi.stubGlobal('MediaRecorder', { isTypeSupported: (mime: string) => mime === 'audio/mp4' });
+    try {
+      expect(pickDictationMime(browserDictationEnvironment(true).isTypeSupported)).toBe('audio/wav');
+      expect(pickDictationMime(browserDictationEnvironment(false).isTypeSupported)).toBe('audio/mp4');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('takes the size limit from the plan, else the 20 MiB default', () => {
@@ -55,7 +67,7 @@ describe('dictation guards', () => {
   });
 
   it('refuses an empty or oversized clip', () => {
-    expect(dictationClipError(0, 100)).toBe('empty');
+    expect(dictationClipError(0, 100)).toBe('failed');
     expect(dictationClipError(101, 100)).toBe('too-large');
     expect(dictationClipError(100, 100)).toBeUndefined();
     expect(dictationClipError(5, undefined)).toBeUndefined();
@@ -183,7 +195,7 @@ function rig(options: { available?: boolean; denied?: unknown; supported?: strin
   let maxBytes: number | undefined;
   const session = new Dictation(
     { dictate: (request) => answer(request) },
-    { maxBytes: () => maxBytes, onText: (text) => texts.push(text), scope: options.scope ?? (() => SCOPE), pending, ...(options.errorCopy ? { errorCopy: options.errorCopy } : {}) },
+    { maxBytes: () => maxBytes, onText: (text) => { texts.push(text); }, scope: options.scope ?? (() => SCOPE), pending, ...(options.errorCopy ? { errorCopy: options.errorCopy } : {}) },
     environment,
   );
   return {
@@ -235,6 +247,34 @@ describe('dictation session', () => {
     expect(test.track.stop).toHaveBeenCalledTimes(1);
     expect(test.recorder.ondataavailable).toBeNull();
     expect(test.intervals.size).toBe(0);
+  });
+
+  it('settles only once when the recording completion callback is repeated', async () => {
+    const test = rig();
+    await test.session.start();
+    const finish = test.recorder.onstop!;
+    test.session.stop();
+    finish();
+    await settle();
+    expect(test.sent).toHaveLength(1);
+    expect(test.texts).toEqual(['hello there']);
+    expect(test.session.error).toBeUndefined();
+  });
+
+  it('keeps recognized audio in its origin when the composer changes scope before delivery', async () => {
+    let scope = 'new:a';
+    const test = rig({ scope: () => scope });
+    let complete!: (result: { text: string }) => void;
+    test.setAnswer(() => new Promise((resolve) => { complete = resolve; }));
+    await test.session.start();
+    test.session.stop();
+    await settle();
+    scope = 'new:b';
+    complete({ text: 'only for the first workspace' });
+    await settle();
+    expect(test.texts).toEqual([]);
+    expect(test.pending.visible('new:a')?.reason).toBe('unsent');
+    expect(test.pending.visible('new:b')).toBeUndefined();
   });
 
   it('says so and records nothing when the window cannot record', async () => {

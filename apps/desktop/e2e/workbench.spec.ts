@@ -32,6 +32,59 @@ async function openFromTab(lab: Lab, title: string, item: 'Open to the right' | 
 }
 
 test.describe('chat tabs', () => {
+  test('checking chat status clears a stale error and the notice can also be dismissed', async ({ lab, page }) => {
+    await lab.open();
+    await openChats(lab, [LISBON]);
+    const chat = pane(lab, LISBON);
+    const notice = chat.getByRole('alert').filter({ hasText: 'The Pi runtime could not authenticate the selected model.' });
+    async function showError(): Promise<void> {
+      await page.evaluate(async (path) => {
+        const { workspaceHost } = await import(path);
+        const snapshot = workspaceHost.snapshot;
+        workspaceHost.snapshot = () => {
+          workspaceHost.snapshot = snapshot;
+          return Promise.reject(new Error('The Pi runtime could not authenticate the selected model.'));
+        };
+      }, '/src/host-api/workspaceClient.ts');
+      await chat.getByRole('button', { name: 'Chat actions' }).click();
+      await page.getByRole('menuitem', { name: 'Refresh from history' }).click();
+      await expect(notice).toBeVisible();
+    }
+
+    await showError();
+    await page.evaluate(async (path) => {
+      const { workspaceHost } = await import(path);
+      const snapshot = workspaceHost.snapshot;
+      const gate = new Promise<void>((resolve) => window.addEventListener('finish-status-check', () => resolve(), { once: true }));
+      workspaceHost.snapshot = async (sessionId: string) => {
+        workspaceHost.snapshot = snapshot;
+        await gate;
+        return snapshot(sessionId);
+      };
+    }, '/src/host-api/workspaceClient.ts');
+    await notice.getByRole('button', { name: 'Check status' }).click();
+    await expect(notice.getByRole('button', { name: 'Checking…' })).toBeDisabled();
+    await page.evaluate(() => window.dispatchEvent(new Event('finish-status-check')));
+    await expect(notice).toHaveCount(0);
+
+    await showError();
+    await notice.getByRole('button', { name: 'Dismiss notice' }).click();
+    await expect(notice).toHaveCount(0);
+  });
+
+  test('opening an older chat leaves its sidebar date and position alone', async ({ lab }) => {
+    await lab.open();
+    const older = lab.chat(LIFETIMES);
+    const newer = lab.chat(CACHE);
+    const time = await older.locator('.chat__time').innerText();
+    expect((await box(newer)).y).toBeLessThan((await box(older)).y);
+
+    await openChats(lab, [LIFETIMES]);
+    await expect(pane(lab, LIFETIMES).getByRole('region', { name: 'Conversation messages' })).toBeVisible();
+    await expect(older.locator('.chat__time')).toHaveText(time);
+    expect((await box(newer)).y).toBeLessThan((await box(older)).y);
+  });
+
   test('opened chats stay as tabs and a click switches between them', async ({ lab }) => {
     await lab.open();
     await openChats(lab, [LISBON, CACHE]);
@@ -138,6 +191,33 @@ test.describe('split panes', () => {
     await expect(lab.page.getByRole('button', { name: 'Close pane' })).toHaveCount(3);
   });
 
+  test('dragging an already visible tab into the left pane swaps the chats and survives reloading', async ({ lab, page }) => {
+    await lab.open();
+    await openChats(lab, [LISBON, CACHE, LIFETIMES]);
+    await openFromTab(lab, LISBON, 'Open to the right');
+    await openFromTab(lab, CACHE, 'Open below');
+    const left = await box(pane(lab, LIFETIMES));
+    const target = { x: left.x + left.width / 2, y: left.y + left.height / 2 };
+    const source = await box(tab(lab, CACHE));
+
+    await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(target.x, target.y, { steps: 10 });
+    await page.mouse.move(target.x, target.y);
+    await page.mouse.up();
+
+    await expect.poll(async () => (await box(pane(lab, CACHE))).x).toBe(left.x);
+    await expect(tab(lab, CACHE)).toHaveAttribute('aria-selected', 'true');
+    await expect(pane(lab, LIFETIMES)).toBeVisible();
+    await expect(pane(lab, LISBON)).toBeVisible();
+
+    await page.reload();
+    await expect(tab(lab, CACHE)).toHaveAttribute('aria-selected', 'true');
+    await expect.poll(async () => (await box(pane(lab, CACHE))).x).toBe(left.x);
+    await expect(pane(lab, LIFETIMES)).toBeVisible();
+    await expect(pane(lab, LISBON)).toBeVisible();
+  });
+
   test('a fifth chat is refused with a message', async ({ lab, page }) => {
     await lab.open();
     // The last chat opened is in the single pane; three more join it, and the first one has no room.
@@ -155,6 +235,22 @@ test.describe('split panes', () => {
     await page.getByRole('menuitem', { name: 'Open to the side' }).click();
     await expect(lab.toast('Four chats are on screen. Close one first.')).toBeVisible();
     await expect(lab.page.getByRole('button', { name: 'Close pane' })).toHaveCount(4);
+  });
+
+  test('the tab menu can swap a visible chat with the active pane using only the keyboard', async ({ lab, page }) => {
+    await lab.open();
+    await openChats(lab, [LISBON, CACHE]);
+    await openFromTab(lab, LISBON, 'Open to the right');
+    const right = await box(pane(lab, LISBON));
+    await tab(lab, CACHE).focus();
+    await page.keyboard.press('Shift+F10');
+    const swap = page.getByRole('menuitem', { name: 'Swap with active pane' });
+    await swap.focus();
+    await page.keyboard.press('Enter');
+
+    await expect(tab(lab, CACHE)).toHaveAttribute('aria-selected', 'true');
+    await expect.poll(async () => (await box(pane(lab, CACHE))).x).toBe(right.x);
+    await expect(pane(lab, LISBON)).toBeVisible();
   });
 
   test('focusing the other pane selects its tab', async ({ lab }) => {

@@ -61,6 +61,32 @@ describe('show', () => {
   });
 });
 
+describe('moveToPane', () => {
+  it('restores an on-screen chat to the left without closing the target chat or the third pane', () => {
+    const storage = memoryStorage();
+    const bench = make(storage);
+    bench.show('A');
+    bench.openBeside('B');
+    bench.openBeside('C', 'bottom');
+    const left = paneId(bench, 'A');
+
+    expect(bench.moveToPane('C', left)).toBe(true);
+    expect(bench.shown).toEqual(['C', 'B', 'A']);
+    expect(bench.activePaneId).toBe(left);
+    expect(bench.tabs).toEqual(['A', 'B', 'C']);
+    expect(make(storage).shown).toEqual(bench.shown);
+    expect(bench.moveToPane('C', left)).toBe(false);
+    expect(bench.moveToPane('A', 'missing')).toBe(false);
+  });
+
+  it('replaces the target pane with a hidden chat and leaves its previous chat in the tab strip', () => {
+    const bench = withChats('A', 'B');
+    expect(bench.moveToPane('A', paneId(bench, 'B'))).toBe(true);
+    expect(bench.shown).toEqual(['A']);
+    expect(bench.tabs).toEqual(['A', 'B']);
+  });
+});
+
 describe('openBeside', () => {
   it('behaves like show when nothing is open', () => {
     const bench = make();

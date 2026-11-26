@@ -1,9 +1,9 @@
 //! Custody of the refresh token and the non-secret account preferences.
 //!
 //! The refresh token goes to the OS credential store (Windows Credential
-//! Manager, macOS Keychain). When that store is missing or fails, the token
-//! stays in memory for this run and the status reports `memory`. There is no
-//! file fallback for a secret.
+//! Manager, macOS Keychain, Linux Secret Service). When that store is missing
+//! or fails, the token stays in memory for this run and the status reports
+//! `memory`. There is no file fallback for a secret.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -87,14 +87,14 @@ impl CredentialStore for MemoryStore {
 }
 
 /// The OS credential store entry `dev.piui.desktop.nano` / issuer origin.
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Clone)]
 pub struct OsCredentialStore {
     service: String,
     user: String,
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 impl OsCredentialStore {
     /// The entry for `issuer_origin` (for example `https://nanoagents.ru`).
     pub fn new(issuer_origin: &str) -> Self {
@@ -109,7 +109,7 @@ impl OsCredentialStore {
     }
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 impl CredentialStore for OsCredentialStore {
     fn kind(&self) -> NanoCredentialStoreV1 {
         NanoCredentialStoreV1::Os
@@ -120,6 +120,8 @@ impl CredentialStore for OsCredentialStore {
             Ok(token) if token.is_empty() => Ok(None),
             Ok(token) => Ok(Some(SecretString::new(token))),
             Err(keyring::Error::NoEntry) => Ok(None),
+            #[cfg(target_os = "linux")]
+            Err(error) if linux_credential_absent(&error) => Ok(None),
             Err(_) => Err(NanoError::CredentialStoreFailed),
         }
     }
@@ -133,19 +135,50 @@ impl CredentialStore for OsCredentialStore {
     fn delete(&self) -> Result<(), NanoError> {
         match self.entry()?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            #[cfg(target_os = "linux")]
+            Err(error) if linux_credential_absent(&error) => Ok(()),
             Err(_) => Err(NanoError::CredentialStoreFailed),
         }
     }
 }
 
+#[cfg(target_os = "linux")]
+fn linux_credential_absent(error: &keyring::Error) -> bool {
+    use std::error::Error;
+
+    match error
+        .source()
+        .and_then(|cause| cause.downcast_ref::<dbus_secret_service::Error>())
+    {
+        // After finding no matching entry, keyring searches for legacy entries
+        // in the default collection. A fresh keyring may have no such collection.
+        Some(dbus_secret_service::Error::NoResult) => true,
+        Some(dbus_secret_service::Error::Dbus(error)) => linux_secret_service_missing(error),
+        _ => false,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_secret_service_missing(error: &dbus::Error) -> bool {
+    match error.name() {
+        Some("org.freedesktop.DBus.Error.ServiceUnknown") => true,
+        Some("org.freedesktop.DBus.Error.NotSupported") => {
+            // libdbus cannot autolaunch a session bus without an X11 display.
+            std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none()
+                && std::env::var_os("DISPLAY").is_none()
+        }
+        _ => false,
+    }
+}
+
 /// The OS credential store for `issuer_origin`, or `None` on platforms
-/// without one (Linux and others keep the token in memory only).
+/// without a supported backend.
 pub fn default_os_store(issuer_origin: &str) -> Option<Arc<dyn CredentialStore>> {
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     {
         Some(Arc::new(OsCredentialStore::new(issuer_origin)))
     }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         let _ = issuer_origin;
         None
@@ -350,17 +383,42 @@ pub(crate) mod tests {
         assert!(vault.load().expect("load").is_some());
     }
 
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     #[test]
     fn other_platforms_have_no_os_store() {
         assert!(default_os_store("https://nanoagents.ru").is_none());
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     #[test]
     fn supported_platforms_report_an_os_store() {
         let store = default_os_store("https://nanoagents.ru").expect("store");
         assert_eq!(store.kind(), NanoCredentialStoreV1::Os);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_missing_credentials_are_distinct_from_storage_failures() {
+        use dbus_secret_service::Error;
+
+        let missing_collection = keyring::Error::NoStorageAccess(Box::new(Error::NoResult));
+        let locked = keyring::Error::NoStorageAccess(Box::new(Error::Locked));
+        let dismissed_prompt = keyring::Error::NoStorageAccess(Box::new(Error::Prompt));
+        let bus_failure = |name| {
+            keyring::Error::PlatformFailure(Box::new(Error::Dbus(dbus::Error::new_custom(
+                name, "test",
+            ))))
+        };
+
+        assert!(linux_credential_absent(&missing_collection));
+        assert!(linux_credential_absent(&bus_failure(
+            "org.freedesktop.DBus.Error.ServiceUnknown"
+        )));
+        assert!(!linux_credential_absent(&locked));
+        assert!(!linux_credential_absent(&dismissed_prompt));
+        assert!(!linux_credential_absent(&bus_failure(
+            "org.freedesktop.DBus.Error.FileNotFound"
+        )));
     }
 
     #[test]

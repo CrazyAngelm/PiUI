@@ -113,6 +113,32 @@ describe('pending recordings', () => {
     expect(store.get('chat:1')).toBe(mine);
   });
 
+  it('does not resurrect a clip consumed while its stored copy is read', async () => {
+    const clip = recording('chat:1');
+    const { storage } = memoryStorage([clip]);
+    let began!: () => void;
+    const started = new Promise<void>((resolve) => { began = resolve; });
+    let deliver!: (clips: PendingRecording[]) => void;
+    const delayedRead = new Promise<PendingRecording[]>((resolve) => { deliver = resolve; });
+    let delay = false;
+    const store = new PendingRecordings({
+      ...storage,
+      load: () => {
+        if (!delay) return storage.load();
+        began();
+        return delayedRead;
+      },
+    }, () => NOW);
+    await store.load();
+    delay = true;
+    const refresh = store.refresh();
+    await started;
+    const consumed = store.remove(clip.scope, clip.id);
+    deliver([clip]);
+    await Promise.all([refresh, consumed]);
+    expect(store.get(clip.scope)).toBeUndefined();
+  });
+
   it('ignores stored entries that are not recordings', async () => {
     const { storage, rows } = memoryStorage();
     rows.set('chat:bad', { scope: 'chat:bad', blob: 'not a blob' } as unknown as PendingRecording);
