@@ -1,12 +1,17 @@
 import { get } from 'svelte/store';
 import { language } from '../../features/locale/language';
-import { openChatLink } from '../../host-api/chatLinkClient';
+import { isChatLink, openChatLink } from '../../host-api/chatLinkClient';
+import { openSiteBrowserLink } from '../../host-api/siteBrowserClient';
 
-/**
- * Opens a link of a chat message through the host (ADR-075): the host asks the person in a native
- * dialog and opens the browser only on Yes. Resolves `false` when the host could not ask, and the
- * caller copies the address instead.
- */
-export function openLinkInHost(url: string): Promise<boolean> {
-  return openChatLink(url, get(language) === 'ru' ? 'ru' : 'en');
+/** Opens a chat link in the local site browser. The caller offers to copy a refused link. */
+export async function openLinkInHost(url: string): Promise<boolean> {
+  if (!isChatLink(url)) return false;
+  const hint = get(language) === 'ru' ? 'ru' : 'en';
+  try {
+    const opened = await openSiteBrowserLink({ url, language: hint });
+    // Only an unsupported OS can use the separate, confirmed system-browser route.
+    return opened === false ? openChatLink(url, hint) : opened === true;
+  } catch {
+    return false;
+  }
 }

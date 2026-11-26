@@ -419,6 +419,16 @@ fn resolved_e2e_data_directories() -> Result<Option<E2eDataDirectories>, std::io
     )
 }
 
+fn refuses_app_command(
+    label: &str,
+    url: Option<&tauri::Url>,
+    command: &str,
+    dev_url: Option<&tauri::Url>,
+) -> bool {
+    navigation_guard::refuses_command_source(label, url)
+        && !site_browser::allows_chrome_command(label, url, command, dev_url)
+}
+
 /// App commands are an allowlist (`navigation_guard`): only the main window
 /// on an app origin may call them. The plugin origin and the Nano Cloud
 /// window (`nano-cloud`, a remote origin with no IPC) are refused here.
@@ -428,14 +438,12 @@ fn guarded_commands<R: tauri::Runtime>(
     move |invoke| {
         let webview = invoke.message.webview_ref();
         let url = webview.url().ok();
-        if navigation_guard::refuses_command_source(webview.label(), url.as_ref())
-            && !site_browser::allows_chrome_command(
-                webview.label(),
-                url.as_ref(),
-                invoke.message.command(),
-                webview.app_handle().config().build.dev_url.as_ref(),
-            )
-        {
+        if refuses_app_command(
+            webview.label(),
+            url.as_ref(),
+            invoke.message.command(),
+            webview.app_handle().config().build.dev_url.as_ref(),
+        ) {
             if navigation_guard::refuses_invoke(url.as_ref()) {
                 eprintln!("event=plugin_origin_invoke_refused");
             } else {
@@ -456,7 +464,8 @@ mod tests {
         REPOSITORY_E2E_AREA_DIRECTORY, canonical_repository_root,
         canonical_repository_target_directory, canonical_repository_target_e2e_area,
         canonical_repository_target_e2e_area_from_root,
-        e2e_automation_initialization_script_from_values, select_e2e_data_directories,
+        e2e_automation_initialization_script_from_values, refuses_app_command,
+        select_e2e_data_directories,
     };
     use std::{
         fs,
@@ -465,6 +474,43 @@ mod tests {
     };
 
     static NEXT_TEST_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn chat_link_browser_command_requires_the_trusted_main_view() {
+        use tauri::Url;
+        let app = Url::parse("http://tauri.localhost/index.html").expect("app");
+        let chrome = Url::parse("http://tauri.localhost/browser.html").expect("chrome");
+        let plugin = Url::parse("http://piui-plugin.localhost/example/panel.html").expect("plugin");
+        let site = Url::parse("https://example.org/").expect("site");
+        let open = "site_browser_open_link_v1";
+        assert!(!refuses_app_command("main", Some(&app), open, None));
+        assert!(refuses_app_command("main", Some(&plugin), open, None));
+        assert!(refuses_app_command("nano-cloud", Some(&site), open, None));
+        assert!(refuses_app_command(
+            "site-browser-tab-1",
+            Some(&site),
+            open,
+            None
+        ));
+        assert!(refuses_app_command(
+            "site-browser-tab-1",
+            Some(&app),
+            open,
+            None
+        ));
+        assert!(refuses_app_command(
+            "site-browser-chrome",
+            Some(&chrome),
+            open,
+            None
+        ));
+        assert!(!refuses_app_command(
+            "site-browser-chrome",
+            Some(&chrome),
+            "site_browser_action_v1",
+            None
+        ));
+    }
 
     fn next_test_directory(parent: &Path, purpose: &str) -> PathBuf {
         let sequence = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
@@ -1081,6 +1127,7 @@ pub fn run() -> Result<(), tauri::Error> {
             workspace_api::chat_files::workspace_chat_files_v1,
             chat_link::chat_open_link_v1,
             site_browser::site_browser_open_v1,
+            site_browser::site_browser_open_link_v1,
             site_browser::site_browser_action_v1,
             plugins::api::plugins_v1,
             plugins::api::plugin_command_v1,

@@ -41,6 +41,13 @@ struct Tabs {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SiteBrowserOpenLinkRequestV1 {
+    url: String,
+    language: String,
+}
+
+#[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum SiteBrowserAction {
     Read,
@@ -97,9 +104,14 @@ impl SiteBrowser {
     }
 
     fn new_tab(&self, tabs: &mut Tabs) {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        tabs.ids.push(id);
-        tabs.active = Some(id);
+        tabs.push(self.next_id.fetch_add(1, Ordering::Relaxed));
+    }
+}
+
+impl Tabs {
+    fn push(&mut self, id: u32) {
+        self.ids.push(id);
+        self.active = Some(id);
     }
 }
 
@@ -168,6 +180,13 @@ fn address(input: &str, dev_url: Option<&Url>) -> Result<Url, SiteBrowserError> 
         Url::parse(&format!("https://{input}"))
     }
     .map_err(|_| SiteBrowserError::InvalidAddress)?;
+    site_url(&url, dev_url)
+        .then_some(url)
+        .ok_or(SiteBrowserError::InvalidAddress)
+}
+
+fn chat_site_url(input: &str, dev_url: Option<&Url>) -> Result<Url, SiteBrowserError> {
+    let url = chat_link::validate_link(input).map_err(|_| SiteBrowserError::InvalidAddress)?;
     site_url(&url, dev_url)
         .then_some(url)
         .ok_or(SiteBrowserError::InvalidAddress)
@@ -367,20 +386,102 @@ pub async fn site_browser_open_v1<R: Runtime>(
     if !SUPPORTED || host.safe_mode || host.is_shutting_down() {
         return Err(SiteBrowserError::Unavailable);
     }
+    open_browser(&app, &browser, &language, None).await
+}
+
+/// Opens a clicked chat link in the isolated browser. Only an unsupported OS
+/// returns false so the caller can offer the existing confirmed external path.
+#[tauri::command]
+pub async fn site_browser_open_link_v1<R: Runtime>(
+    app: AppHandle<R>,
+    host: State<'_, HostState>,
+    browser: State<'_, SiteBrowser>,
+    request: SiteBrowserOpenLinkRequestV1,
+) -> Result<bool, SiteBrowserError> {
+    if host.safe_mode || host.is_shutting_down() {
+        return Err(SiteBrowserError::Unavailable);
+    }
+    let url = chat_site_url(&request.url, app.config().build.dev_url.as_ref())?;
+    if !SUPPORTED {
+        return Ok(false);
+    }
+    open_browser(&app, &browser, &request.language, Some(url)).await?;
+    Ok(true)
+}
+
+async fn open_browser<R: Runtime>(
+    app: &AppHandle<R>,
+    browser: &SiteBrowser,
+    language: &str,
+    link: Option<Url>,
+) -> Result<(), SiteBrowserError> {
     let mut tabs = browser.tabs.lock().await;
-    if let Some(window) = app.get_window(WINDOW) {
+    let existing = app
+        .get_window(WINDOW)
+        .filter(|window| window.get_webview(CHROME).is_some());
+    if let Some(window) = existing {
         window.unminimize()?;
         window.set_focus()?;
+        if let Some(url) = link {
+            open_link_tab(browser, &mut tabs, &window, url)?;
+            signal(app, CHANGED);
+        }
         return Ok(());
     }
-    *tabs = Tabs::default();
-    browser.new_tab(&mut tabs);
+
+    let window = create_browser_window(app, browser, language)?;
+    let mut initial = Tabs::default();
+    let result = match link {
+        Some(url) => open_link_tab(browser, &mut initial, &window, url),
+        None => {
+            browser.new_tab(&mut initial);
+            Ok(())
+        }
+    };
+    if let Err(error) = result.and_then(|()| window.show().map_err(Into::into)) {
+        let _ = window.destroy();
+        return Err(error);
+    }
+    *tabs = initial;
+    signal(app, CHANGED);
+    Ok(())
+}
+
+fn open_link_tab<R: Runtime>(
+    browser: &SiteBrowser,
+    tabs: &mut Tabs,
+    window: &Window<R>,
+    url: Url,
+) -> Result<(), SiteBrowserError> {
+    let profile = browser
+        .profile
+        .as_deref()
+        .ok_or(SiteBrowserError::Unavailable)?;
+    let id = browser.next_id.fetch_add(1, Ordering::Relaxed);
+    if let Err(error) = create_site_view(window, profile, id, url)
+        .and_then(|()| visibility(window, Some(id)).map_err(Into::into))
+    {
+        if let Some(view) = window.get_webview(&tab_label(id)) {
+            let _ = view.close();
+        }
+        let _ = visibility(window, tabs.active);
+        return Err(error);
+    }
+    tabs.push(id);
+    Ok(())
+}
+
+fn create_browser_window<R: Runtime>(
+    app: &AppHandle<R>,
+    browser: &SiteBrowser,
+    language: &str,
+) -> Result<Window<R>, SiteBrowserError> {
     let title = if language == "ru" {
         "Нано · Браузер"
     } else {
         "Nano · Browser"
     };
-    let window = WindowBuilder::new(&app, WINDOW)
+    let window = WindowBuilder::new(app, WINDOW)
         .title(title)
         .inner_size(1080.0, 740.0)
         .min_inner_size(460.0, 320.0)
@@ -409,8 +510,7 @@ pub async fn site_browser_open_v1<R: Runtime>(
         let _ = window.destroy();
         return Err(error.into());
     }
-    window.show()?;
-    Ok(())
+    Ok(window)
 }
 
 #[tauri::command]
@@ -568,6 +668,36 @@ mod tests {
     }
 
     #[test]
+    fn chat_link_keeps_both_url_boundaries() {
+        let dev = Url::parse("http://localhost:1420").expect("dev server");
+        assert_eq!(
+            chat_site_url("http://127.0.0.1:8000/page?part=1#heading", Some(&dev))
+                .expect("agent-served page")
+                .as_str(),
+            "http://127.0.0.1:8000/page?part=1#heading"
+        );
+        for input in [
+            "example.org",
+            " https://example.org/",
+            "file:///C:/secret",
+            "https://tauri.localhost./browser.html",
+            "http://nested.piui-plugin.localhost/test",
+            "https://asset.localhost/x",
+            "http://ipc.localhost/",
+        ] {
+            assert_eq!(
+                chat_site_url(input, Some(&dev)),
+                Err(SiteBrowserError::InvalidAddress),
+                "{input}"
+            );
+        }
+        assert_eq!(
+            chat_site_url("http://localhost:1420/index.html", Some(&dev)).is_err(),
+            cfg!(debug_assertions)
+        );
+    }
+
+    #[test]
     fn toolbar_can_only_use_its_own_action_at_its_own_origin() {
         let local = Url::parse("http://tauri.localhost/browser.html").expect("app");
         let remote = Url::parse("https://example.org/browser.html").expect("site");
@@ -581,6 +711,18 @@ mod tests {
             CHROME,
             Some(&local),
             "site_browser_open_v1",
+            None
+        ));
+        assert!(!allows_chrome_command(
+            CHROME,
+            Some(&local),
+            "site_browser_open_link_v1",
+            None
+        ));
+        assert!(!allows_chrome_command(
+            "site-browser-tab-1",
+            Some(&local),
+            "site_browser_open_link_v1",
             None
         ));
         assert!(!allows_chrome_command(

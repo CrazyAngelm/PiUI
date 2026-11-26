@@ -48,8 +48,13 @@ could end the visible turn, and that the page lost the reader's place.
   there is no opener, or it refuses, the address is copied and a toast says so.
   Other destinations (relative paths, `file:`, `javascript:`) are shown as code
   with a copy action and never opened. The host side is "Opening links" below.
-- **Opening links.** The page cannot open an address by itself. The host command
-  `chat_open_link_v1 { url }` (`contracts/chat-link-v1.ts`, `chat_link.rs`) parses
+- **Opening links.** The page delegates to the local host. On Windows and
+  Linux, `site_browser_open_link_v1` opens the clicked address in a new tab of
+  the isolated site browser (ADR-081). It enforces both the chat link and site
+  browser URL rules. A refusal copies the address. Systems without the built-in
+  browser keep the native confirmation for opening the system browser. The
+  external host command `chat_open_link_v1 { url }` (`contracts/chat-link-v1.ts`,
+  `chat_link.rs`) parses
   the address again, accepts only `http` and `https` with a host, no user name or
   password, at most 2048 bytes and no whitespace or control character, and refuses
   safe mode. It then asks the person in a native dialog ("Open this link in your
@@ -61,8 +66,8 @@ could end the visible turn, and that the page lost the reader's place.
   address is never logged. No answers `opened: false` and nothing is copied. When
   the host cannot ask (safe mode, a refused address, a dialog already open, no
   browser) the address is copied and a toast says so. Intelligent UI link nodes
-  use the same route (ADR-077). The Lab validates the same way and shows a toast
-  "Would open <site>" instead of a dialog. The remote viewer has no route.
+  use the same built-in browser route (ADR-077). The Lab records the simulated
+  route and shows a "Would open <site>" toast. The remote viewer has no route.
 - **Service data.** `serviceJson` classifies by protocol origin only (an
   assistant-kind block with a tool name), never by what the text looks like. The
   Codex memory citation is removed where an answer is shown or copied, only
