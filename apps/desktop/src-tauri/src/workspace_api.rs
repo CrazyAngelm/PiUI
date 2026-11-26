@@ -1235,7 +1235,7 @@ struct SpawnedStart {
     orchestrated: bool,
     sessions_admitted: bool,
     #[cfg(windows)]
-    browser_form: Option<AppHandle>,
+    browser_form: Option<crate::site_browser::form::Factory>,
     publisher: WorkspaceEventPublisher,
     created: bool,
     /// Where this session's chat files may be served from (ADR-074).
@@ -1344,7 +1344,7 @@ struct WorkspaceHostInner {
     /// Linked-chat broker; unset until app setup.
     session_links: Mutex<Option<Arc<dyn SessionLinksHooks>>>,
     #[cfg(windows)]
-    browser_forms: Mutex<Option<AppHandle>>,
+    browser_forms: Mutex<Option<crate::site_browser::form::Factory>>,
     /// Interactive-answer instructions for direct chats (ADR-067).
     interactive_answers: AtomicBool,
     /// The Nano account, relay and launch data (ADR-048); unset until the app
@@ -1445,9 +1445,9 @@ impl WorkspaceHost {
     }
 
     #[cfg(windows)]
-    pub(crate) fn set_browser_forms(&self, app: AppHandle) {
+    pub(crate) fn set_browser_forms(&self, factory: crate::site_browser::form::Factory) {
         if let Ok(mut slot) = self.inner.browser_forms.lock() {
-            *slot = Some(app);
+            *slot = Some(factory);
         }
     }
 
@@ -2601,8 +2601,7 @@ impl WorkspaceHost {
             orchestrated,
             sessions_admitted,
             #[cfg(windows)]
-            browser_form: browser_form
-                .map(|app| Arc::new(crate::site_browser::form::Handoff::new(app))),
+            browser_form: browser_form.map(|factory| factory()),
             notices: Mutex::new(notices),
             reports_turn_cause: matches!(record.harness, HarnessKind::Pi | HarnessKind::Nano),
             turn_cause: Mutex::new(TurnCause::default()),

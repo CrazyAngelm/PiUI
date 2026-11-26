@@ -1056,7 +1056,9 @@ pub fn run() -> Result<(), tauri::Error> {
             ));
             #[cfg(windows)]
             if !safe_mode {
-                state.workspace.set_browser_forms(app.handle().clone());
+                state
+                    .workspace
+                    .set_browser_forms(site_browser::form::factory(app.handle().clone()));
             }
             app.manage(state);
             let trigger_engine = orchestration_triggers::TriggerEngine::default();

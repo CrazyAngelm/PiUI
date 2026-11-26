@@ -2,6 +2,8 @@
 
 mod consent;
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use piui_runtime::workspace_runtime::{BrowserFormField, BrowserFormOperation};
@@ -95,8 +97,40 @@ struct Plan {
 }
 
 pub(crate) struct Handoff {
-    app: AppHandle,
     state: Arc<Mutex<HandoffState>>,
+    operation: Box<NativeOperation>,
+}
+
+type NativeOperation = dyn for<'a> Fn(
+        &'a Handoff,
+        &'a str,
+        BrowserFormOperation,
+    ) -> Pin<Box<dyn Future<Output = Result<(), &'static str>> + Send + 'a>>
+    + Send
+    + Sync;
+
+pub(crate) type Factory = Arc<dyn Fn() -> Arc<Handoff> + Send + Sync>;
+
+// Only real application setup binds Wry to a session. Workspace unit tests
+// handle the same requests and lifetime state without linking the Wry consumer.
+pub(crate) fn factory(app: AppHandle) -> Factory {
+    Arc::new(move || {
+        let app = app.clone();
+        Arc::new(Handoff {
+            state: Arc::default(),
+            operation: Box::new(move |handoff, id, operation| {
+                let app = app.clone();
+                Box::pin(async move {
+                    match operation {
+                        BrowserFormOperation::Open { url, field, value } => {
+                            handoff.open(&app, id, &url, field, value).await
+                        }
+                        BrowserFormOperation::Fill => handoff.fill(&app, id).await,
+                    }
+                })
+            }),
+        })
+    })
 }
 
 #[derive(Default)]
@@ -174,13 +208,6 @@ impl Drop for Request {
 }
 
 impl Handoff {
-    pub(crate) fn new(app: AppHandle) -> Self {
-        Self {
-            app,
-            state: Arc::default(),
-        }
-    }
-
     pub(crate) fn stage_ready(&self, message_id: String) {
         if let Ok(mut state) = self.state.lock()
             && let Some(plan) = state.plan.as_mut()
@@ -251,12 +278,7 @@ impl Handoff {
         let result = tokio::select! {
             biased;
             _ = request.cancelled.wait_for(|cancelled| *cancelled) => Err("cancelled"),
-            result = async {
-                match operation {
-                    BrowserFormOperation::Open { url, field, value } => self.open(id, &url, field, value).await,
-                    BrowserFormOperation::Fill => self.fill(id).await,
-                }
-            } => result,
+            result = (self.operation)(self, id, operation) => result,
         };
         match result {
             Ok(()) => json!({"ok": true}),
@@ -266,6 +288,7 @@ impl Handoff {
 
     async fn open(
         &self,
+        app: &AppHandle,
         request_id: &str,
         address: &str,
         field: BrowserFormField,
@@ -279,12 +302,12 @@ impl Handoff {
         if !visible_value(&value) {
             return Err("invalid-value");
         }
-        let host = self.app.state::<HostState>();
+        let host = app.state::<HostState>();
         if host.safe_mode || host.is_shutting_down() {
             return Err("unavailable");
         }
-        let url = consent_url(address, self.app.config().build.dev_url.as_ref())?;
-        let Some(main) = self.app.get_window("main") else {
+        let url = consent_url(address, app.config().build.dev_url.as_ref())?;
+        let Some(main) = app.get_window("main") else {
             return Err("unavailable");
         };
         let (_, title) = field_labels(field);
@@ -296,9 +319,9 @@ impl Handoff {
             .map_err(|_| "unavailable")?
             .check_active(request_id)?;
         let document = Arc::new(Document::new(url.clone()));
-        let browser = self.app.state::<SiteBrowser>();
+        let browser = app.state::<SiteBrowser>();
         let tab = open_browser(
-            &self.app,
+            app,
             &browser,
             "ru",
             Some(LinkTarget {
@@ -310,10 +333,7 @@ impl Handoff {
         .map_err(|_| "open-failed")?
         .ok_or("open-failed")?;
         document.loaded().await?;
-        let view = self
-            .app
-            .get_webview(&tab_label(tab))
-            .ok_or("document-closed")?;
+        let view = app.get_webview(&tab_label(tab)).ok_or("document-closed")?;
         let context = isolated_context(&view, &document).await?;
         evaluate(&view, &document, &context, field, None).await?;
         let mut state = self.state.lock().map_err(|_| "unavailable")?;
@@ -329,7 +349,7 @@ impl Handoff {
         })
     }
 
-    async fn fill(&self, request_id: &str) -> Result<(), &'static str> {
+    async fn fill(&self, app: &AppHandle, request_id: &str) -> Result<(), &'static str> {
         let (tab, document, context, field, value) = {
             let mut state = self.state.lock().map_err(|_| "unavailable")?;
             state.check_active(request_id)?;
@@ -347,10 +367,7 @@ impl Handoff {
                 value,
             )
         };
-        let view = self
-            .app
-            .get_webview(&tab_label(tab))
-            .ok_or("document-closed")?;
+        let view = app.get_webview(&tab_label(tab)).ok_or("document-closed")?;
         evaluate(&view, &document, &context, field, Some(&value)).await
     }
 }
