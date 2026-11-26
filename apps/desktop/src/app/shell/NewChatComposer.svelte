@@ -20,6 +20,7 @@
   import { errorMessage } from '../workspaceStore.svelte';
   import { WorkspaceOperationError, workspaceError } from '../../host-api/workspaceClient';
   import AttachButton from '../chat/composer/AttachButton.svelte';
+  import { readPastedAttachments, unreadableClipboardImage } from '../chat/composer/clipboardImages';
   import { insertAtCaret } from '../nano/dictation';
   import { dictationSource } from '../nano/dictationSource.svelte';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
@@ -1048,26 +1049,19 @@
   }
 
   function pasted(event: ClipboardEvent): void {
-    const files = [...(event.clipboardData?.files ?? [])];
     if (!workspaceId) return;
-    if (!files.length) {
-      // Linux: a pasted screenshot arrives as an empty event; the image is on the async clipboard.
-      // Loaded on demand: the first screen's bundle stays within its budget.
-      const data = event.clipboardData;
-      if (data && !data.types.length && !remoteMode) {
-        const target = workspaceId;
-        void import('../chat/composer/clipboardImages')
-          .then(({ clipboardImages }) => clipboardImages())
-          .then((images) => {
-            if (!images.length || !textarea?.isConnected || workspaceId !== target || !canAttach()) return;
-            return attachments.paste(target, images, imageState);
-          });
+    const paste = readPastedAttachments(event, !remoteMode);
+    if (!paste || remoteMode) return;
+    const target = workspaceId;
+    const input = textarea;
+    void paste.files.then((files) => {
+      if (!input?.isConnected || textarea !== input || workspaceId !== target) return;
+      if (files.length) {
+        if (canAttach()) return attachments.paste(target, files, imageState);
+      } else if (paste.reportEmpty) {
+        attachments.notices = [{ kind: 'error', message: unreadableClipboardImage }];
       }
-      return;
-    }
-    event.preventDefault();
-    if (remoteMode || !canAttach()) return;
-    void attachments.paste(workspaceId, files, imageState);
+    });
   }
 
   const carriesFiles = (event: DragEvent): boolean => Boolean(event.dataTransfer?.types.includes('Files'));

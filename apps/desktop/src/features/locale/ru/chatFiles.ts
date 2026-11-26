@@ -18,5 +18,6 @@ export const chatFilesRu: Readonly<Record<string, string>> = {
   'Attachments': 'Вложения',
   'Attachment unavailable': 'Вложение недоступно',
   'Download attachment': 'Скачать вложение',
+  'Could not read the image from the clipboard.': 'Не удалось прочитать изображение из буфера обмена.',
   'Preview unavailable. Open the attachment to continue.': 'Предпросмотр недоступен. Откройте вложение, чтобы продолжить.',
 };

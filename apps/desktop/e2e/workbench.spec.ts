@@ -72,6 +72,48 @@ test.describe('chat tabs', () => {
     await expect(notice).toHaveCount(0);
   });
 
+  test('a plain click dismisses a retained transcript selection without dismissing a new range', async ({ lab, page }) => {
+    await lab.open();
+    await openChats(lab, [LISBON]);
+    const chat = pane(lab, LISBON);
+    const messages = chat.getByRole('region', { name: 'Conversation messages' });
+    const row = messages.locator('[data-timeline-block]').first();
+    const input = chat.getByRole('textbox', { name: 'Message' });
+    await expect(row).toBeVisible();
+
+    // Model WebKit retaining its range when the user clicks away.
+    await input.evaluate((element) => element.addEventListener('mousedown', (event) => event.preventDefault()));
+    const select = async () => row.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const selection = document.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+    });
+    const selected = () => page.evaluate(() => !document.getSelection()?.isCollapsed);
+
+    await select();
+    expect(await selected()).toBe(true);
+    await input.click({ modifiers: ['Shift'] });
+    expect(await selected()).toBe(true);
+    await input.click();
+    await expect.poll(selected).toBe(false);
+
+    await select();
+    await page.evaluate(() => {
+      document.addEventListener('pointerup', () => {
+        const selection = document.getSelection()!;
+        const range = selection.getRangeAt(0);
+        const text = document.createTreeWalker(range.startContainer, NodeFilter.SHOW_TEXT).nextNode();
+        if (!text?.textContent) throw new Error('Expected transcript text');
+        range.setStart(text, 0);
+        range.setEnd(text, 1);
+      }, { once: true });
+    });
+    await input.click();
+    expect(await selected()).toBe(true);
+  });
+
   test('opening an older chat leaves its sidebar date and position alone', async ({ lab }) => {
     await lab.open();
     const older = lab.chat(LIFETIMES);

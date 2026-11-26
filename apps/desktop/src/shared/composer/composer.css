@@ -42,7 +42,7 @@
   height: var(--nano-composer-action-size, 32px);
   padding: 0;
   border: 0;
-  border-radius: var(--piui-radius-full);
+  border-radius: var(--piui-radius-sm);
   cursor: pointer;
 }
 [data-nano-composer="action"] { color: var(--piui-text-muted); background: transparent; }

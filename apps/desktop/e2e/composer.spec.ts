@@ -21,12 +21,13 @@ async function openChat(lab: Lab, title: RegExp): Promise<Locator> {
 }
 
 /** Pastes or drops an image file, the way the clipboard or a browser drop delivers it. */
-async function deliverImage(page: Page, kind: 'paste' | 'drop', name: string): Promise<void> {
+async function deliverImage(page: Page, kind: 'paste' | 'drop', name: string, itemsOnly = false): Promise<void> {
   await page.evaluate(
-    ({ kind, name, base64 }) => {
+    ({ kind, name, base64, itemsOnly }) => {
       const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
       const data = new DataTransfer();
       data.items.add(new File([bytes], name, { type: 'image/png' }));
+      if (itemsOnly) Object.defineProperty(data, 'files', { value: new DataTransfer().files });
       const input = document.querySelector('textarea[aria-label="Message"]');
       if (!input) throw new Error('No composer');
       if (kind === 'paste') {
@@ -37,7 +38,7 @@ async function deliverImage(page: Page, kind: 'paste' | 'drop', name: string): P
         zone.dispatchEvent(new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }));
       }
     },
-    { kind, name, base64: SCREENSHOT },
+    { kind, name, base64: SCREENSHOT, itemsOnly },
   );
 }
 
@@ -273,8 +274,8 @@ test.describe('attachments', () => {
     await images.getByRole('button', { name: 'Remove lab-screenshot.png' }).click();
     await expect(images).toHaveCount(0);
 
-    // A pasted image is sent with the first message and shows in the transcript.
-    await deliverImage(page, 'paste', 'pasted.png');
+    // Clipboard sources can offer the image as an item even with an empty file list.
+    await deliverImage(page, 'paste', 'pasted.png', true);
     await expect(composer.getByRole('list', { name: 'Attached images' }).getByText('pasted.png')).toBeVisible();
     await composer.getByRole('button', { name: 'Start chat' }).click();
     const transcript = page.getByRole('region', { name: 'Conversation messages' });
