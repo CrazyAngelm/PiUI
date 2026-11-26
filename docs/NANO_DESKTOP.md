@@ -129,7 +129,7 @@ UI            host                         system browser           Nano server
 |---|---|---|---|
 | Authorization code | redirect to host | at most 60 s, once | bound to the PKCE challenge and redirect URI |
 | Access token | host memory only | about 10 minutes | sent only as `Authorization` to `/api/desktop/v1` |
-| Refresh token | OS credential store (Windows Credential Manager), generic credential `NanoDesktop/<issuer host>/<user id>` | about 30 days sliding | rotated on every use; one family per device |
+| Refresh token | OS credential store (Windows Credential Manager, macOS Keychain, Linux Secret Service), entry `dev.piui.desktop.nano` keyed by issuer origin | about 30 days sliding | rotated on every use; one family per device |
 | Relay session key | host memory, the environment of that session's own Nano bridge process until the bridge deletes it at startup, and that session's Pi child environment | one native session and account generation | worthless off this machine; never in a bridge frame |
 
 - Refresh at 80 percent of the access lifetime and on a 401, single-flight:
@@ -461,7 +461,8 @@ server-side limits.
   becomes mandatory before the installer is offered on a website.
 - Windows has verified process containment and OS credential storage. Linux
   contains agents in a process group (a descendant that calls `setsid` leaves
-  it) and keeps the Nano sign-in in memory only; no claim is made for macOS.
+  it). Linux saves the Nano sign-in in the desktop keyring when Secret Service
+  is available. If the keyring fails, sign-in lasts for the current process.
 - Downloads in the cloud window are cancelled; a host save dialog is a later
   step.
 - Provider API keys for dictation can be entered on Windows only (the native key

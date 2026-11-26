@@ -72,9 +72,9 @@
 
   /** An edge needs room for a pane, or a chat that is already on screen and only moves. */
   function allowed(leaf: PaneLeaf, zone: Zone): boolean {
-    if (!dragged) return false;
+    if (!dragged || dragged === leaf.sessionId) return false;
     if (zone === 'replace') return true;
-    return dragged !== leaf.sessionId && (!workbench.full || workbench.shown.includes(dragged));
+    return !workbench.full || workbench.shown.includes(dragged);
   }
 
   function over(event: DragEvent, leaf: PaneLeaf): void {
@@ -98,8 +98,10 @@
     event.preventDefault();
     const zone = zoneAt(event, target);
     if (zone === 'replace') {
-      workbench.activate(leaf.id);
-      void store.openSession(id);
+      if (workbench.moveToPane(id, leaf.id)) {
+        void store.openSession(id);
+        focusActiveComposer();
+      }
     } else if (id !== leaf.sessionId && workbench.openBeside(id, zone, leaf.id)) {
       void store.openSession(id);
       focusActiveComposer();

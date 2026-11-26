@@ -3157,7 +3157,6 @@ impl WorkspaceHost {
         self.update_record(session_id, |record| {
             record.revision = record.revision.max(revision);
             record.materialized = merge_materialization(record.materialized, materialized);
-            record.updated_at = now_string();
         })?;
         result.map_err(|_| WorkspaceError::runtime())
     }
@@ -3626,7 +3625,6 @@ impl WorkspaceHost {
             if !record.nano_connector || is_nano_model(record.harness, snapshot.model.as_ref()) {
                 record.model = snapshot.model.clone();
             }
-            record.updated_at = now_string();
         })
     }
 }
@@ -5816,7 +5814,6 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                     if let Some(record) = sessions.iter_mut().find(|record| record.id == session_id)
                     {
                         record.revision = revision;
-                        record.updated_at = now_string();
                     }
                     Ok(())
                 });
@@ -9654,6 +9651,74 @@ mod native_host_tests {
             Some(super::CODEX_THREAD_IN_USE)
         );
         assert!(no_live_or_starting_runtime(&host));
+        cleanup(host, root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn opening_and_stopping_a_chat_preserve_its_activity_timestamp() {
+        let root = test_root("chat-activity-timestamp");
+        let host = Arc::new(HostState::open(&root, false).expect("host state"));
+        ControlledStarts::install(&host.workspace);
+        let workspace_id = &host.personal_workspace.project_id;
+        let id = session_of(dispatch(&host, create_command(workspace_id, "Old chat")).await)
+            .session
+            .id;
+        let old = "2026-01-01T00:00:00Z";
+        host.workspace
+            .update_record(&id, |record| record.updated_at = old.into())
+            .expect("seed an older timestamp");
+
+        for _ in 0..2 {
+            let open = session_of(
+                dispatch(
+                    &host,
+                    WorkspaceCommand::OpenSession {
+                        session_id: id.clone(),
+                    },
+                )
+                .await,
+            );
+            assert_eq!(open.session.updated_at, old);
+            dispatch(
+                &host,
+                WorkspaceCommand::CloseSession {
+                    session_id: id.clone(),
+                },
+            )
+            .await
+            .expect("stop the agent");
+            assert_eq!(
+                host.workspace.record(&id).expect("catalog row").updated_at,
+                old
+            );
+        }
+
+        session_of(
+            dispatch(
+                &host,
+                WorkspaceCommand::OpenSession {
+                    session_id: id.clone(),
+                },
+            )
+            .await,
+        );
+        dispatch(
+            &host,
+            WorkspaceCommand::Send {
+                session_id: id.clone(),
+                text: "A new message".into(),
+                mode: PromptMode::Prompt,
+            },
+        )
+        .await
+        .expect("send a message");
+        let after_send = host.workspace.record(&id).expect("catalog row").updated_at;
+        assert_ne!(after_send, old);
+        host.workspace.shutdown_all().await;
+        assert_eq!(
+            host.workspace.record(&id).expect("catalog row").updated_at,
+            after_send
+        );
         cleanup(host, root);
     }
 

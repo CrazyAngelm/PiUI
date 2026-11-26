@@ -8,6 +8,7 @@ export const workbenchRu: Readonly<Record<string, string>> = {
   'Open to the right': 'Открыть справа',
   'Open below': 'Открыть снизу',
   'Open to the side': 'Открыть рядом',
+  'Swap with active pane': 'Поменять местами с активной панелью',
   'New result': 'Новый результат',
   'Close pane': 'Закрыть панель',
   'Resize panes side by side': 'Ширина панелей',

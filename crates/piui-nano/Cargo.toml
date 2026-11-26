@@ -38,10 +38,16 @@ tokio-tungstenite = { version = "0.29", default-features = false }
 url = "2.5"
 zeroize = "1"
 
-# Windows Credential Manager and the macOS Keychain. Other platforms keep the
-# refresh token in memory only (see `store::default_os_store`).
+# Windows Credential Manager and the macOS Keychain.
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 keyring = { version = "3.6", default-features = false, features = ["windows-native", "apple-native"] }
+
+# Use the desktop Secret Service with encrypted D-Bus transfers and no new
+# native build dependency. Desktops without Secret Service fall back to memory.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["sync-secret-service", "crypto-rust", "vendored"] }
+dbus = "0.9"
+dbus-secret-service = "4.1"
 
 [dev-dependencies]
 tempfile = "3"

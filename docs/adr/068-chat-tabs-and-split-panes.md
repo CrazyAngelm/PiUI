@@ -98,7 +98,9 @@ to load the code again.
   by the chat title.
 - Dragging a chat (sidebar row or tab) over a pane shows where it will land:
   the outer quarter of a pane is an edge (a new pane), the middle replaces the
-  pane's chat. Every drag action also has a menu entry.
+  pane's chat. If the dragged chat is already visible, dropping it in the middle
+  swaps the two chats between their panes. The tab menu offers the same swap
+  with the active pane.
 
 ### Narrow windows
 
@@ -134,3 +136,6 @@ as seen.
   shows the chat.
 - Moving the selection between panes writes the route key, so a restart reopens
   the last focused chat and its panes.
+- Opening, refreshing and stopping a chat preserve its saved activity timestamp.
+- A successful status check clears that chat’s error notice. Dismissing a notice
+  leaves the chat alone. Neither action sends a message.

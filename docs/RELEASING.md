@@ -365,5 +365,6 @@ in [AGENTS.md](../AGENTS.md).
   in a shell profile (provider API keys) are still not passed to agents started
   from a desktop launcher, so sign in inside the agent or start Nano Desktop
   from a terminal (ADR-063).
-- On Linux the Nano sign-in is kept in memory for the running app only (no OS
-  credential store is used yet), and Nano uses the separately installed Pi.
+- On Linux, Nano stores its refresh token in the desktop Secret Service when
+  available. If the store is unavailable, sign-in lasts until the app exits.
+  Nano uses the separately installed Pi.

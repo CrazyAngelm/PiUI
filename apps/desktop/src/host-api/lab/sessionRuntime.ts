@@ -98,7 +98,6 @@ export class LabSessions {
   /** Starts a native runtime. The caller snapshots first, then publishes the session event. */
   open(record: LabSessionRecord, status: SessionStatus = 'idle'): void {
     record.live = newLiveState(status);
-    this.touch(record);
   }
 
   /** Disposes the runtime without further events; the watermark advances like `close_session`. */
@@ -109,7 +108,6 @@ export class LabSessions {
     turn?.cancel?.();
     record.live = undefined;
     record.revision += 1;
-    this.touch(record);
     turn?.onEnd?.('lost');
   }
 

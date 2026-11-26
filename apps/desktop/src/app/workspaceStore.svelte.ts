@@ -220,7 +220,8 @@ export class WorkspaceStore {
   private catalogRequest = 0;
   private sessionRequest = 0;
   private pendingAcceptedSessionId = '';
-  private reconciling = new Set<string>();
+  private reconciling = new Map<string, Promise<boolean>>();
+  private statusChecks = new Map<string, symbol>();
   private reconcileAgain = new Set<string>();
   private reopenReconcile = new Set<string>();
   private pendingEvents = new Map<string, WorkspaceEvent[]>();
@@ -622,15 +623,22 @@ export class WorkspaceStore {
       if (allowClosedReopen) this.reopenReconcile.add(sessionId);
       return;
     }
+    const refresh = this.reconcileSnapshot(sessionId, allowClosedReopen);
+    this.reconciling.set(sessionId, refresh);
+    await refresh;
+  }
+
+  private async reconcileSnapshot(sessionId: string, allowClosedReopen: boolean): Promise<boolean> {
     const beforeRevision = this.snapshots[sessionId]?.revision ?? -1;
     let receivedRevision = beforeRevision;
-    this.reconciling.add(sessionId);
     try {
       const snapshot = await workspaceHost.snapshot(sessionId);
       receivedRevision = snapshot.revision;
       this.storeSnapshot(snapshot, allowClosedReopen);
+      return true;
     } catch (error) {
       this.reportSessionError(sessionId, errorMessage(error));
+      return false;
     } finally {
       this.reconciling.delete(sessionId);
       if (this.reconcileAgain.has(sessionId)) {
@@ -739,8 +747,29 @@ export class WorkspaceStore {
     return sessionId === this.selectedSessionId ? this.sessionError : this.paneErrors[sessionId];
   }
 
+  dismissSessionError(sessionId: string): void {
+    if (sessionId === this.selectedSessionId) this.sessionError = undefined;
+    else this.forgetPaneError(sessionId);
+  }
+
+  async checkSessionStatus(sessionId: string): Promise<void> {
+    const previousError = this.errorFor(sessionId);
+    const check = Symbol();
+    this.statusChecks.set(sessionId, check);
+    try {
+      if (!this.reconciling.has(sessionId)) void this.reconcileSession(sessionId);
+      if (await this.reconciling.get(sessionId) && this.statusChecks.get(sessionId) === check && this.errorFor(sessionId) === previousError) {
+        this.dismissSessionError(sessionId);
+      }
+    } finally {
+      if (this.statusChecks.get(sessionId) === check) this.statusChecks.delete(sessionId);
+    }
+  }
+
   /** The selected chat shows its error in the header banner; a chat in a pane keeps its own. */
   private reportSessionError(sessionId: string, message: string): void {
+    // Each report is a new occurrence, even when the previous text matches.
+    this.statusChecks.delete(sessionId);
     if (this.selectedSessionId === sessionId) this.sessionError = message;
     else if (this.shownSessions.has(sessionId)) this.paneErrors = { ...this.paneErrors, [sessionId]: message };
   }

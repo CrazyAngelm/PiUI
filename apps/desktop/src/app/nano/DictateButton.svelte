@@ -15,7 +15,7 @@
 
   interface Props {
     /** Receives the recognized words; the composer puts them at its caret. */
-    onText: (text: string) => void | Promise<void>;
+    onText: (text: string, scope: string) => boolean | void;
     /** Sends the composer after a recording that was stopped with `stopAndSend()` has been turned into text. */
     onSend?: () => void;
     /** True from the first press until the words are in the draft; the composer's own send button
@@ -47,6 +47,7 @@
 
   // Set by "stop and send"; cleared when the text arrives or the recording ends without text.
   let sendAfter = false;
+  let alive = true;
 
   const dictation = untrack(
     () =>
@@ -55,13 +56,13 @@
         dictationTransport(source, client, provider),
         {
           maxBytes: () => source.maxBytes,
-          onText: async (text) => {
+          onText: (text, origin) => {
+            if (!alive || scope !== origin || onText(text, origin) === false) return false;
             const send = sendAfter;
             sendAfter = false;
-            // The message goes out only once the words are in the draft.
-            await onText(text);
-            await tick();
-            if (send && onSend) onSend();
+            if (send) void tick().then(() => {
+              if (alive && scope === origin) onSend?.();
+            });
           },
           errorCopy: dictationErrorCopy,
           scope: () => scope,
@@ -116,6 +117,7 @@
 
   // Nothing is left recording when the composer goes away; what was said stays as a pending recording.
   onDestroy(() => {
+    alive = false;
     dictation.cancel('teardown');
     active = false;
   });

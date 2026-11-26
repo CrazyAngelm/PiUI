@@ -1,4 +1,5 @@
 import { nanoAccountError } from '../../host-api/nanoAccountClient';
+import { desktopAvailable, hostRemote } from '../../host-api/transport';
 import {
   DICTATION_BITS_PER_SECOND,
   DICTATION_CHECKPOINT_MS,
@@ -37,12 +38,14 @@ export interface DictationEnvironment {
   clearInterval(handle: unknown): void;
 }
 
-export function browserDictationEnvironment(): DictationEnvironment {
-  const recorder = typeof MediaRecorder === 'undefined' ? undefined : MediaRecorder;
-  // Where MediaRecorder records nothing usable (the AppImage's WebKitGTK), Web Audio still gives WAV.
+export function browserDictationEnvironment(native = desktopAvailable && !hostRemote): DictationEnvironment {
+  const browser = typeof navigator === 'undefined' ? undefined : navigator;
+  // Native Linux uses WebKitGTK, which can advertise MP4 and then return an empty recording.
+  const nativeLinux = native && /^Linux\b/.test(browser?.platform ?? '');
+  const recorder = nativeLinux || typeof MediaRecorder === 'undefined' ? undefined : MediaRecorder;
   const wav = canRecordWav();
   return {
-    available: canRecordAudio({ mediaDevices: typeof navigator === 'undefined' ? undefined : navigator.mediaDevices, recorder: recorder ?? (wav ? WavRecorder : undefined) }),
+    available: canRecordAudio({ mediaDevices: browser?.mediaDevices, recorder: recorder ?? (wav ? WavRecorder : undefined) }),
     isTypeSupported: (mime) => (mime === WAV_MIME ? wav : (recorder?.isTypeSupported(mime) ?? false)),
     requestMicrophone: () => navigator.mediaDevices.getUserMedia({ audio: true }),
     // MediaRecorder's event types are wider than the slice the session reads.
@@ -107,7 +110,7 @@ export class Dictation {
     private readonly client: DictationTransport,
     private readonly options: {
       readonly maxBytes: () => number | undefined;
-      readonly onText: (text: string) => void;
+      readonly onText: (text: string, scope: string) => boolean | void;
       /** English source copy for a failed request; the Nano account's copy when absent. */
       readonly errorCopy?: (cause: unknown) => string;
       /** The composer the recording belongs to, and where an unsent clip is kept. */
@@ -322,7 +325,7 @@ export class Dictation {
   }
 
   private async finish(generation: number): Promise<void> {
-    if (generation !== this.generation || this.discard) return;
+    if (generation !== this.generation || this.phase !== 'recording' || this.discard) return;
     const parts = this.chunks;
     const mimeType = this.mimeType;
     const target = this.target(mimeType);
@@ -358,9 +361,10 @@ export class Dictation {
         void this.keep(target, clip, durationMs, 'empty');
         this.fail('empty');
       } else {
-        void this.options.pending.remove(target.scope, target.id);
+        if (target.scope === this.options.scope() && this.options.onText(words, target.scope) !== false) {
+          void this.options.pending.remove(target.scope, target.id);
+        }
         this.toIdle();
-        this.options.onText(words);
       }
     } catch (cause) {
       if (generation !== this.generation) return;
@@ -380,6 +384,7 @@ export class Dictation {
     this.stream = undefined;
     if (this.recorder) {
       this.recorder.ondataavailable = null;
+      this.recorder.onstop = null;
       this.recorder.onerror = null;
     }
     this.recorder = undefined;

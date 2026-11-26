@@ -113,6 +113,16 @@
   // The selected chat reports through the store's single fields, a chat in a pane through its own.
   const loadingNow = $derived(store.loadingFor(sessionId));
   const loadError = $derived(store.errorFor(sessionId));
+  let checkingStatus = $state(false);
+
+  async function checkStatus(): Promise<void> {
+    checkingStatus = true;
+    try {
+      await store.checkSessionStatus(sessionId);
+    } finally {
+      checkingStatus = false;
+    }
+  }
   // A pane opened beside the selected chat loads itself.
   // It reads the derived `snapshot`, which changes only with this chat's own snapshot: `store.snapshots` is replaced on every
   // event of any chat, and a failed load would otherwise be asked again, and its error redrawn, each time.
@@ -461,7 +471,10 @@
       {#if loadError}
         <div class="banner" role="alert">
           <span>{$t(loadError)}</span>
-          <Button size="sm" variant="ghost" onclick={() => void store.reconcileSession(session.id)}>{$t('Check status')}</Button>
+          <div class="banner__actions">
+            <Button size="sm" variant="ghost" disabled={checkingStatus} onclick={() => void checkStatus()}>{$t(checkingStatus ? 'Checking…' : 'Check status')}</Button>
+            <IconButton label={$t('Dismiss notice')} onclick={() => store.dismissSessionError(sessionId)}><X /></IconButton>
+          </div>
         </div>
       {/if}
 
@@ -691,6 +704,12 @@
   }
   .loading {
     padding: var(--piui-space-8);
+  }
+  .banner__actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
   .composer-zone {
     display: grid;

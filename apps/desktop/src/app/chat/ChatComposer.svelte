@@ -420,7 +420,7 @@
     caret = position;
     menuIndex = 0;
     await tick();
-    input?.focus();
+    if (active) input?.focus();
     input?.setSelectionRange(position, position);
   }
 
@@ -429,9 +429,11 @@
   }
 
   /** Dictated words go in at the caret. */
-  function dictated(words: string): Promise<void> {
+  function dictated(words: string, origin: string): boolean {
+    if (origin !== `chat:${sessionId}`) return false;
     const next = insertAtCaret(text, input?.selectionStart ?? caret, words);
-    return place(next.text, next.caret);
+    void place(next.text, next.caret);
+    return true;
   }
 
   /** `/btw`: a branch of this chat at its end, opened beside it; the question is the branch's first message. */

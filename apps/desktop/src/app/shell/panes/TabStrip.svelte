@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
+  import ArrowLeftRight from '@lucide/svelte/icons/arrow-left-right';
   import Columns2 from '@lucide/svelte/icons/columns-2';
   import Plus from '@lucide/svelte/icons/plus';
   import Rows2 from '@lucide/svelte/icons/rows-2';
@@ -78,10 +79,16 @@
   function menuItems(id: string): MenuEntry[] {
     // A chat cannot sit beside itself, and a fifth chat has no room.
     // A narrow window shows the selected chat only, so it has no panes to open.
-    const unavailable = workbench.activeSessionId === id || (workbench.full && !onScreen.has(id)) || window.matchMedia('(max-width: 760px)').matches;
+    const narrow = window.matchMedia('(max-width: 760px)').matches;
+    const unavailable = workbench.activeSessionId === id || (workbench.full && !onScreen.has(id)) || narrow;
     return [
       { label: $t('Open to the right'), icon: Columns2, disabled: unavailable, onSelect: () => openBeside(id, 'right') },
       { label: $t('Open below'), icon: Rows2, disabled: unavailable, onSelect: () => openBeside(id, 'bottom') },
+      ...(!narrow && onScreen.has(id) && workbench.activeSessionId !== id ? [{
+        label: $t('Swap with active pane'), icon: ArrowLeftRight, onSelect: () => {
+          if (workbench.moveToPane(id, workbench.activePaneId)) store.focusSession(id);
+        },
+      }] : []),
       { type: 'separator' },
       { label: $t('Close tab'), icon: X, onSelect: () => closeTab(id) },
       { label: $t('Close other tabs'), disabled: tabs.length < 2, onSelect: () => workbench.closeOthers(id) },

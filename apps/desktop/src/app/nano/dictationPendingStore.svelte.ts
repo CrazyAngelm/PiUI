@@ -238,14 +238,20 @@ export class PendingRecordings {
   private async read(): Promise<void> {
     const storage = this.storage;
     if (storage === undefined) return;
+    // A refresh must see completed local deletes and must not restore a clip
+    // removed while the storage read was running.
+    const before = this.items;
+    const reading = this.chain.then(() => storage.load());
+    this.chain = reading.catch(() => []);
     let stored: PendingRecording[];
     try {
-      stored = (await storage.load()).filter(wellFormed);
+      stored = (await reading).filter(wellFormed);
     } catch {
       return;
     }
     const next: Record<string, PendingRecording> = {};
     for (const recording of stored) {
+      if (this.items[recording.scope] !== before[recording.scope]) continue;
       if (this.expired(recording)) {
         // A newer live clip of this scope that is in memory owns the entry; anything else expires.
         const mine = this.items[recording.scope];

@@ -25,6 +25,12 @@ describe('WAV dictation', () => {
     expect(webm.type).toBe('audio/webm;codecs=opus');
   });
 
+  it('does not treat a header without samples as a recording', () => {
+    const empty = assembleClip([], WAV_MIME);
+    expect(empty.type).toBe(WAV_MIME);
+    expect(empty.size).toBe(0);
+  });
+
   it('downsamples float samples to clamped 16-bit PCM', () => {
     const pcm = toPcm16(new Float32Array([1, 1, 1, -2, -2, -2, 0, 0, 0]), 48_000);
     expect(Array.from(pcm)).toEqual([0x7fff, -0x8000, 0]);

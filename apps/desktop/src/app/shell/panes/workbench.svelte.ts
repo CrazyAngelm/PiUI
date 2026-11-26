@@ -103,10 +103,18 @@ export class Workbench {
     this.save();
   }
 
-  activate(paneId: string): void {
-    if (paneId === this.activePaneId || !panes(this.layout).some((leaf) => leaf.id === paneId)) return;
+  /** Drops a chat into a pane. If it is already visible, keep both chats on screen by swapping them. */
+  moveToPane(sessionId: string, paneId: string): boolean {
+    if (!this.layout) return false;
+    const target = panes(this.layout).find((leaf) => leaf.id === paneId);
+    if (!target || target.sessionId === sessionId) return false;
+    const source = paneOf(this.layout, sessionId);
+    this.addTab(sessionId);
+    const next = withSession(this.layout, paneId, sessionId);
+    this.layout = source ? withSession(next, source.id, target.sessionId) : next;
     this.activePaneId = paneId;
     this.save();
+    return true;
   }
 
   /**

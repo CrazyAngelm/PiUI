@@ -70,7 +70,7 @@ function bytesPerSlice(limit: number): number {
 
 /** A finished clip may be sent: it holds audio and fits the limit. */
 export function dictationClipError(size: number, maxBytes: number | undefined): DictationErrorKind | undefined {
-  if (size <= 0) return 'empty';
+  if (size <= 0) return 'failed';
   return size > dictationByteLimit(maxBytes) ? 'too-large' : undefined;
 }
 

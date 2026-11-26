@@ -146,7 +146,14 @@ test('a recording that failed to transcribe stays in the composer and Retry puts
   await expect(bar).toBeVisible();
 
   await bar.getByRole('button', { name: 'Retry', exact: true }).press('Enter');
-  await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue(/This is synthetic dictated text\./);
+  const draft = page.getByRole('textbox', { name: 'Message', exact: true });
+  await expect(draft).toHaveValue('This is synthetic dictated text.');
+  await expect(bar).toHaveCount(0);
+
+  await lab.nav('New chat').click();
+  await expect(page.getByRole('region', { name: 'What should we work on?' })).toBeVisible();
+  await openChat(lab);
+  await expect(draft).toHaveValue('This is synthetic dictated text.');
   await expect(bar).toHaveCount(0);
   lab.expectNoErrors();
 });

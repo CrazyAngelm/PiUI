@@ -1,6 +1,5 @@
 /**
- * Dictation where the WebView's `MediaRecorder` records no format the host
- * accepts (the WebKitGTK bundled in the Linux AppImage): the microphone is read
+ * Dictation on native Linux or where `MediaRecorder` has no usable format: the microphone is read
  * through Web Audio and kept as 16 kHz mono 16-bit PCM. Chunks carry raw
  * samples; `assembleClip` puts the WAV header in front of them, so a
  * checkpoint and the finished clip are both a complete file.
@@ -40,6 +39,7 @@ export function wavHeader(dataBytes: number, sampleRate: number = WAV_SAMPLE_RAT
 export function assembleClip(parts: readonly Blob[], mimeType: string): Blob {
   if (mimeType.split(';')[0]?.trim().toLowerCase() !== WAV_MIME) return new Blob(parts as Blob[], { type: mimeType });
   const dataBytes = parts.reduce((total, part) => total + part.size, 0);
+  if (dataBytes === 0) return new Blob([], { type: WAV_MIME });
   return new Blob([wavHeader(dataBytes) as BlobPart, ...parts], { type: WAV_MIME });
 }
 
