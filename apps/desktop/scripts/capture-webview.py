@@ -21,6 +21,12 @@ def browser_dock(hwnd: int, action: str) -> dict:
     # process. Query only its UI Automation subtree, never the desktop.
     command = f"""
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+trap {{
+    [Console]::Error.WriteLine($_.ToString())
+    exit 1
+}}
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $element = [System.Windows.Automation.AutomationElement]
 $root = $element::FromHandle([IntPtr]{hwnd})
@@ -37,10 +43,13 @@ $focused = $visible -and ($null -ne $address) -and $address.Current.HasKeyboardF
 $pageVisible = $null -ne $page -and -not $page.Current.IsOffscreen
 $state = @{{
     visible=$visible; focused=$focused; pageVisible=$pageVisible
-    closeX=if ($visible) {{$button.Current.BoundingRectangle.Left}}
-    addressY=if ($null -ne $address) {{$address.Current.BoundingRectangle.Bottom}}
-    pageX=if ($pageVisible) {{$page.Current.BoundingRectangle.Left}}
-    pageY=if ($pageVisible) {{$page.Current.BoundingRectangle.Top}}
+    closeX=$null; addressY=$null; pageX=$null; pageY=$null
+}}
+if ($visible) {{ $state.closeX = $button.Current.BoundingRectangle.Left }}
+if ($null -ne $address) {{ $state.addressY = $address.Current.BoundingRectangle.Bottom }}
+if ($pageVisible) {{
+    $state.pageX = $page.Current.BoundingRectangle.Left
+    $state.pageY = $page.Current.BoundingRectangle.Top
 }}
 if ('{action}' -eq 'close') {{
     if (-not $visible) {{ throw 'The owned browser panel is not visible.' }}
@@ -55,7 +64,8 @@ $state | ConvertTo-Json -Compress
         [executable, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
         check=True,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
     return json.loads(result.stdout)

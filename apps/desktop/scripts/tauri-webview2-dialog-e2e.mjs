@@ -1052,6 +1052,17 @@ wire_api = "responses"
         await waitForStarted(operation, COMMAND_BOUND_MS, 'Owned window operation');
         await waitForExit(operation, COMMAND_BOUND_MS, 'Owned window operation');
         return JSON.parse(readFileSync(log, 'utf8').trim());
+      } catch (error) {
+        let report;
+        try {
+          report = JSON.parse(readFileSync(log, 'utf8'));
+        } catch {
+          // A controller failure can occur before the Python helper writes a report.
+        }
+        if (report?.status === 'failed' && typeof report.reason === 'string') {
+          throw new Error(`Owned window operation reported: ${report.reason.trim().slice(0, 2_000)}`, { cause: error });
+        }
+        throw error;
       } finally {
         await terminateContained(operation, 'Owned window operation');
       }
