@@ -1054,6 +1054,10 @@ pub fn run() -> Result<(), tauri::Error> {
                 browser_profile_root,
                 chrome_profile,
             ));
+            #[cfg(windows)]
+            if !safe_mode {
+                state.workspace.set_browser_forms(app.handle().clone());
+            }
             app.manage(state);
             let trigger_engine = orchestration_triggers::TriggerEngine::default();
             app.manage(trigger_engine.clone());

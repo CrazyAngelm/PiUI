@@ -14,6 +14,7 @@ async function startSite() {
   let secondLoaded = false;
   let firstConnection;
   const observations = new Map();
+  const actions = new Map();
   const run = randomUUID();
   const siteCookie = `piui-site-proof=${run}`;
   const shellCookie = `piui-shell-proof=${run}`;
@@ -79,6 +80,57 @@ async function startSite() {
         response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end('<title>Second site fixture</title>');
         if (firstConnection) firstConnection.writeHead(204).end();
         break;
+      case '/form':
+        response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(`
+          <!doctype html><meta charset="utf-8"><title>Form fixture</title>
+          <form>
+            <label>Manual input <input id="manual"></label>
+            <label>Organization <input id="organization" type="text" autocomplete="organization"></label>
+            <button>Submit</button>
+          </form>
+          <script>
+            const tab = new URL(location.href).searchParams.get('tab');
+            const manual = document.getElementById('manual');
+            const organization = document.getElementById('organization');
+            const report = (event) => fetch('/form-observation?' + new URLSearchParams({
+              tab, event, manual: manual.value, organization: organization.value,
+            }));
+            document.querySelector('form').addEventListener('submit', event => {
+              event.preventDefault();
+              report('submit');
+            });
+            organization.addEventListener('input', () => report('input'));
+            report('loaded');
+            setInterval(async () => {
+              const action = await (await fetch('/form-action?tab=' + encodeURIComponent(tab))).text();
+              if (action === 'manual') {
+                manual.value = 'Typed by the fixture user';
+                await report('manual');
+              } else if (action === 'occupied') {
+                organization.value = 'Prior user input';
+                await report('manual');
+              } else if (action === 'navigate') {
+                location.replace('/form?tab=replacement');
+              } else if (action === 'snapshot') {
+                await report('snapshot');
+              }
+            }, 100);
+          </script>
+        `);
+        break;
+      case '/form-action': {
+        const tab = url.searchParams.get('tab');
+        const action = actions.get(tab);
+        actions.delete(tab);
+        response.writeHead(200).end(action ?? '');
+        break;
+      }
+      case '/form-observation': {
+        const { tab, event, manual, organization } = Object.fromEntries(url.searchParams);
+        observations.set(`form:${tab}:${event}`, { manual, organization });
+        response.writeHead(204).end();
+        break;
+      }
       default:
         if (url.pathname === '/unexpected') observations.set('unexpected', true);
         response.writeHead(404).end();
@@ -90,6 +142,7 @@ async function startSite() {
   return {
     origin: `http://127.0.0.1:${port}`,
     observations,
+    actions,
     shellCookie,
     close: () => new Promise((resolve) => {
       server.close(resolve);
@@ -107,7 +160,9 @@ function assertSiteProfile(fixture) {
   assert(readdirSync(actual).length > 0, 'WebView2 did not use the dedicated browser-profile.');
 }
 
-export async function runSiteBrowserWebview2Proof({ automation, safe, fixture, browserDock, resizeWindow, startupBoundMs }) {
+export async function runSiteBrowserWebview2Proof({
+  automation, safe, fixture, browserDock, resizeWindow, startupBoundMs, workspaceId, confirmForm,
+}) {
   const site = await startSite();
   const invoke = (url) => automation.evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(OPEN_LINK)}, {
     request: { url: ${JSON.stringify(url)}, language: 'en' },
@@ -144,6 +199,65 @@ export async function runSiteBrowserWebview2Proof({ automation, safe, fixture, b
     await automation.evaluate('delete globalThis.__piuiSiteBrowserProof');
     assert(!result.error, result.error);
     return result.opened;
+  }
+  async function proveFormHandoff() {
+    const ipc = (command, args) => automation.evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)}, ${JSON.stringify(args)})`);
+    const workspace = (command) => ipc('workspace_command_v15', { command });
+    const { snapshot: initial } = await workspace({
+      type: 'createSession', workspaceId, harness: 'claude-code', title: 'Local form fixture', permissionMode: 'native',
+    });
+    const { id: sessionId } = initial.session;
+    const snapshot = async () => (await workspace({ type: 'snapshot', sessionId })).snapshot;
+    const replyCount = (current) => [...JSON.stringify(current.blocks).matchAll(/BROWSER_FORM_RESULT/g)].length;
+    async function send(text, confirm = false) {
+      const before = replyCount(await snapshot());
+      await ipc('workspace_composer_v19', { command: {
+        type: 'send', sessionId, requestId: randomUUID(), text, mode: 'prompt', attachments: [],
+      } });
+      if (confirm) await waitFor(async () => (await confirmForm()).status === 'confirmed' ? true : null, 'native form approval');
+      const result = await waitFor(async () => {
+        const current = await snapshot();
+        return replyCount(current) > before && current.session.status === 'idle' ? current : null;
+      }, 'the end of the Claude form-tool turn');
+      return JSON.stringify(result.blocks.filter((block) => JSON.stringify(block).includes('BROWSER_FORM_RESULT')).at(-1));
+    }
+    const tool = (args, confirm) => send('fixture-browser-form ' + JSON.stringify(args), confirm);
+    const proposed = 'Approved organization';
+    const open = (tab) => tool({ op: 'open', url: site.origin + '/form?tab=' + tab, field: 'organization', value: proposed }, true);
+    const siteSnapshot = (tab) => {
+      site.actions.set(tab, 'snapshot');
+      return observed(`form:${tab}:snapshot`);
+    };
+    const ok = /BROWSER_FORM_RESULT.*ok\\?":true/;
+    try {
+      assert.match(await open('owned'), ok);
+      assert.match(await tool({ op: 'fill' }), /awaiting-person/);
+      site.actions.set('owned', 'manual');
+      await observed('form:owned:manual');
+      assert.equal(await openThroughChat('/form?tab=other'), true);
+      assert.deepEqual(await observed('form:other:loaded'), { manual: '', organization: '' });
+      assert.match(await send('Готово'), ok);
+      assert.deepEqual(await observed('form:owned:input'), { manual: 'Typed by the fixture user', organization: proposed });
+      assert.deepEqual(await siteSnapshot('other'), { manual: '', organization: '' }, 'An unrelated active tab received the write.');
+      assert(!site.observations.has('form:owned:submit'), 'The host submitted the form.');
+      assert.match(await tool({ op: 'fill' }), /already-used/);
+
+      assert.match(await open('occupied'), ok);
+      site.actions.set('occupied', 'occupied');
+      await observed('form:occupied:manual');
+      assert.match(await send('Готово'), /field-unavailable/);
+      assert.deepEqual(await siteSnapshot('occupied'), { manual: '', organization: 'Prior user input' }, 'The host overwrote an occupied field.');
+
+      assert.match(await open('navigating'), ok);
+      site.actions.set('navigating', 'navigate');
+      await observed('form:replacement:loaded');
+      assert.match(await send('Готово'), /document-changed/);
+      assert.deepEqual(await siteSnapshot('replacement'), { manual: '', organization: '' }, 'The host wrote in a replacement document.');
+      return ['webview2-claude-form-handoff-after-local-ready', 'webview2-form-keeps-manual-input-and-bound-tab',
+        'webview2-form-refuses-occupied-field-and-replacement-document'];
+    } finally {
+      await workspace({ type: 'closeSession', sessionId });
+    }
   }
   try {
     if (safe) {
@@ -210,6 +324,7 @@ export async function runSiteBrowserWebview2Proof({ automation, safe, fixture, b
     assert.equal(await observed('first-tab-retained'), true, 'Opening the second link discarded the first tab.');
     assert(!site.observations.has('unexpected'), 'The untrusted page caused a navigation.');
     assertSiteProfile(fixture);
+    const formChecks = await proveFormHandoff();
     return [
       'webview2-trusted-main-opens-new-and-existing-site-browser',
       'webview2-browser-dock-resizes-both-views-and-restores-workbench-on-close',
@@ -217,6 +332,7 @@ export async function runSiteBrowserWebview2Proof({ automation, safe, fixture, b
       'webview2-site-browser-profile-excludes-shell-cookie',
       authority.link === 'denied' ? 'webview2-site-page-ipc-rejected' : 'webview2-site-page-ipc-bridge-absent',
       'webview2-chat-link-host-refuses-invalid-and-app-origins',
+      ...formChecks,
     ];
   } finally {
     await site.close();

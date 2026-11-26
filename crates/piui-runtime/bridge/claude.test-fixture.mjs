@@ -390,8 +390,23 @@ const startRun = async (batch) => {
     send({ type: "user", message: { role: "user", content: item.text }, parent_tool_use_id: null, session_id: sessionId, uuid: item.uuid, isReplay: true });
     writeTranscript({ type: "user", uuid: item.uuid, message: { role: "user", content: item.text } });
   }
-  const scenario = scenarios[first.text] ?? scenarios.hello;
-  await scenario(current);
+  if (has("--fixture-browser-form")
+      && (first.text === "Готово" || first.text.startsWith("fixture-browser-form "))) {
+    const config = JSON.parse(readFileSync(option("--mcp-config"), "utf8")).mcpServers["piui-workspace"];
+    const args = first.text === "Готово" ? { op: "fill" }
+      : JSON.parse(first.text.slice("fixture-browser-form ".length));
+    const response = await fetch(config.url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...config.headers },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call",
+        params: { name: "browser_form", arguments: args } }),
+    });
+    const frame = await response.json();
+    say(`msg-browser-form-${randomUUID()}`, `BROWSER_FORM_RESULT ${frame.result?.content?.[0]?.text ?? "unavailable"}`);
+  } else {
+    const scenario = scenarios[first.text] ?? scenarios.hello;
+    await scenario(current);
+  }
   const failed = current.aborted || current.isError;
   send({
     type: "result", subtype: current.aborted ? "error_during_execution" : "success", is_error: failed, duration_ms: 5, duration_api_ms: 4,
@@ -424,6 +439,11 @@ const initializeResponse = () => ({
   current_permission_mode: option("--fixture-mode-override") ?? (permissionMode === "manual" ? "default" : permissionMode),
   fast_mode_state: option("--fixture-fast-mode") ?? "off",
 });
+
+if (has("--version")) {
+  process.stdout.write("2.1.232 (Claude Code)\n");
+  process.exit(0);
+}
 
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 input.on("line", (line) => {

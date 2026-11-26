@@ -71,8 +71,9 @@ $state | ConvertTo-Json -Compress
     return json.loads(result.stdout)
 
 
-def capture(parent_pid: int, output: Path | None, resize: tuple[int, int] | None = None, resize_only: bool = False,
-            browser_dock_action: str | None = None) -> dict:
+def capture(parent_pid: int, output: Path | None, resize: tuple[int, int] | None = None,
+            resize_only: bool = False, browser_dock_action: str | None = None,
+            confirm_browser_form: bool = False) -> dict:
     if sys.platform != "win32":
         raise RuntimeError("Window capture requires Windows.")
     user = c.WinDLL("user32", use_last_error=True)
@@ -130,11 +131,24 @@ def capture(parent_pid: int, output: Path | None, resize: tuple[int, int] | None
         if pid.value in children and user.IsWindowVisible(hwnd):
             title = c.create_unicode_buffer(user.GetWindowTextLengthW(hwnd) + 1)
             user.GetWindowTextW(hwnd, title, len(title))
-            if title.value == "PiUI E2E":
+            if title.value == ("Нано · Заполнение формы" if confirm_browser_form else "PiUI E2E"):
                 windows.append(hwnd)
         return True
 
     user.EnumWindows(visit, 0)
+    if confirm_browser_form:
+        if len(windows) != 1:
+            return {"status": "waiting"}
+        dialog = windows[0]
+        user.GetDlgItem.argtypes = [w.HWND, c.c_int]
+        user.GetDlgItem.restype = w.HWND
+        accept = user.GetDlgItem(dialog, 6)  # IDYES
+        if not accept:
+            raise RuntimeError("The owned form confirmation has no Yes button.")
+        user.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
+        if not user.PostMessageW(dialog, 0x0111, 6, accept):  # WM_COMMAND, BN_CLICKED
+            raise RuntimeError("The owned form confirmation did not accept the test input.")
+        return {"status": "confirmed"}
     if len(windows) != 1:
         raise RuntimeError("Expected one visible owned PiUI E2E window.")
     hwnd = windows[0]
@@ -279,12 +293,13 @@ if __name__ == "__main__":
     parser.add_argument("--resize", nargs=2, type=int, metavar=("WIDTH", "HEIGHT"))
     parser.add_argument("--resize-only", action="store_true")
     parser.add_argument("--browser-dock", choices=("state", "close"))
+    parser.add_argument("--confirm-browser-form", action="store_true")
     args = parser.parse_args()
     if args.resize_only and args.resize is None:
         parser.error("--resize-only requires --resize")
     try:
         print(json.dumps(capture(args.parent_pid, args.output, tuple(args.resize) if args.resize else None,
-                                 args.resize_only, args.browser_dock)))
+                                 args.resize_only, args.browser_dock, args.confirm_browser_form)))
     except subprocess.CalledProcessError as error:
         print(json.dumps({"status": "failed", "reason": error.stderr.strip()}))
         raise SystemExit(1)

@@ -1,7 +1,7 @@
 // Windows WebView2 interaction proof for an isolated Tauri dev harness.
 import { createHash, randomBytes } from 'node:crypto';
 import { runAgentApiProof, setupAgentWorkspace } from './agent-api-e2e.mjs';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { createRequire } from 'node:module';
@@ -963,11 +963,31 @@ async function runIsolatedHarness() {
       TAURI_WEBVIEW_AUTOMATION: 'true',
     };
     if (SHELL_SCENARIO) {
-      // The shell proof starts no agent: Claude Code and Hermes resolve only to
-      // missing fixture paths, Pi and Prime to the synthetic fixture peers.
+      // Resolve native harnesses exclusively to synthetic fixture peers.
       runtimeEnvironment.PIUI_CLAUDE_BIN = join(fixture.fixtureRoot, 'no-claude', 'claude.exe');
       runtimeEnvironment.PIUI_HERMES_ROOT = join(fixture.fixtureRoot, 'no-hermes');
       runtimeEnvironment.PIUI_NODE = process.execPath;
+    }
+    if (DEFAULT_SHELL_SCENARIO && !SAFE_ONLY) {
+      // The production Windows launcher accepts only a native executable.
+      const main = join(fixtureRoot, 'browser-form-claude.rs');
+      const executable = join(fixtureRoot, 'claude-fixture.exe');
+      writeFileSync(main, `
+fn main() {
+    let result = std::process::Command::new(env!("PIUI_FIXTURE_NODE"))
+        .arg(env!("PIUI_FIXTURE_CLAUDE_JS"))
+        .arg("--fixture-browser-form")
+        .args(std::env::args_os().skip(1))
+        .status();
+    std::process::exit(result.ok().and_then(|status| status.code()).unwrap_or(1));
+}
+`);
+      execFileSync('rustc', ['--edition=2024', main, '-o', executable], {
+        cwd: fixtureRoot, windowsHide: true,
+        env: { ...process.env, PIUI_FIXTURE_NODE: process.execPath,
+          PIUI_FIXTURE_CLAUDE_JS: join(REPOSITORY_ROOT, 'crates', 'piui-runtime', 'bridge', 'claude.test-fixture.mjs') },
+      });
+      runtimeEnvironment.PIUI_CLAUDE_BIN = executable;
     }
     if (AGENT_API_SCENARIO) {
       runtimeEnvironment.CODEX_HOME = exposeNativeCodeForWorkspaceFixture(fixture);
@@ -1093,6 +1113,8 @@ wire_api = "responses"
       if (DEFAULT_SHELL_SCENARIO) normalResult.checks.push(...await runSiteBrowserWebview2Proof({
         automation, safe: false, fixture, browserDock: workspaceCallbacks.browserDock,
         resizeWindow: workspaceCallbacks.resizeWindow, startupBoundMs: STARTUP_BOUND_MS,
+        workspaceId: normalResult.cleanup.workspaceId,
+        confirmForm: () => ownedWindowOperation(['--confirm-browser-form']),
       }));
       if (AGENT_API_SCENARIO) normalResult.checks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, automation, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
 

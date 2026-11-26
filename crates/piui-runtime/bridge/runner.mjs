@@ -4,7 +4,7 @@
 const MAX_FRAME_BYTES = 32 * 1024 * 1024;
 const METHODS = new Set([
   "initialize", "snapshot", "prompt", "interrupt", "models", "resources", "catalogModels",
-  "setModel", "respond", "rename", "dispose", "coordinatorResponse", "boardResponse", "sidekickResponse", "sessionsResponse",
+  "setModel", "respond", "rename", "dispose", "coordinatorResponse", "boardResponse", "sidekickResponse", "sessionsResponse", "browserFormResponse",
   "openSession", "sessionRequest", "composerCapabilities", "compact", "setMode", "stopTask", "composerCatalog",
 ]);
 const MAX_DETAILS_BYTES = 4 * 1024;
@@ -295,6 +295,8 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
   let sidekickSequence = 0;
   const sessionsPending = new Map();
   let sessionsSequence = 0;
+  const browserFormPending = new Map();
+  let browserFormSequence = 0;
 
   const rejectPending = (pendingMap, code, message) => {
     const current = [...pendingMap.values()];
@@ -311,6 +313,8 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
     rejectPending(boardPending, "board-cancelled", "The board request was cancelled.");
     rejectPending(sidekickPending, "sidekick-cancelled", "The sidekick request was cancelled. Collect the result with wait.");
     rejectPending(sessionsPending, "unavailable", "The sessions request was cancelled.");
+    for (const requestId of browserFormPending.keys()) emit({ type: "browserFormCancel", requestId });
+    rejectPending(browserFormPending, "unavailable", "The form request was cancelled.");
   };
 
   const validateCoordinatorOperation = (operation) => {
@@ -406,6 +410,31 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
     });
   };
 
+  const browserFormRequest = (operation, { signal } = {}) => {
+    const enabled = Array.isArray(initializeConfig?.hostTools) && initializeConfig.hostTools.includes("browserForm");
+    if (!enabled) return Promise.reject(new Error("Browser form unavailable"));
+    const keys = operation && typeof operation === "object" && !Array.isArray(operation)
+      ? Object.keys(operation).sort().join(",") : "";
+    const valid = (keys === "op" && operation.op === "fill")
+      || (keys === "field,op,url,value" && operation.op === "open"
+        && ["given-name", "family-name", "organization"].includes(operation.field)
+        && typeof operation.url === "string" && typeof operation.value === "string");
+    if (!valid) return Promise.reject(Object.assign(new Error("invalid"), { bridgeCode: "invalid-operation" }));
+    const requestId = `piui-browser-form-${epoch}-${++browserFormSequence}`;
+    return new Promise((resolve, reject) => {
+      const cancelled = () => new Error("Browser form request cancelled");
+      if (signal?.aborted) { reject(cancelled()); return; }
+      browserFormPending.set(requestId, { resolve, reject });
+      signal?.addEventListener("abort", () => {
+        if (browserFormPending.delete(requestId)) {
+          emit({ type: "browserFormCancel", requestId });
+          reject(cancelled());
+        }
+      }, { once: true });
+      emit({ type: "browserFormRequest", requestId, operation });
+    });
+  };
+
   let initializeConfig;
 
   // A reply after the output closed (dispose, EOF) must not become an
@@ -463,7 +492,7 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
       }
       initialized = true;
       initializeConfig = params;
-      initializePromise = Promise.resolve().then(() => factory(params, emit, coordinatorRequest, boardRequest, sidekickRequest, sessionsRequest));
+      initializePromise = Promise.resolve().then(() => factory(params, emit, coordinatorRequest, boardRequest, sidekickRequest, sessionsRequest, browserFormRequest));
       try {
         adapter = await initializePromise;
         if (!adapter || typeof adapter !== "object") throw new TypeError("invalid adapter");
@@ -527,19 +556,28 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
       return;
     }
 
-    if (request.method === "sessionsResponse") {
+    if (request.method === "sessionsResponse" || request.method === "browserFormResponse") {
+      const pending = request.method === "sessionsResponse" ? sessionsPending : browserFormPending;
       const requestId = typeof params.requestId === "string" ? params.requestId : "";
-      const slot = sessionsPending.get(requestId);
+      const slot = pending.get(requestId);
       if (!slot) {
+        if (request.method === "browserFormResponse") {
+          writeFrame(output, safeFailure(id, "stale-browser-form-request", "The form request is invalid or no longer pending."));
+          return;
+        }
         writeFrame(output, safeFailure(id, "stale-sessions-request", "The sessions request is invalid or no longer pending."));
         return;
       }
       const result = params.result;
       if (Object.keys(params).sort().join(",") !== "requestId,result" || !result || typeof result !== "object" || Array.isArray(result) || typeof result.ok !== "boolean") {
+        if (request.method === "browserFormResponse") {
+          writeFrame(output, safeFailure(id, "invalid-browser-form-response", "The form response is invalid."));
+          return;
+        }
         writeFrame(output, safeFailure(id, "invalid-sessions-response", "The sessions response is invalid."));
         return;
       }
-      sessionsPending.delete(requestId);
+      pending.delete(requestId);
       slot.resolve(result);
       writeFrameQuietly({ id, ok: true, result: null });
       return;
