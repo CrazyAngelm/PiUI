@@ -4,6 +4,14 @@ All notable changes to Nano Desktop (formerly PiUI) are documented here.
 
 Nano Desktop is currently a developer preview. Versions before 1.0 may change without a stable migration promise; changes to typed host contracts remain versioned under `contracts/`.
 
+## [0.3.15] - 2026-11-27
+
+### Fixed
+
+- A regular click clears text selection left in a chat response.
+- Pasting images reads additional clipboard formats and reports when an image cannot be attached.
+- Send and record buttons use the same corner radius.
+
 ## [0.3.14] - 2026-11-26
 
 ### Fixed
@@ -430,7 +438,8 @@ PiUI is now a desktop workbench for native agent harnesses and multi-agent pipel
 - Added cache-first session discovery, bounded transcript rendering, explicit project trust, personal chats, and typed local Pi RPC streaming.
 - Added safe rebuildable indexing, versioned host contracts, extension manifest validation, fake runtime scenarios, and platform/security foundations.
 
-[Unreleased]: https://github.com/CrazyAngelm/PiUI/compare/v0.3.14...HEAD
+[Unreleased]: https://github.com/CrazyAngelm/PiUI/compare/v0.3.15...HEAD
+[0.3.15]: https://github.com/CrazyAngelm/PiUI/compare/v0.3.14...v0.3.15
 [0.3.14]: https://github.com/CrazyAngelm/PiUI/compare/v0.3.13...v0.3.14
 [0.3.13]: https://github.com/CrazyAngelm/PiUI/compare/v0.3.12...v0.3.13
 [0.2.0]: https://github.com/CrazyAngelm/PiUI/compare/v0.1.1...v0.2.0
