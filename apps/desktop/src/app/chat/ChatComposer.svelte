@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { clipboardImages, pasteCarriesNothing } from './composer/clipboardImages';
+  import { readPastedAttachments, unreadableClipboardImage } from './composer/clipboardImages';
   import ArrowUp from '@lucide/svelte/icons/arrow-up';
   import Square from '@lucide/svelte/icons/square';
   import Pencil from '@lucide/svelte/icons/pencil';
@@ -639,17 +639,15 @@
   }
 
   function pasted(event: ClipboardEvent): void {
-    const files = [...(event.clipboardData?.files ?? [])];
-    if (!files.length) {
-      // Linux: a pasted screenshot arrives as an empty event; the image is on the async clipboard.
-      if (pasteCarriesNothing(event.clipboardData) && !remoteMode) {
-        void clipboardImages().then((images) => (images.length ? attachments.paste(workspaceId, images, imageState) : undefined));
-      }
-      return;
-    }
-    event.preventDefault();
-    if (remoteMode) return;
-    void attachments.paste(workspaceId, files, imageState);
+    const paste = readPastedAttachments(event, !remoteMode);
+    if (!paste || remoteMode) return;
+    const targetWorkspace = workspaceId;
+    const targetSession = sessionId;
+    void paste.files.then((files) => {
+      if (!root?.isConnected || workspaceId !== targetWorkspace || sessionId !== targetSession) return;
+      if (files.length) return attachments.paste(targetWorkspace, files, imageState);
+      if (paste.reportEmpty) attachments.notices = [{ kind: 'error', message: unreadableClipboardImage }];
+    });
   }
 
   const carriesFiles = (event: DragEvent): boolean => Boolean(event.dataTransfer?.types.includes('Files'));

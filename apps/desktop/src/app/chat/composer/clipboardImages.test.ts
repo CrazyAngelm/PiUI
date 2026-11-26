@@ -1,30 +1,71 @@
-import { describe, expect, it } from 'vitest';
-import { clipboardImages, pasteCarriesNothing, type ClipboardReader } from './clipboardImages';
+import { describe, expect, it, vi } from 'vitest';
+import { clipboardImages, readPastedAttachments, type ClipboardReader } from './clipboardImages';
 
-const data = (types: string[], files = 0) => ({ types, files: { length: files } as FileList });
+function clipboardEvent(types: string[], values: Record<string, string> = {}, items: object[] = [], files: File[] = []) {
+  return {
+    clipboardData: { types, files, items, getData: (type: string) => values[type] ?? '' } as unknown as DataTransfer,
+    preventDefault: vi.fn(),
+  };
+}
+
+const image = (type: string): Blob => new Blob([new Uint8Array(144)], { type });
+const pngReader: ClipboardReader = { read: async () => [{ types: ['image/png'], getType: async () => image('image/png') }] };
 
 describe('clipboard images', () => {
-  it('falls back only for a paste event that carries nothing (WebKitGTK screenshot)', () => {
-    expect(pasteCarriesNothing(data([]))).toBe(true);
-    expect(pasteCarriesNothing(data(['text/plain']))).toBe(false);
-    expect(pasteCarriesNothing(data(['Files'], 1))).toBe(false);
-    expect(pasteCarriesNothing(null)).toBe(false);
+  it('uses a synchronous file item even if WebKit elides the file list', async () => {
+    const jpeg = new File([image('image/jpeg')], 'copied.jpg', { type: 'image/jpeg' });
+    const event = clipboardEvent(['text/html'], {}, [{ kind: 'file', type: 'image/jpeg', getAsFile: () => jpeg }]);
+    const read = vi.fn(pngReader.read);
+    const paste = readPastedAttachments(event, true, { read });
+    expect(await paste?.files).toEqual([jpeg]);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(read).not.toHaveBeenCalled();
   });
 
-  it('reads the image items and names them like a browser paste', async () => {
+  it('reads the local image in the gesture for an empty or image-advertising event', async () => {
+    const empty = clipboardEvent([]);
+    const explicit = clipboardEvent(['image/png']);
+    const markup = clipboardEvent(['text/html'], { 'text/html': '<img src="https://example.invalid/image.png">' });
+    for (const event of [empty, explicit, markup]) {
+      const read = vi.fn(pngReader.read);
+      const paste = readPastedAttachments(event, true, { read });
+      expect(read).toHaveBeenCalledOnce();
+      expect((await paste?.files)?.[0].name).toBe('image.png');
+      expect(paste?.reportEmpty).toBe(event !== empty);
+      expect(event.preventDefault).toHaveBeenCalledTimes(event === empty ? 0 : 1);
+    }
+  });
+
+  it('leaves plain text and links to the browser', () => {
+    const read = vi.fn(pngReader.read);
+    const text = clipboardEvent(['text/plain'], { 'text/plain': 'A pasted draft' });
+    const link = clipboardEvent(['text/html', 'text/uri-list'], {
+      'text/html': '<img src="https://example.invalid/image.png">',
+      'text/uri-list': 'https://example.invalid/image.png',
+    });
+    for (const event of [text, link]) {
+      expect(readPastedAttachments(event, true, { read })).toBeUndefined();
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    }
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('keeps readable items and tries another supported representation when the first read fails', async () => {
     const reader: ClipboardReader = {
       read: async () => [
-        { types: ['text/plain'], getType: async () => new Blob(['hi']) },
-        { types: ['text/html', 'image/png'], getType: async (type) => new Blob([new Uint8Array(144)], { type }) },
+        { types: ['image/png'], getType: async () => image('image/png') },
+        { types: ['image/png'], getType: async () => { throw new DOMException('denied', 'NotAllowedError'); } },
+        { types: ['text/html', 'image/jpeg', 'image/webp'], getType: async (type) => type === 'image/jpeg' ? new Blob([]) : image(type) },
       ],
     };
-    const images = await clipboardImages(reader);
-    expect(images.map((file) => [file.name, file.type, file.size])).toEqual([['image.png', 'image/png', 144]]);
+    expect((await clipboardImages(reader)).map((file) => [file.name, file.type, file.size]))
+      .toEqual([['image.png', 'image/png', 144], ['image.webp', 'image/webp', 144]]);
   });
 
-  it('gives nothing when the Clipboard API is missing or refuses', async () => {
-    expect(await clipboardImages(undefined)).toEqual([]);
-    expect(await clipboardImages({ read: () => Promise.reject(new DOMException('denied', 'NotAllowedError')) })).toEqual([]);
-    expect(await clipboardImages({ read: async () => [{ types: ['image/png'], getType: async () => new Blob([]) }] })).toEqual([]);
+  it('reports empty data when an image was advertised but permission was denied', async () => {
+    const reader: ClipboardReader = { read: async () => { throw new DOMException('denied', 'NotAllowedError'); } };
+    const paste = readPastedAttachments(clipboardEvent(['image/png']), true, reader);
+    expect(paste?.reportEmpty).toBe(true);
+    expect(await paste?.files).toEqual([]);
   });
 });

@@ -402,6 +402,30 @@
     const onPointerUp = () => {
       pointerDown = false;
     };
+    let pressedRange: Pick<Range, 'startContainer' | 'startOffset' | 'endContainer' | 'endOffset'> | undefined;
+    const rememberSelection = (event: PointerEvent) => {
+      pressedRange = undefined;
+      if (event.pointerType !== 'mouse' || event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+      const selection = document.getSelection();
+      if (!selection?.rangeCount || selection.isCollapsed) return;
+      const { startContainer, startOffset, endContainer, endOffset } = selection.getRangeAt(0);
+      if (node.contains(startContainer) && node.contains(endContainer)) {
+        pressedRange = { startContainer, startOffset, endContainer, endOffset };
+      }
+    };
+    const dismissSelection = (event: MouseEvent) => {
+      const previous = pressedRange;
+      pressedRange = undefined;
+      if (!previous || event.detail !== 1 || event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+      const selection = document.getSelection();
+      if (!selection?.rangeCount || selection.isCollapsed) return;
+      const range = selection.getRangeAt(0);
+      // A drag or another selection gesture has already replaced the old range.
+      if (range.startContainer === previous.startContainer && range.startOffset === previous.startOffset
+        && range.endContainer === previous.endContainer && range.endOffset === previous.endOffset) {
+        selection.removeAllRanges();
+      }
+    };
     const onSelection = () => {
       if (selectionInside()) selectionHold = true;
       else if (selectionHold) {
@@ -444,6 +468,8 @@
     node.addEventListener('pointerdown', onPointerDown, { passive: true });
     document.addEventListener('pointerup', onPointerUp);
     document.addEventListener('pointercancel', onPointerUp);
+    document.addEventListener('pointerdown', rememberSelection, true);
+    document.addEventListener('click', dismissSelection, true);
     document.addEventListener('selectionchange', onSelection);
     node.addEventListener('keydown', onKey);
     node.addEventListener('focusin', onFocus);
@@ -467,6 +493,8 @@
         node.removeEventListener('pointerdown', onPointerDown);
         document.removeEventListener('pointerup', onPointerUp);
         document.removeEventListener('pointercancel', onPointerUp);
+        document.removeEventListener('pointerdown', rememberSelection, true);
+        document.removeEventListener('click', dismissSelection, true);
         document.removeEventListener('selectionchange', onSelection);
         node.removeEventListener('keydown', onKey);
         node.removeEventListener('focusin', onFocus);
