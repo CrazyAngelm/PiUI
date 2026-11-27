@@ -3,11 +3,10 @@ import type { TimelineBlock } from '../../host-api/types';
 import { splitImageMarkers } from './composer/mentions';
 
 /**
- * A message steered into a running turn is written to the agent at once, but
- * the agent's runtime reports it only when the agent reads it, at its next
- * step, and the outbox has settled it as sent by then. Until that report the
- * chat shows an echo as its last message, so a sent message never disappears.
- * An echo is presentation only: it is never stored, sent or part of history.
+ * A send is visible while the composer prepares and submits it. The outbox
+ * or the runtime transcript takes over when it reports the message.
+ * A steered message can also wait here until the agent reads it.
+ * An echo is presentation only: it is never stored or sent.
  */
 export interface SteerEcho {
   /** The composer request id of the message. */
@@ -16,6 +15,7 @@ export interface SteerEcho {
   readonly images: number;
   /** The chat's user messages when this one was sent: none of them is it. */
   readonly known: ReadonlySet<string>;
+  readonly submission?: 'preparing' | 'sending';
 }
 
 const ECHO_ID = 'piui-steer-echo:';
@@ -41,15 +41,25 @@ function words(text: string): string {
 export function waitingEchoes(echoes: readonly SteerEcho[], blocks: readonly TimelineBlock[]): readonly SteerEcho[] {
   if (echoes.length === 0) return echoes;
   const claimed = new Set<string>();
-  const waiting = echoes.filter((echo) => {
+  const waiting: SteerEcho[] = [];
+  for (const echo of echoes) {
     const sent = words(echo.text);
-    const reported = blocks.find(
+    const reported = echo.submission === 'preparing' ? undefined : blocks.find(
       (block) => block.kind === 'user' && !echo.known.has(block.id) && !claimed.has(block.id) && words(splitImageMarkers(block.text ?? '').text) === sent,
     );
-    if (reported) claimed.add(reported.id);
-    return !reported;
-  });
-  return waiting.length === echoes.length ? echoes : waiting;
+    if (reported) {
+      claimed.add(reported.id);
+      continue;
+    }
+    // A later observation must not match the same transcript row to another send.
+    waiting.push(claimed.size ? { ...echo, known: new Set([...echo.known, ...claimed]) } : echo);
+  }
+  return claimed.size ? waiting : echoes;
+}
+
+export function visibleEchoes(echoes: readonly SteerEcho[], blocks: readonly TimelineBlock[], turnActive: boolean, terminal: boolean): readonly SteerEcho[] {
+  const candidates = echoes.filter((echo) => echo.submission ? !terminal : turnActive);
+  return waitingEchoes(candidates.length === echoes.length ? echoes : candidates, blocks);
 }
 
 /** The echoes as the chat's last messages, marked as still on their way. */
@@ -75,15 +85,27 @@ class SteerEchoes {
     this.bySession.set(sessionId, [...current, echo]);
   }
 
-  /**
-   * Forgets the echoes the runtime has reported, for good: a message that later
-   * leaves the loaded part of the chat does not bring its echo back. Once no
-   * turn runs, every echo goes: an unread steer is not kept as a claim.
-   */
-  settle(sessionId: string, blocks: readonly TimelineBlock[], turnActive: boolean): void {
+  submit(sessionId: string, id: string, text: string, latest: ReadonlySet<string>, first: ReadonlySet<string>): void {
     const current = this.bySession.get(sessionId);
     if (!current) return;
-    const waiting = turnActive ? waitingEchoes(current, blocks) : NONE;
+    this.bySession.set(sessionId, current.map((echo) => {
+      if (echo.id !== id) return echo;
+      const known = first === latest ? echo.known : new Set([...first, ...[...echo.known].filter((blockId) => !latest.has(blockId))]);
+      return { ...echo, text, known, submission: 'sending' };
+    }));
+  }
+
+  remove(sessionId: string, id: string): void {
+    const remaining = this.list(sessionId).filter((echo) => echo.id !== id);
+    if (remaining.length) this.bySession.set(sessionId, remaining);
+    else this.bySession.delete(sessionId);
+  }
+
+  /** Forgets reported echoes even if the matching history later scrolls out of the loaded window. */
+  settle(sessionId: string, blocks: readonly TimelineBlock[], turnActive: boolean, terminal = false): void {
+    const current = this.bySession.get(sessionId);
+    if (!current) return;
+    const waiting = visibleEchoes(current, blocks, turnActive, terminal);
     if (waiting === current) return;
     if (waiting.length) this.bySession.set(sessionId, waiting);
     else this.bySession.delete(sessionId);

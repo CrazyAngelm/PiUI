@@ -57,6 +57,28 @@ describe('steer echoes', () => {
     expect(steerEchoes.list('s1').map((item) => item.id)).toEqual(['r2']);
   });
 
+  it('keeps the second identical send when the first history row has already been claimed', () => {
+    const reported = [user('u1', 'continue')];
+    steerEchoes.add('equal', echo('r1', 'continue'));
+    steerEchoes.add('equal', echo('r2', 'continue'));
+    steerEchoes.settle('equal', reported, true);
+    expect(waitingEchoes(steerEchoes.list('equal'), reported).map((item) => item.id)).toEqual(['r2']);
+    steerEchoes.settle('equal', [...reported, user('u2', 'continue')], true);
+    expect(steerEchoes.list('equal')).toEqual([]);
+  });
+
+  it('shows preparation in an idle chat and keeps the first observation on a retry', () => {
+    const nowKnown = new Set(['u1']);
+    const firstKnown = new Set<string>();
+    const reported = [user('u1', 'Already delivered')];
+    steerEchoes.add('retry', { ...echo('r1', 'Already delivered', ['u1']), submission: 'preparing' });
+    steerEchoes.settle('retry', reported, false);
+    expect(steerEchoes.list('retry')).toHaveLength(1);
+    steerEchoes.submit('retry', 'r1', 'Already delivered', nowKnown, firstKnown);
+    steerEchoes.settle('retry', reported, false);
+    expect(steerEchoes.list('retry')).toEqual([]);
+  });
+
   it('drops every echo of a chat once no turn runs', () => {
     steerEchoes.add('s2', echo('r1', 'Never read'));
     steerEchoes.settle('s2', [], false);

@@ -161,9 +161,10 @@ export class ComposerAttachments {
    * The images now belong to a queued message (or another draft): they leave
    * this composer without being deleted on the host.
    */
-  handOver(): ComposerImage[] {
-    const images = this.images;
-    this.setImages([]);
+  handOver(ids: readonly string[] = this.ids): ComposerImage[] {
+    const transferred = new Set(ids);
+    const images = this.images.filter((image) => transferred.has(image.id));
+    this.setImages(this.images.filter((image) => !transferred.has(image.id)));
     return images;
   }
 

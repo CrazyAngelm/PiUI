@@ -52,6 +52,36 @@ test.describe('new chat', () => {
     await expect(page.getByRole('button', { name: 'GPT Lab 5 Codex High' })).toBeVisible();
   });
 
+  test('shows a reply during preparation and keeps the draft if delivery fails', async ({ lab, page }) => {
+    await lab.open();
+    await lab.chat(/Route host calls through one transport/).click();
+    const editor = page.getByRole('textbox', { name: 'Message' });
+    const transcript = page.getByRole('region', { name: 'Conversation messages' });
+    const reply = 'My follow-up is visible while preparing';
+    await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
+    await page.evaluate(async (path) => {
+      const { chatPipelines }: typeof import('../src/app/chatPipelines/chatPipelines.svelte') = await import(path);
+      const original = chatPipelines.withResults;
+      chatPipelines.withResults = async () => new Promise((_, reject) => {
+        window.addEventListener('finishReplyFixture', () => {
+          chatPipelines.withResults = original;
+          reject(new Error('Synthetic preparation refusal'));
+        }, { once: true });
+      });
+    }, '/src/app/chatPipelines/chatPipelines.svelte.ts');
+    await editor.fill(reply);
+    await editor.press('Enter');
+    await expect(transcript.getByText(reply, { exact: true })).toBeVisible();
+    await page.evaluate(() => window.dispatchEvent(new Event('finishReplyFixture')));
+    await expect(transcript.getByText(reply, { exact: true })).toHaveCount(0);
+    await expect(editor).toHaveValue(reply);
+    await expect(page.getByText('Synthetic preparation refusal')).toBeVisible();
+    await editor.press('Enter');
+    await expect(transcript.getByText(reply, { exact: true })).toHaveCount(1);
+    await expect(editor).toHaveValue('');
+    await expect(transcript.getByText(reply, { exact: true })).toHaveCount(1);
+  });
+
   test('keyboard activation opens a chat link through the built-in browser', async ({ lab, page }) => {
     await lab.open();
     await page.evaluate(async (path) => {

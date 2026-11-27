@@ -76,6 +76,8 @@
 
   let composer = $state.raw<ComposerSnapshot | undefined>();
   let busy = $state(false);
+  let draftRevision = 0;
+  let submitting: { id: string; requestId: string } | undefined;
   let error = $state('');
   let editing = $state('');
   let editText = $state('');
@@ -357,7 +359,12 @@
   });
 
   function accept(next: ComposerSnapshot): void {
-    if (!composer || next.queue.revision >= composer.queue.revision) composer = next;
+    if (composer && next.queue.revision < composer.queue.revision) return;
+    composer = next;
+    const pending = submitting;
+    if (pending && next.queue.items.some((item) => item.id === pending.requestId)) {
+      steerEchoes.remove(sessionId, pending.id);
+    }
   }
 
   async function read(): Promise<void> {
@@ -410,6 +417,7 @@
   }
 
   function setText(value: string): void {
+    draftRevision += 1;
     text = value;
     updateDraft(value);
   }
@@ -538,53 +546,62 @@
       await sendThroughPipeline();
       return;
     }
-    const typed = text;
-    // What is sent is fixed here: the person can still remove an image while the results are read, and a
-    // message that says "see the attached image" must never leave without it.
+    const revision = draftRevision;
+    const displayText = onlyImages ? imageOnlyText : expandMacros(text, macros.list, skillSyntax);
     const imageIds = attachments.ids;
-    const placeholder = imageOnlyText;
-    // Finished runs of this chat reach its agent inside this message, labelled.
-    const handed = await chatPipelines.withResults(sessionId, onlyImages ? placeholder : expandMacros(typed, macros.list, skillSyntax));
-    const message = handed.text;
-    // A message written during a turn waits in the queue; its "Send now" steers it into the turn.
     const effectiveMode = running ? 'follow-up' : 'prompt';
-    // A durable request id prevents duplicate delivery if the reply is lost.
-    let identity = loadIdentity();
-    if (!identity || identity.text !== message || (identity.attachments ?? []).join() !== imageIds.join()) {
-      identity = { id: crypto.randomUUID(), text: message, mode: effectiveMode, ...(imageIds.length ? { attachments: imageIds } : {}) };
-      try {
-        localStorage.setItem(identityKey, JSON.stringify(identity));
-      } catch {
-        error = 'Could not preserve the send request. Your message has not been sent.';
-        return;
+    const id = crypto.randomUUID();
+    const known = userBlockIds(snapshot.blocks);
+    steerEchoes.add(sessionId, { id, text: displayText, images: imageIds.length, known, submission: 'preparing' });
+    busy = true;
+    error = '';
+    let accepted = false;
+    try {
+      const handed = await chatPipelines.withResults(sessionId, displayText);
+      const message = handed.text;
+      // Keep the same request id on a retry after a lost response.
+      let request = loadIdentity();
+      if (!request || request.text !== message || (request.attachments ?? []).join() !== imageIds.join()) {
+        request = { id, text: message, mode: effectiveMode, ...(imageIds.length ? { attachments: imageIds } : {}) };
+        try {
+          localStorage.setItem(identityKey, JSON.stringify(request));
+        } catch {
+          error = 'Could not preserve the send request. Your message has not been sent.';
+          return;
+        }
       }
-    }
-    const request = identity;
-    // A retry keeps the first attempt's view: a message the runtime reported meanwhile is still new.
-    const attempt = firstAttempt?.id === request.id ? firstAttempt : (firstAttempt = { id: request.id, known: userBlockIds(snapshot.blocks) });
-    const known = attempt.known;
-    const sent = await action({
-      type: 'send',
-      sessionId,
-      requestId: request.id,
-      text: message,
-      mode: request.mode,
-      ...(request.attachments?.length ? { attachments: request.attachments } : {}),
-    });
-    if (sent) {
-      // The agent has taken a steered message: the chat shows it until the agent's runtime reports it.
-      if (request.mode === 'steer' && !composer?.queue.items.some((item) => item.id === request.id)) {
-        steerEchoes.add(sessionId, { id: request.id, text: message, images: request.attachments?.length ?? 0, known });
-      }
-      if (text === typed) setText('');
+      const attempt = firstAttempt?.id === request.id ? firstAttempt : (firstAttempt = { id: request.id, known });
+      submitting = { id, requestId: request.id };
+      steerEchoes.submit(sessionId, id, message, known, attempt.known);
+      steerEchoes.settle(sessionId, snapshot.blocks, running);
+      const next = await composerRequest({
+        type: 'send',
+        sessionId,
+        requestId: request.id,
+        text: message,
+        mode: request.mode,
+        ...(request.attachments?.length ? { attachments: request.attachments } : {}),
+      });
+      accept(next);
+      accepted = true;
+      refresh();
+      if (draftRevision === revision) setText('');
       void chatPipelines.consume(sessionId, handed.runIds);
-      // The host now owns the images of the queued message.
-      if (attachments.ids.join() === imageIds.join()) attachments.handOver();
+      if (imageIds.length) attachments.handOver(imageIds);
       try {
         localStorage.removeItem(identityKey);
       } catch {
         // The durable request id already prevents duplicate delivery.
       }
+    } catch (cause) {
+      error = errorMessage(cause);
+      await read();
+    } finally {
+      if (!accepted || composer?.queue.items.some((item) => item.id === submitting?.requestId)) {
+        steerEchoes.remove(sessionId, id);
+      }
+      submitting = undefined;
+      busy = false;
     }
   }
 

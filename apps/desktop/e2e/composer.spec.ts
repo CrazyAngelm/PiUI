@@ -331,6 +331,32 @@ test.describe('attachments', () => {
     await expect(page.getByRole('list', { name: 'Attached images' }).getByText('diagram.png')).toHaveCount(0);
   });
 
+  test('picker, paste and drop stage a follow-up while the current turn is working', async ({ lab, page }) => {
+    await lab.open();
+    const message = await openChat(lab, /Route host calls through one transport/);
+    await message.fill('Install the tools, then walk through the event bus batching');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(page.getByRole('article', { name: 'Run a command', exact: true })).toBeVisible();
+
+    await message.fill('Check these three images');
+    await page.getByRole('button', { name: 'Attach images or files' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Reference this file by its path?' });
+    await dialog.getByRole('button', { name: 'Insert references' }).click();
+    await expect(message).toHaveValue('Check these three images @docs/lab-spec.pdf ');
+    const images = page.getByRole('list', { name: 'Attached images' });
+    await expect(images.getByText('lab-screenshot.png')).toBeVisible();
+    await deliverImage(page, 'paste', 'clipboard.png', true);
+    await expect(images.getByText('clipboard.png')).toBeVisible();
+    await deliverImage(page, 'drop', 'dropped.png');
+    await expect(images.getByText('dropped.png')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Add to queue', exact: true }).click();
+    const queue = page.getByRole('region', { name: 'Message queue' });
+    const followUp = queue.getByRole('article').filter({ hasText: 'Check these three images @docs/lab-spec.pdf' });
+    await expect(followUp.getByLabel('Attached images')).toHaveText('lab-screenshot.png, clipboard.png, dropped.png');
+    await expect(page.getByRole('region', { name: 'Conversation messages' }).getByText('Check these three images')).toHaveCount(0);
+  });
+
   test('a pasted image alone can be sent from an open chat', async ({ lab, page }) => {
     await lab.open();
     const message = await openChat(lab, /Route host calls through one transport/);
