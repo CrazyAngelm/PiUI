@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import SquarePen from '@lucide/svelte/icons/square-pen';
   import Columns2 from '@lucide/svelte/icons/columns-2';
   import PanelLeftClose from '@lucide/svelte/icons/panel-left-close';
@@ -123,6 +123,14 @@
   function go(action: () => void): void {
     action();
     onNavigate();
+  }
+
+  async function newProjectChat(workspaceId: string): Promise<void> {
+    go(() => store.goHome(workspaceId));
+    await tick();
+    if (store.route.name === 'home' && store.selectedWorkspaceId === workspaceId) {
+      document.querySelector<HTMLTextAreaElement>('#main [data-nano-composer="editor"]')?.focus();
+    }
   }
 
   /** Read-only history of this folder (or personal chats) across the connected harnesses. */
@@ -418,7 +426,7 @@
         class="project-new-chat"
         label={$t('New chat in {0}', [name])}
         tooltipSide="left"
-        onclick={() => go(() => store.goHome(workspace.id))}
+        onclick={() => void newProjectChat(workspace.id)}
         disabled={workspace.missing}
       ><SquarePen /></IconButton>
     </div>
