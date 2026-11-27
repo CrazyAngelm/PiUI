@@ -25,7 +25,7 @@ function calls(page: Page): Promise<{ type: string; fileId?: string }[]> {
 }
 
 test.describe('chat files', () => {
-  test('shows an image preview, an audio player and plain cards beside the answer', async ({ lab, page }) => {
+  test('shows artifacts with the answer and expands ordinary writes from one count', async ({ lab, page }) => {
     await openChat(lab);
 
     const image = card(page, 'transport-diagram.png');
@@ -39,6 +39,13 @@ test.describe('chat files', () => {
     await expect(sound.getByRole('button', { name: 'Save as…' })).toBeVisible();
 
     const source = card(page, 'transport-notes.md');
+    const changed = page.getByText('Changed files (2)', { exact: true });
+    await expect(changed).toBeVisible();
+    await expect(source).toHaveCount(0);
+    await changed.focus();
+    await expect(changed).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(source).toBeVisible();
     await expect(source.locator('img, audio, video')).toHaveCount(0);
     await expect(source).toContainText('Written');
 
@@ -50,6 +57,9 @@ test.describe('chat files', () => {
 
     // Nothing but ids went to the host.
     expect((await calls(page)).filter((call) => call.type === 'preview').length).toBeGreaterThanOrEqual(2);
+    await changed.click();
+    await expect(source).toHaveCount(0);
+    await expect(image).toBeVisible();
   });
 
   test('saves a copy and shows the folder from the keyboard', async ({ lab, page }) => {
@@ -80,6 +90,7 @@ test.describe('chat files', () => {
 
   test('opens a file through the host', async ({ lab, page }) => {
     await openChat(lab);
+    await page.getByText('Changed files (2)', { exact: true }).click();
     await card(page, 'transport-notes.md').getByRole('button', { name: 'transport-notes.md' }).click();
     await expect.poll(async () => (await calls(page)).filter((call) => call.type === 'open').length).toBe(1);
   });

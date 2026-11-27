@@ -558,6 +558,27 @@
   {/if}
 {/snippet}
 
+{#snippet answerAttachments(blockId: string, files: readonly ConversationAttachment[])}
+  {@const standalone = files.filter((file) => file.group !== 'changed-files')}
+  {@const changed = files.filter((file) => file.group === 'changed-files')}
+  {@render attachmentList(standalone)}
+  {#if changed.length}
+    {@const disclosureId = JSON.stringify([sessionKey, blockId, 'changed-files'])}
+    <details class="changed-files" open={printMode || openState[disclosureId] === true}
+      ontoggle={(event) => {
+        if (!printMode) setOpen(disclosureId, event.currentTarget.open);
+      }}>
+      <summary>
+        <ChevronRight size={14} aria-hidden="true" />
+        {$t('Changed files ({0})', [changed.length])}
+      </summary>
+      {#if printMode || openState[disclosureId]}
+        {@render attachmentList(changed)}
+      {/if}
+    </details>
+  {/if}
+{/snippet}
+
 {#snippet messageFooter(block: TimelineBlock)}
   {@const controls = controlsByBlock.get(block.id)}
   {#if controls && !printMode}
@@ -712,7 +733,7 @@
                 {#if block.text}<MarkdownContent source={block.text} compact={true} {printMode} />{:else}<p class="muted">{block.safeSummary ?? $t('This session event is not supported by a richer renderer yet.')}</p>{/if}
               </details>
             {/if}
-            {@render attachmentList(attachmentsByBlock.get(block.id) ?? [])}
+            {@render answerAttachments(block.id, attachmentsByBlock.get(block.id) ?? [])}
             {@render messageFooter(block)}
             {#if printMode && block.createdAt}<time datetime={block.createdAt}>{time(block.createdAt)}</time>{/if}
           </div>
@@ -768,6 +789,17 @@
   @media (hover: none) { .message-footer :global(.message-controls) { opacity: 1; } }
   .item--controls > .user, .item--controls > .assistant { margin-bottom: 2px; }
   .attachments { display: flex; flex-wrap: wrap; gap: var(--piui-space-2); padding: 0; margin: 0 0 var(--piui-space-2); list-style: none; }
+  .changed-files { margin-bottom: var(--piui-space-2); }
+  .changed-files summary {
+    display: inline-flex; align-items: center; gap: var(--piui-space-1);
+    padding: var(--piui-space-1) var(--piui-space-2);
+    border: 1px solid var(--piui-border); border-radius: var(--piui-radius-sm);
+    color: var(--piui-text-muted); cursor: pointer;
+  }
+  .changed-files summary:hover { background: var(--piui-hover); color: var(--piui-text); }
+  .changed-files summary:focus-visible { outline: 2px solid var(--piui-focus); outline-offset: 2px; }
+  .changed-files[open] summary { margin-bottom: var(--piui-space-2); }
+  .changed-files[open] summary :global(svg) { transform: rotate(90deg); }
   .transcript {
     position: relative;
     display: flex;

@@ -86,7 +86,10 @@ history stays native; a signed-out app and safe mode make no call.
   turn with no answer yet shows none. A file the agent only read appears when
   it is an image, sound, video or PDF, never for source text; a file that has
   since gone appears only if the agent wrote or generated it, as an
-  unavailable card with no actions.
+  unavailable card with no actions. Ordinary writes are collapsed into one
+  disclosure with the count of unique changed files for this answer. Files
+  generated or explicitly returned to the reader stay visible as individual
+  cards, including when another tool in the turn also wrote them.
 - **`resolve` by name.** `{type: 'resolve', sessionId, name}` returns a file
   or `null`. A name is matched first against the session's registry by its
   trailing path components (a bare name matches by basename, the latest file

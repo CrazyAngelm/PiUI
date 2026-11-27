@@ -3,6 +3,7 @@ export const chatFilesRu: Readonly<Record<string, string>> = {
   'Open containing folder': 'Открыть папку с файлом',
   'File saved': 'Файл сохранён',
   'Written': 'Записан',
+  'Changed files ({0})': 'Изменённые файлы ({0})',
   'Read': 'Прочитан',
   'Generated': 'Создан',
   'Returned': 'Получен',

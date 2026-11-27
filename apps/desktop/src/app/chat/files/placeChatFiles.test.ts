@@ -35,6 +35,27 @@ describe('placeChatFiles', () => {
     expect(cards.map((card) => card.id)).toEqual(['f1']);
   });
 
+  it('keeps an explicit result visible even when a tool wrote it in the same turn', () => {
+    const written = file('report', 't2', { origin: 'written' });
+    const returned = file('report', 't3', { origin: 'returned' });
+    for (const files of [[written, returned], [returned, written]]) {
+      const cards = placeChatFiles(turns, files, same);
+      expect(cards).toHaveLength(1);
+      expect(cards[0]).toMatchObject({ id: 'report', detail: 'Returned', downloadable: true });
+      expect(cards[0]?.group).toBeUndefined();
+    }
+  });
+
+  it('counts every distinct write without using the standalone card limit', () => {
+    const writes = Array.from({ length: MAX_FILES_PER_ANSWER + 6 }, (_, index) => file(`f${index}`, 't2', { origin: 'written' }));
+    const read = file('f0', 't2', { origin: 'read' });
+    const duplicate = file('f0', 't3', { origin: 'written' });
+    const result = file('result', 't3');
+    const cards = placeChatFiles(turns, [read, ...writes, duplicate, result], same);
+    expect(cards.filter((card) => card.group === 'changed-files').map((card) => card.id)).toEqual(writes.map((write) => write.id));
+    expect(cards.find((card) => card.id === 'result')?.group).toBeUndefined();
+  });
+
   it('leaves out a turn with no answer yet and a file whose block is not loaded', () => {
     const running = [block('u1', 'user'), block('t1', 'tool')];
     expect(placeChatFiles(running, [file('f1', 't1')], same)).toEqual([]);

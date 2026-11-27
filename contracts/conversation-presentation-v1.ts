@@ -19,6 +19,8 @@ export interface ConversationAttachment {
   /** Informational only. Resource URLs are absent from this descriptor. */
   mediaType?: string;
   presentation?: 'image' | 'audio' | 'video' | 'file';
+  /** Group ordinary file writes attached to the same answer in one disclosure. */
+  group?: 'changed-files';
   detail?: string;
   unavailable?: boolean;
   /** A pending local preview can be displayed before an openable resource exists. */
