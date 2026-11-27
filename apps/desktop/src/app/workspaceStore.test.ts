@@ -170,6 +170,24 @@ describe('WorkspaceStore start', () => {
     store.dispose();
   });
 
+  it('clears submitted images and preserves edits made in a reopened chat', () => {
+    const store = new WorkspaceStore();
+    const sent: ComposerImage = { id: '00000000-0000-4000-8000-000000000001', name: 'sent.png', mimeType: 'image/png', size: 1 };
+    const next: ComposerImage = { id: '00000000-0000-4000-8000-000000000002', name: 'next.png', mimeType: 'image/png', size: 1 };
+    store.updateDraft('chat-a', 'Same words');
+    store.updateAttachments('chat-a', [sent]);
+    const acknowledge = store.captureDraftAcknowledgement('chat-a', [sent.id]);
+    store.navigate({ name: 'home' });
+    store.navigate({ name: 'chat', sessionId: 'chat-a' });
+    store.updateDraft('chat-a', 'Different words');
+    store.updateDraft('chat-a', 'Same words');
+    store.updateAttachments('chat-a', [sent, next]);
+    acknowledge();
+    expect(store.draftFor('chat-a')).toBe('Same words');
+    expect(store.attachmentsFor('chat-a')).toEqual([next]);
+    store.dispose();
+  });
+
   it('stops loading and reports the error when the event stream cannot start', async () => {
     vi.spyOn(workspaceHost, 'listen').mockRejectedValueOnce(new Error('The event stream is unavailable.'));
     const store = new WorkspaceStore();

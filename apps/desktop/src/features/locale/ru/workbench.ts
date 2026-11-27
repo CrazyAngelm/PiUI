@@ -13,6 +13,7 @@ export const workbenchRu: Readonly<Record<string, string>> = {
   'Close pane': 'Закрыть панель',
   'Resize panes side by side': 'Ширина панелей',
   'Resize panes top and bottom': 'Высота панелей',
+  'Resize sidebar': 'Изменить ширину боковой панели',
   'Hide sidebar': 'Скрыть боковую панель',
   'Show sidebar': 'Показать боковую панель',
   'Four chats are on screen. Close one first.': 'На экране четыре чата. Сначала закройте один.',

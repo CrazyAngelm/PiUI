@@ -387,6 +387,18 @@ test.describe('split panes', () => {
 });
 
 test.describe('sidebar', () => {
+  test('a visible project action opens a new draft in that project', async ({ lab, page }) => {
+    await lab.open();
+    await page.mouse.move(700, 200);
+    const create = lab.sidebar.getByRole('button', { name: 'New chat in video-studio', exact: true });
+    await expect(create).toBeVisible();
+    expect(await create.evaluate((element) => element.checkVisibility({ opacityProperty: true }))).toBe(true);
+    await create.focus();
+    await page.keyboard.press('Enter');
+    await expect(lab.main.getByRole('button', { name: 'Project and permissions: video-studio', exact: true })).toBeVisible();
+    await expect(lab.main.getByRole('textbox', { name: 'Message' })).toBeFocused();
+  });
+
   test('Hide sidebar and Ctrl+B hide and restore it, and the choice survives a reload', async ({ lab, page }) => {
     await lab.open();
     await lab.sidebar.getByRole('button', { name: 'Hide sidebar' }).click();
@@ -405,6 +417,43 @@ test.describe('sidebar', () => {
     await page.keyboard.press('ControlOrMeta+b');
     await expect(lab.sidebar).toBeVisible();
     await expect(lab.rail.getByRole('button', { name: 'Show sidebar' })).toHaveCount(0);
+  });
+
+  test('resizes the sidebar by dragging and keyboard without changing the narrow drawer', async ({ lab, page }) => {
+    await lab.open();
+    const divider = page.getByRole('separator', { name: 'Resize sidebar' });
+    await expect(divider).toBeVisible();
+    const width = () => lab.sidebar.evaluate((element) => element.getBoundingClientRect().width);
+    const initial = await width();
+    const grip = await divider.boundingBox();
+    if (!grip) throw new Error('Sidebar separator has no hit area.');
+    await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(grip.x + initial / 2, grip.y + grip.height / 2);
+    await page.mouse.up();
+    await expect.poll(width).toBeGreaterThan(initial);
+    const widened = await width();
+
+    await divider.focus();
+    await page.keyboard.press('ArrowLeft');
+    await expect.poll(width).toBeLessThan(widened);
+    const selected = await width();
+    await page.reload();
+    await expect(divider).toBeVisible();
+    await expect.poll(width).toBe(selected);
+
+    const wide = page.viewportSize();
+    if (!wide) throw new Error('Desktop viewport is unavailable.');
+    await page.setViewportSize({ width: 700, height: wide.height });
+    await page.getByRole('button', { name: 'Open navigation' }).click();
+    await expect(lab.sidebar).toBeVisible();
+    await expect(divider).toHaveCount(0);
+    await page.getByRole('button', { name: 'Close navigation' }).click();
+    await page.setViewportSize(wide);
+    await expect.poll(width).toBe(selected);
+    await divider.focus();
+    await page.keyboard.press('Home');
+    await expect.poll(width).toBe(initial);
   });
 
   test('the panes stay usable without the sidebar', async ({ lab, page }) => {

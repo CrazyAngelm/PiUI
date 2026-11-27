@@ -25,10 +25,19 @@
     const update = (): void => {
       focused = readFocus();
     };
+    // A trusted interaction with the main WebView is current focus evidence,
+    // even if document.hasFocus is still stale after returning from a native pane.
+    const interacted = (event: Event): void => {
+      if (event.isTrusted && document.visibilityState === 'visible') focused = true;
+    };
+    window.addEventListener('click', interacted, true);
+    window.addEventListener('keydown', interacted, true);
     window.addEventListener('focus', update);
     window.addEventListener('blur', update);
     document.addEventListener('visibilitychange', update);
     return () => {
+      window.removeEventListener('click', interacted, true);
+      window.removeEventListener('keydown', interacted, true);
       window.removeEventListener('focus', update);
       window.removeEventListener('blur', update);
       document.removeEventListener('visibilitychange', update);

@@ -21,7 +21,7 @@
   import ChatDetails from './ChatDetails.svelte';
   import ChatComposer from '../chat/ChatComposer.svelte';
   import { macros } from '../macros/macros.svelte';
-  import { echoBlocks, steerEchoes, waitingEchoes } from '../chat/steerEcho.svelte';
+  import { echoBlocks, steerEchoes, visibleEchoes } from '../chat/steerEcho.svelte';
   import ExtensionSurface from '../chat/extensions/ExtensionSurface.svelte';
   import PluginComposerActions from '../plugins/PluginComposerActions.svelte';
   import { extensionSurfaces } from '../chat/extensions/extensionSurfaces.svelte';
@@ -139,15 +139,16 @@
   let mainWidth = $state(0);
   const roomy = $derived(width === 0 || width >= 720);
   const compact = $derived(mainWidth !== 0 && mainWidth < 560);
-  // A message steered into a running turn stays in the chat until the agent's runtime reports it.
   const turnActive = $derived(snapshot?.session.status === 'running' || snapshot?.session.status === 'stopping');
-  const echoes = $derived(snapshot && turnActive ? waitingEchoes(steerEchoes.list(sessionId), snapshot.blocks) : []);
+  const turnTerminal = $derived(snapshot?.session.status === 'closed' || snapshot?.session.status === 'failed');
+  const echoes = $derived(snapshot ? visibleEchoes(steerEchoes.list(sessionId), snapshot.blocks, turnActive, turnTerminal) : []);
   const shownBlocks = $derived(snapshot ? (echoes.length ? [...snapshot.blocks, ...echoBlocks(echoes)] : snapshot.blocks) : []);
   $effect(() => {
     const current = snapshot;
     if (!current) return;
     const active = turnActive;
-    untrack(() => steerEchoes.settle(sessionId, current.blocks, active));
+    const terminal = turnTerminal;
+    untrack(() => steerEchoes.settle(sessionId, current.blocks, active, terminal));
   });
   // Files the agent wrote, read or returned (ADR-074). A remote browser and safe mode have none: the host refuses both.
   const chatFiles = remoteMode ? undefined : new ChatFilesStore();

@@ -5,7 +5,7 @@ import { splitTurns } from '../../../features/sessions/timelineView';
 
 type Translate = (value: string, parameters?: readonly unknown[]) => string;
 
-/** Cards one answer carries; the most recent files win. */
+/** Standalone cards one answer carries; the most recent files win. */
 export const MAX_FILES_PER_ANSWER = 24;
 
 export const ORIGIN_LABELS: Readonly<Record<ChatFileOrigin, string>> = {
@@ -13,6 +13,13 @@ export const ORIGIN_LABELS: Readonly<Record<ChatFileOrigin, string>> = {
   read: 'Read',
   generated: 'Generated',
   returned: 'Returned',
+};
+
+const ORIGIN_PRIORITY: Readonly<Record<ChatFileOrigin, number>> = {
+  read: 0,
+  written: 1,
+  generated: 2,
+  returned: 3,
 };
 
 /** A file size for a card: `812 B`, `3.4 KB`, `12 MB`. */
@@ -54,6 +61,7 @@ function describeFile(file: ChatFileV1, blockId: string, translate: Translate): 
     label: file.name,
     mediaType: file.mediaType,
     presentation: media,
+    ...(file.origin === 'written' ? { group: 'changed-files' as const } : {}),
     detail,
     unavailable: file.unavailable === true ? true : undefined,
     openable: file.openable && file.unavailable !== true,
@@ -107,21 +115,23 @@ export function placeChatFiles(
     for (const block of turn) turnOf.set(block.id, index);
     answers.push(answerOf(turn));
   });
-  const perAnswer = new Map<string, ConversationAttachment[]>();
-  const seen = new Set<string>();
+  const perAnswer = new Map<string, Map<string, ChatFileV1>>();
   for (const file of files) {
     if (!shown(file)) continue;
     const index = turnOf.get(file.blockId);
     const answer = index === undefined ? undefined : answers[index];
     if (answer === undefined) continue;
-    const key = `${answer}:${file.id}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const list = perAnswer.get(answer) ?? [];
-    list.push(describeFile(file, answer, translate));
-    perAnswer.set(answer, list);
+    const found = perAnswer.get(answer) ?? new Map<string, ChatFileV1>();
+    const previous = found.get(file.id);
+    if (previous === undefined || ORIGIN_PRIORITY[file.origin] > ORIGIN_PRIORITY[previous.origin]) found.set(file.id, file);
+    perAnswer.set(answer, found);
   }
-  return [...perAnswer.values()].flatMap((list) => list.slice(-MAX_FILES_PER_ANSWER));
+  return [...perAnswer].flatMap(([answer, found]) => {
+    const changed: ChatFileV1[] = [];
+    const standalone: ChatFileV1[] = [];
+    for (const file of found.values()) (file.origin === 'written' ? changed : standalone).push(file);
+    return [...standalone.slice(-MAX_FILES_PER_ANSWER), ...changed].map((file) => describeFile(file, answer, translate));
+  });
 }
 
 /** What decides where a block's files go: its identity, kind, status and whether it has text. */

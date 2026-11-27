@@ -8,6 +8,7 @@ const STRINGS = [
   'Save as…',
   'Open containing folder',
   'File saved',
+  'Changed files ({0})',
   ...Object.values(ORIGIN_LABELS),
   '{0} B',
   '{0} KB',

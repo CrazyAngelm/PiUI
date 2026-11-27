@@ -1,13 +1,16 @@
 <script lang="ts">
-  import type { SplitDirection } from './paneLayout';
+  import { MAX_RATIO, MIN_RATIO, type SplitDirection } from './paneLayout';
 
   interface Props {
     direction: SplitDirection;
     ratio: number;
     label: string;
     onResize: (ratio: number) => void;
+    bounds?: { min: number; max: number };
+    onReset?: () => void;
+    controls?: string;
   }
-  let { direction, ratio, label, onResize }: Props = $props();
+  let { direction, ratio, label, onResize, bounds = { min: MIN_RATIO, max: MAX_RATIO }, onReset = undefined, controls = undefined }: Props = $props();
 
   const STEP = 0.02;
   const BIG_STEP = 0.1;
@@ -40,6 +43,11 @@
     dragging = false;
   }
 
+  function reset(): void {
+    if (onReset) onReset();
+    else onResize(0.5);
+  }
+
   function key(event: KeyboardEvent): void {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     const step = event.shiftKey ? BIG_STEP : STEP;
@@ -47,7 +55,7 @@
     const more = direction === 'row' ? 'ArrowRight' : 'ArrowDown';
     if (event.key === less) onResize(ratio - step);
     else if (event.key === more) onResize(ratio + step);
-    else if (event.key === 'Home') onResize(0.5);
+    else if (event.key === 'Home') reset();
     else return;
     event.preventDefault();
   }
@@ -63,14 +71,15 @@
   tabindex="0"
   aria-orientation={orientation}
   aria-valuenow={Math.round(ratio * 100)}
-  aria-valuemin={20}
-  aria-valuemax={80}
+  aria-valuemin={Math.round(bounds.min * 100)}
+  aria-valuemax={Math.round(bounds.max * 100)}
+  aria-controls={controls}
   aria-label={label}
   onpointerdown={down}
   onpointermove={move}
   onpointerup={end}
   onpointercancel={end}
-  ondblclick={() => onResize(0.5)}
+  ondblclick={reset}
   onkeydown={key}
 ></div>
 

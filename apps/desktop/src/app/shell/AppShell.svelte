@@ -54,6 +54,8 @@
   let linkLoad = $state.raw<((id: string) => void) | undefined>(undefined);
   // The sidebar can be hidden (a person's choice, remembered); a narrow window keeps its drawer.
   let sidebarCollapsed = $state(readSidebar());
+  const loadSidebarResize = () => import('./SidebarResize.svelte');
+  let sidebarWidth = $state<number | undefined>();
 
   function readSidebar(): boolean {
     try {
@@ -67,7 +69,7 @@
     sidebarCollapsed = !sidebarCollapsed;
     if (sidebarCollapsed) {
       // Focus inside the hidden sidebar would be lost; focus elsewhere (the composer) stays put.
-      if (active && document.querySelector('.sidebar-slot')?.contains(active)) document.getElementById('main')?.focus();
+      if (active?.closest('.sidebar-slot, .sidebar-resize')) document.getElementById('main')?.focus();
     } else if (active?.closest('.rail')) {
       // The rail's "Show sidebar" button is gone now; focus would fall to <body>.
       void tick().then(() => document.querySelector<HTMLElement>('.sidebar-slot [data-sidebar-hide]')?.focus());
@@ -297,10 +299,10 @@
         <Button size="sm" variant="ghost" onclick={cancelUnloadedConfirmation}>{$t('Cancel')}</Button>
       </div>
     {/if}
-    <div class="frame">
+    <div class="frame" style:--sidebar-width={sidebarWidth === undefined ? undefined : `${sidebarWidth}px`}>
       <NavRail onSearch={() => (paletteOpen = true)} onNavigate={() => (drawerOpen = false)} sidebarHidden={!narrow && sidebarCollapsed} onShowSidebar={toggleSidebar} />
       {#if narrow ? drawerOpen : !sidebarCollapsed}
-        <div class="sidebar-slot" class:sidebar-slot--drawer={narrow}>
+        <div id="workspace-sidebar" class="sidebar-slot" class:sidebar-slot--drawer={narrow}>
           <Sidebar
             onTrust={openTrust}
             onNavigate={() => (drawerOpen = false)}
@@ -314,6 +316,12 @@
         </div>
         {#if narrow}
           <button type="button" class="scrim" aria-label={$t('Close navigation')} onclick={() => (drawerOpen = false)}></button>
+        {:else}
+          {#await loadSidebarResize() then resize}
+            <resize.default onWidth={(width) => (sidebarWidth = width)} />
+          {:catch}
+            <!-- A failed optional resize chunk leaves the navigation usable. -->
+          {/await}
         {/if}
       {/if}
 
@@ -450,7 +458,7 @@
   .frame {
     position: relative;
     display: grid;
-    grid-template-columns: var(--piui-rail-width) var(--piui-sidebar-width) minmax(0, 1fr);
+    grid-template-columns: var(--piui-rail-width) var(--sidebar-width, var(--piui-sidebar-width)) minmax(0, 1fr);
     flex: 1;
     min-height: 0;
   }

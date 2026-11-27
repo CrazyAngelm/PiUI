@@ -4,6 +4,19 @@ All notable changes to Nano Desktop (formerly PiUI) are documented here.
 
 Nano Desktop is currently a developer preview. Versions before 1.0 may change without a stable migration promise; changes to typed host contracts remain versioned under `contracts/`.
 
+## [0.3.17] - 2026-11-27
+
+### Fixed
+
+- Your message appears immediately when you send it. A delayed acknowledgement preserves edits and attachments for your next message, including after reopening the chat.
+- Opening a chat clears its result indicator after returning from the browser pane.
+
+### Changed
+
+- Files written during an answer are grouped under a count. Open the group to see the files and their actions.
+- The new-chat button is always visible next to each project and opens its composer with the editor focused.
+- The left sidebar can be resized with a pointer or keyboard. Nano Desktop remembers the width.
+
 ## [0.3.16] - 2026-11-27
 
 ### Added
