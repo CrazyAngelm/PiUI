@@ -46,9 +46,21 @@ test.describe('attention', () => {
     // The turn finishes out of sight: the taskbar shows 1.
     await expect.poll(count, { timeout: 45_000 }).toBe(1);
 
-    // Opening the chat in a focused window clears it.
-    await lab.chat(prompt).click();
+    const row = lab.chat(prompt);
+    await expect(row.getByRole('img', { name: 'New result' })).toBeVisible();
+    // After switching from a native browser pane, the main WebView may report
+    // stale focus even when the person deliberately opens the chat.
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => false });
+      window.dispatchEvent(new Event('blur'));
+    });
+    await row.click();
     await expect.poll(count).toBe(0);
+    await expect(row.getByRole('img', { name: 'New result' })).toHaveCount(0);
+
+    await lab.openSettings();
+    await row.click();
+    await expect(row.getByRole('img', { name: 'New result' })).toHaveCount(0);
   });
 
   test('the badge setting removes the number and brings it back', async ({ lab, page }) => {
