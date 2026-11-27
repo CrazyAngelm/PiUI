@@ -992,6 +992,8 @@ project, without crowding the composer further.
 - *Who answers* is one composer chip: a harness directly, a saved pipeline of
   the project, or (new chats) a template. Choosing a pipeline hides the model
   chip; project, permissions and worktree share one context chip.
+  The Direct tab lists available agents by name. Versions and connection
+  details are shown under Settings → Harnesses.
 - A pipeline accepts chat messages when it declares a text input named
   `message`, or has exactly one text input (templates' `task`). The message
   fills it; the run has the `chat` trigger with the chat's session id. Every

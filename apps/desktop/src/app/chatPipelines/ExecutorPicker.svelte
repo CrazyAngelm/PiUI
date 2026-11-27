@@ -35,7 +35,7 @@
     workspaceId: string;
     value: Executor;
     /** Harnesses offered for direct chats; an existing chat offers only its own. */
-    harnesses: readonly { kind: HarnessKind; name: string; version?: string; available: boolean; reason?: string }[];
+    harnesses: readonly { kind: HarnessKind; name: string; available: boolean }[];
     /** Offer templates (new chats only): a chosen template becomes the executor and is saved as a pipeline when the message is sent. */
     templates?: boolean;
     disabled?: boolean;
@@ -99,13 +99,11 @@
   const rows = $derived.by<Row[]>(() => {
     const list: Row[] = [];
     for (const item of harnesses) {
+      if (!item.available) continue;
       list.push({
         section: 'direct',
         value: `direct:${item.kind}`,
         label: item.name,
-        description: item.version ? `v${item.version}` : undefined,
-        disabled: !item.available,
-        disabledReason: $t(item.reason ?? 'Not available'),
       });
     }
     // A remote browser chooses the agent only: no teammates, pipelines or templates, which live on the desktop.

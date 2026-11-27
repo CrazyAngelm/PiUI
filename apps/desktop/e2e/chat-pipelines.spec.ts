@@ -11,6 +11,23 @@ function home(page: Page): Locator {
 }
 
 test.describe('chat pipelines', () => {
+  test('the Direct picker lists available agents by name only', async ({ lab, page }) => {
+    await lab.open('empty');
+    const composer = home(page);
+    await composer.getByRole('button', { name: 'Pi', exact: true }).press('Enter');
+    const search = page.getByRole('combobox', { name: 'Who answers' });
+    await expect(search).toBeFocused();
+    await expect(lab.option(/^Codex/)).toHaveText('Codex');
+    await expect(lab.option(/^Hermes/)).toHaveCount(0);
+    await expect(lab.option(/^Prime Agent/)).toHaveCount(0);
+    await search.fill('Hermes');
+    await expect(page.getByText('Nothing found', { exact: true })).toBeVisible();
+    await search.fill('Codex');
+    await search.press('ArrowDown');
+    await search.press('Enter');
+    await expect(composer.getByRole('button', { name: 'Codex', exact: true })).toBeVisible();
+  });
+
   test('a new chat goes through a pipeline, then the chat agent gets its result', async ({ lab, page }) => {
     test.slow(); // The lab run and the follow-up turn use real timers.
     await lab.open();
