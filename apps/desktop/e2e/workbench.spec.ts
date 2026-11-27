@@ -387,6 +387,18 @@ test.describe('split panes', () => {
 });
 
 test.describe('sidebar', () => {
+  test('a visible project action opens a new draft in that project', async ({ lab, page }) => {
+    await lab.open();
+    await page.mouse.move(700, 200);
+    const create = lab.sidebar.getByRole('button', { name: 'New chat in video-studio', exact: true });
+    await expect(create).toBeVisible();
+    expect(await create.evaluate((element) => element.checkVisibility({ opacityProperty: true }))).toBe(true);
+    await create.focus();
+    await page.keyboard.press('Enter');
+    await expect(lab.main.getByRole('button', { name: 'Project and permissions: video-studio', exact: true })).toBeVisible();
+    await expect(lab.main.getByRole('textbox', { name: 'Message' })).toBeFocused();
+  });
+
   test('Hide sidebar and Ctrl+B hide and restore it, and the choice survives a reload', async ({ lab, page }) => {
     await lab.open();
     await lab.sidebar.getByRole('button', { name: 'Hide sidebar' }).click();

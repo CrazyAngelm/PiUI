@@ -413,16 +413,14 @@
             <KanbanSquare size={13} />
           </button>
         {/if}
-        <button
-          type="button"
-          class="tiny-action"
-          aria-label={$t('New chat in {0}', [name])}
-          onclick={() => go(() => store.goHome(workspace.id))}
-          disabled={workspace.missing}
-        >
-          <SquarePen size={13} />
-        </button>
       </div>
+      <IconButton
+        class="project-new-chat"
+        label={$t('New chat in {0}', [name])}
+        tooltipSide="left"
+        onclick={() => go(() => store.goHome(workspace.id))}
+        disabled={workspace.missing}
+      ><SquarePen /></IconButton>
     </div>
     {#if !collapsed}
       <ul class="chats">
@@ -588,6 +586,10 @@
   .project__row:hover {
     background: var(--piui-hover);
   }
+  .project__row :global(.project-new-chat) {
+    flex: none;
+    margin-inline-end: var(--piui-space-1);
+  }
   .project__row .project__actions {
     padding-right: 4px;
     opacity: 0;
@@ -598,7 +600,8 @@
   }
   @media (hover: none) {
     .project__row .project__actions { opacity: 1; }
-    .project__actions .tiny-action { min-width: 44px; min-height: 44px; }
+    .project__actions .tiny-action,
+    .project__row :global(.project-new-chat) { min-width: 44px; min-height: 44px; }
   }
   .project__toggle {
     display: flex;
