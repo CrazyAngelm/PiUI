@@ -54,7 +54,7 @@ rfd = "0.17.2"
 tauri-plugin-updater = { version = "=2.12.0", default-features = false, features = ["rustls-tls", "system-proxy"] }
 base64 = "0.22.1"
 minisign-verify = "0.2.5"
-notify = "8.2.0"
+notify = "9.0.0"
 # Sign-in registration for background mode on Linux and macOS; driven only
 # from host code. Windows writes its quoted Run value itself (autostart.rs).
 tauri-plugin-autostart = "=2.5.1"
