@@ -107,6 +107,10 @@
   let catalog = $state.raw<NativeEntries>({ commands: [], skills: [] });
   let htmlDragging = $state(false);
   const attachments = new ComposerAttachments(untrack(() => images), (next) => updateImages(next));
+  $effect(() => {
+    const savedImages = images;
+    untrack(() => attachments.syncFromOwner(savedImages));
+  });
   const fileMentions = new FileMentions();
 
   const sessionId = $derived(snapshot.session.id);
