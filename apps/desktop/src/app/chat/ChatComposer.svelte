@@ -76,7 +76,6 @@
 
   let composer = $state.raw<ComposerSnapshot | undefined>();
   let busy = $state(false);
-  let draftRevision = 0;
   let submitting: { id: string; requestId: string } | undefined;
   let error = $state('');
   let editing = $state('');
@@ -102,8 +101,8 @@
   /** The macro space Escape turned into an ordinary space: it stays closed while the text before it is unchanged. */
   let dismissedSpace = $state<string | undefined>();
   const spaceKey = (value: string, start: number): string => `${start}:${value.slice(0, start + 1)}`;
-  // Keyed per chat by the parent: the saved draft seeds the editor once.
-  let text = $state(untrack(() => draft));
+  // A pending send may acknowledge the draft after this editor remounts.
+  const text = $derived(draft);
   let caret = $state(untrack(() => draft.length));
   let input = $state<HTMLTextAreaElement | null>(null);
   let catalog = $state.raw<NativeEntries>({ commands: [], skills: [] });
@@ -417,8 +416,6 @@
   }
 
   function setText(value: string): void {
-    draftRevision += 1;
-    text = value;
     updateDraft(value);
   }
 
@@ -530,7 +527,7 @@
   }
 
   async function send(): Promise<void> {
-    if (busy || !composer || !(text.trim() || imageOnly)) return;
+    if (busy || steerEchoes.isSubmitting(sessionId) || !composer || !(text.trim() || imageOnly)) return;
     const onlyImages = imageOnly;
     // `/btw` also takes a question after it; the other commands are the whole message.
     const question = commands.some((command) => command.name === 'btw') ? btwQuestion(text) : undefined;
@@ -546,13 +543,13 @@
       await sendThroughPipeline();
       return;
     }
-    const revision = draftRevision;
     const displayText = onlyImages ? imageOnlyText : expandMacros(text, macros.list, skillSyntax);
     const imageIds = attachments.ids;
+    const acknowledge = store.captureDraftAcknowledgement(sessionId, imageIds);
     const effectiveMode = running ? 'follow-up' : 'prompt';
     const id = crypto.randomUUID();
     const known = userBlockIds(snapshot.blocks);
-    steerEchoes.add(sessionId, { id, text: displayText, images: imageIds.length, known, submission: 'preparing' });
+    steerEchoes.beginSubmission(sessionId, { id, text: displayText, images: imageIds.length, known, submission: 'preparing' });
     busy = true;
     error = '';
     let accepted = false;
@@ -585,11 +582,10 @@
       accept(next);
       accepted = true;
       refresh();
-      if (draftRevision === revision) setText('');
+      acknowledge();
       void chatPipelines.consume(sessionId, handed.runIds);
-      if (imageIds.length) attachments.handOver(imageIds);
       try {
-        localStorage.removeItem(identityKey);
+        if (loadIdentity()?.id === request.id) localStorage.removeItem(identityKey);
       } catch {
         // The durable request id already prevents duplicate delivery.
       }
@@ -601,6 +597,7 @@
         steerEchoes.remove(sessionId, id);
       }
       submitting = undefined;
+      steerEchoes.finishSubmission(sessionId);
       busy = false;
     }
   }
@@ -893,7 +890,7 @@
             type="button"
             data-nano-composer="send"
             onclick={submit}
-            disabled={dictating ? busy : busy || !composer || !(text.trim() || imageOnly)}
+            disabled={busy || steerEchoes.isSubmitting(sessionId) || (!dictating && (!composer || !(text.trim() || imageOnly)))}
             aria-label={dictating ? $t('Stop dictation and send') : running ? $t('Add to queue') : $t('Send')}
           >
             {#if busy}<Spinner size={14} />{:else}<ArrowUp size={16} />{/if}

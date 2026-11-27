@@ -482,9 +482,10 @@ export class WorkspaceStore {
   /**
    * A send acknowledgement clears unchanged fields even if their editor was
    * remounted. Any intervening edit, including the same text typed again,
-   * retires that field's acknowledgement. No attachment bytes are discarded.
+   * retires the text acknowledgement. When submitted image IDs are known,
+   * only those IDs leave the current draft. No attachment bytes are discarded.
    */
-  captureDraftAcknowledgement(key: string): () => void {
+  captureDraftAcknowledgement(key: string, submittedIds?: readonly string[]): () => void {
     const textEdit = this.draftEdits.get(key);
     const imageEdit = this.attachmentEdits.get(key);
     const text = this.draftFor(key);
@@ -492,7 +493,13 @@ export class WorkspaceStore {
     return () => {
       if (this.disposed) return;
       if (this.draftEdits.get(key) === textEdit && this.draftFor(key) === text) this.updateDraft(key, '');
-      if (this.attachmentEdits.get(key) === imageEdit && this.attachmentDrafts[key] === images) this.updateAttachments(key, []);
+      if (submittedIds) {
+        const current = this.attachmentsFor(key);
+        const remaining = current.filter((image) => !submittedIds.includes(image.id));
+        if (remaining.length !== current.length) this.updateAttachments(key, remaining);
+      } else if (this.attachmentEdits.get(key) === imageEdit && this.attachmentDrafts[key] === images) {
+        this.updateAttachments(key, []);
+      }
     };
   }
 

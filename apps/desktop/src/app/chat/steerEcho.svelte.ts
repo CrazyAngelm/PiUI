@@ -1,4 +1,4 @@
-import { SvelteMap } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import type { TimelineBlock } from '../../host-api/types';
 import { splitImageMarkers } from './composer/mentions';
 
@@ -72,6 +72,20 @@ export function echoBlocks(echoes: readonly SteerEcho[]): TimelineBlock[] {
 
 class SteerEchoes {
   private bySession = new SvelteMap<string, readonly SteerEcho[]>();
+  private submitting = new SvelteSet<string>();
+
+  isSubmitting(sessionId: string): boolean {
+    return this.submitting.has(sessionId);
+  }
+
+  beginSubmission(sessionId: string, echo: SteerEcho): void {
+    this.submitting.add(sessionId);
+    this.add(sessionId, echo);
+  }
+
+  finishSubmission(sessionId: string): void {
+    this.submitting.delete(sessionId);
+  }
 
   /** The echoes of a chat, oldest first. */
   list(sessionId: string): readonly SteerEcho[] {

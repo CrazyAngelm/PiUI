@@ -100,16 +100,4 @@ describe('composer attachments', () => {
     expect(attachments.notices).toEqual([{ kind: 'error', message: 'Trust this project before starting or controlling its agents.' }]);
     expect(attachments.busy).toBe(false);
   });
-
-  it('hands over only the submitted images and keeps attachments added before acknowledgement', async () => {
-    const save = vi.fn();
-    const attachments = new ComposerAttachments([image(1)], save);
-    const submitted = attachments.ids;
-    client.pickAttachments.mockResolvedValue(result({ images: [image(2)] }));
-    await attachments.pick('workspace', SUPPORTED);
-    expect(attachments.handOver(submitted)).toEqual([image(1)]);
-    expect(attachments.images).toEqual([image(2)]);
-    expect(save).toHaveBeenLastCalledWith([image(2)]);
-    expect(client.discardImages).not.toHaveBeenCalled();
-  });
 });

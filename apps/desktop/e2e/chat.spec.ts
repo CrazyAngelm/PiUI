@@ -82,6 +82,39 @@ test.describe('new chat', () => {
     await expect(transcript.getByText(reply, { exact: true })).toHaveCount(1);
   });
 
+  test('does not clear a new draft when an earlier send completes after reopening the chat', async ({ lab, page }) => {
+    await lab.open();
+    const row = lab.chat(/Route host calls through one transport/);
+    await row.click();
+    const editor = page.getByRole('textbox', { name: 'Message' });
+    const transcript = page.getByRole('region', { name: 'Conversation messages' });
+    const reply = 'Repeat the same draft deliberately';
+    await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
+    await page.evaluate(async (path) => {
+      const { chatPipelines }: typeof import('../src/app/chatPipelines/chatPipelines.svelte') = await import(path);
+      const original = chatPipelines.withResults;
+      chatPipelines.withResults = async (...args) => {
+        await new Promise<void>((resolve) => window.addEventListener('resumeReplyFixture', () => resolve(), { once: true }));
+        chatPipelines.withResults = original;
+        return original.apply(chatPipelines, args);
+      };
+    }, '/src/app/chatPipelines/chatPipelines.svelte.ts');
+    await editor.fill(reply);
+    await editor.press('Enter');
+    await expect(transcript.getByText(reply, { exact: true })).toBeVisible();
+    await lab.openSettings();
+    await row.click();
+    await editor.fill('Another draft');
+    await editor.fill(reply);
+    await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
+    await page.evaluate(() => window.dispatchEvent(new Event('resumeReplyFixture')));
+    await expect(page.getByRole('button', { name: 'Add to queue' })).toBeEnabled();
+    await lab.openSettings();
+    await row.click();
+    await expect(editor).toHaveValue(reply);
+    await expect(transcript.getByText(reply, { exact: true }).first()).toBeVisible();
+  });
+
   test('keyboard activation opens a chat link through the built-in browser', async ({ lab, page }) => {
     await lab.open();
     await page.evaluate(async (path) => {
