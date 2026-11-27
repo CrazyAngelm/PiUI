@@ -1,4 +1,4 @@
-import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+import { SvelteMap } from 'svelte/reactivity';
 import type { TimelineBlock } from '../../host-api/types';
 import { splitImageMarkers } from './composer/mentions';
 
@@ -72,19 +72,43 @@ export function echoBlocks(echoes: readonly SteerEcho[]): TimelineBlock[] {
 
 class SteerEchoes {
   private bySession = new SvelteMap<string, readonly SteerEcho[]>();
-  private submitting = new SvelteSet<string>();
+  private submitting = new SvelteMap<string, { id: string; requestId?: string }>();
 
   isSubmitting(sessionId: string): boolean {
     return this.submitting.has(sessionId);
   }
 
   beginSubmission(sessionId: string, echo: SteerEcho): void {
-    this.submitting.add(sessionId);
+    this.submitting.set(sessionId, { id: echo.id });
     this.add(sessionId, echo);
   }
 
-  finishSubmission(sessionId: string): void {
-    this.submitting.delete(sessionId);
+  finishSubmission(sessionId: string, id: string): void {
+    if (this.submitting.get(sessionId)?.id === id) this.submitting.delete(sessionId);
+  }
+
+  /** A newly mounted editor can observe the outbox before the send reply. */
+  observeQueue(sessionId: string, items: readonly { id: string }[]): void {
+    const active = this.submitting.get(sessionId);
+    if (active?.requestId && items.some((item) => item.id === active.requestId)) {
+      this.remove(sessionId, active.id);
+    }
+  }
+
+  /** After a post-acknowledgement refresh, only an active turn needs an echo. */
+  accepted(sessionId: string, id: string, blocks: readonly TimelineBlock[], turnActive: boolean): void {
+    const current = this.bySession.get(sessionId);
+    if (!current?.some((echo) => echo.id === id)) return;
+    if (!turnActive) {
+      this.remove(sessionId, id);
+      return;
+    }
+    this.bySession.set(sessionId, current.map((echo) => {
+      if (echo.id !== id) return echo;
+      const { submission: _submission, ...reply } = echo;
+      return reply;
+    }));
+    this.settle(sessionId, blocks, true);
   }
 
   /** The echoes of a chat, oldest first. */
@@ -99,7 +123,8 @@ class SteerEchoes {
     this.bySession.set(sessionId, [...current, echo]);
   }
 
-  submit(sessionId: string, id: string, text: string, latest: ReadonlySet<string>, first: ReadonlySet<string>): void {
+  submit(sessionId: string, id: string, requestId: string, text: string, latest: ReadonlySet<string>, first: ReadonlySet<string>): void {
+    if (this.submitting.get(sessionId)?.id === id) this.submitting.set(sessionId, { id, requestId });
     const current = this.bySession.get(sessionId);
     if (!current) return;
     this.bySession.set(sessionId, current.map((echo) => {

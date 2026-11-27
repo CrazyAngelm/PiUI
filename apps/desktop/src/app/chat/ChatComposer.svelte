@@ -76,7 +76,6 @@
 
   let composer = $state.raw<ComposerSnapshot | undefined>();
   let busy = $state(false);
-  let submitting: { id: string; requestId: string } | undefined;
   let error = $state('');
   let editing = $state('');
   let editText = $state('');
@@ -360,10 +359,7 @@
   function accept(next: ComposerSnapshot): void {
     if (composer && next.queue.revision < composer.queue.revision) return;
     composer = next;
-    const pending = submitting;
-    if (pending && next.queue.items.some((item) => item.id === pending.requestId)) {
-      steerEchoes.remove(sessionId, pending.id);
-    }
+    steerEchoes.observeQueue(sessionId, next.queue.items);
   }
 
   async function read(): Promise<void> {
@@ -568,8 +564,7 @@
         }
       }
       const attempt = firstAttempt?.id === request.id ? firstAttempt : (firstAttempt = { id: request.id, known });
-      submitting = { id, requestId: request.id };
-      steerEchoes.submit(sessionId, id, message, known, attempt.known);
+      steerEchoes.submit(sessionId, id, request.id, message, known, attempt.known);
       steerEchoes.settle(sessionId, snapshot.blocks, running);
       const next = await composerRequest({
         type: 'send',
@@ -581,7 +576,11 @@
       });
       accept(next);
       accepted = true;
-      refresh();
+      void store.reconcileSession(sessionId).then(() => {
+        const current = store.snapshots[sessionId];
+        const activeTurn = current !== undefined && ['starting', 'running', 'stopping'].includes(current.session.status);
+        steerEchoes.accepted(sessionId, id, current?.blocks ?? [], activeTurn);
+      });
       acknowledge();
       void chatPipelines.consume(sessionId, handed.runIds);
       try {
@@ -593,11 +592,8 @@
       error = errorMessage(cause);
       await read();
     } finally {
-      if (!accepted || composer?.queue.items.some((item) => item.id === submitting?.requestId)) {
-        steerEchoes.remove(sessionId, id);
-      }
-      submitting = undefined;
-      steerEchoes.finishSubmission(sessionId);
+      if (!accepted) steerEchoes.remove(sessionId, id);
+      steerEchoes.finishSubmission(sessionId, id);
       busy = false;
     }
   }

@@ -74,9 +74,27 @@ describe('steer echoes', () => {
     steerEchoes.add('retry', { ...echo('r1', 'Already delivered', ['u1']), submission: 'preparing' });
     steerEchoes.settle('retry', reported, false);
     expect(steerEchoes.list('retry')).toHaveLength(1);
-    steerEchoes.submit('retry', 'r1', 'Already delivered', nowKnown, firstKnown);
+    steerEchoes.submit('retry', 'r1', 'r1', 'Already delivered', nowKnown, firstKnown);
     steerEchoes.settle('retry', reported, false);
     expect(steerEchoes.list('retry')).toEqual([]);
+  });
+
+  it('deduplicates an early outbox event from another composer and releases only its owner', () => {
+    const known = new Set<string>();
+    steerEchoes.beginSubmission('queue', { ...echo('visual', 'Queued'), submission: 'preparing' });
+    steerEchoes.submit('queue', 'visual', 'durable', 'Queued', known, known);
+    steerEchoes.observeQueue('queue', [{ id: 'durable' }]);
+    expect(steerEchoes.list('queue')).toEqual([]);
+    steerEchoes.finishSubmission('queue', 'other');
+    expect(steerEchoes.isSubmitting('queue')).toBe(true);
+    steerEchoes.finishSubmission('queue', 'visual');
+    expect(steerEchoes.isSubmitting('queue')).toBe(false);
+  });
+
+  it('does not keep an acknowledged echo after the refreshed turn is idle', () => {
+    steerEchoes.add('settled', { ...echo('sent', 'No longer active'), submission: 'sending' });
+    steerEchoes.accepted('settled', 'sent', [], false);
+    expect(steerEchoes.list('settled')).toEqual([]);
   });
 
   it('drops every echo of a chat once no turn runs', () => {
