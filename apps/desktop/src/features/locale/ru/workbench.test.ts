@@ -25,6 +25,7 @@ describe('Russian copy for tabs and split panes', () => {
   it('translates the strings the shell, sidebar, chat and settings add for it', () => {
     const keys = [
       'Hide sidebar',
+      'Resize sidebar',
       'Show sidebar',
       'Open to the side',
       'Close pane',

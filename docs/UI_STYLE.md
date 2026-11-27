@@ -39,7 +39,10 @@ gauges, current selection and popovers, never a whole screen of glow.
   other views. Rail buttons have an accessible name and a tooltip, never a
   caption; exactly one carries `aria-current="page"`. The list beside it keeps
   a New chat row, projects with their chats, the account chip and Settings. In
-  a narrow window the rail stays and only the list becomes a drawer.
+  a narrow window the rail stays and only the list becomes a drawer. On wide
+  windows, drag the list's right edge or use its arrow keys to resize it.
+  The width is remembered. Home on the separator or a double click restores
+  the default width.
 - Show one contextual inspector. Chat details belong to chats; agent settings
   belong to the selected graph node. Do not stack unrelated inspectors.
 - Projects have folder icons, consistent rows, hover and selection. Chats use

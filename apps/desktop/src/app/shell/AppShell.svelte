@@ -9,6 +9,7 @@
   import HomeView from './HomeView.svelte';
   import NavRail from './NavRail.svelte';
   import Sidebar from './Sidebar.svelte';
+  import PaneSplitter from './panes/PaneSplitter.svelte';
   import { lazyViews, type LazyView } from './lazyViews.svelte';
   import { EmptyState, Skeleton } from '../../lib/ui';
   import { provideWorkspace } from './context';
@@ -54,6 +55,36 @@
   let linkLoad = $state.raw<((id: string) => void) | undefined>(undefined);
   // The sidebar can be hidden (a person's choice, remembered); a narrow window keeps its drawer.
   let sidebarCollapsed = $state(readSidebar());
+  const sidebarWidthKey = 'piui.shell.sidebar.width';
+  let preferredSidebarWidth = $state(readSidebarWidth());
+  let frame: HTMLDivElement;
+  let frameWidth = $state(0);
+  let layout = $state({ rail: 0, sidebar: 0, workArea: 0 });
+  const widthBesideRail = $derived(frameWidth - layout.rail);
+  const sidebarMinimum = $derived(layout.sidebar - layout.rail);
+  const sidebarMaximum = $derived(Math.max(sidebarMinimum, widthBesideRail - layout.workArea));
+  const actualSidebarWidth = $derived(Math.max(sidebarMinimum, Math.min(sidebarMaximum, preferredSidebarWidth ?? layout.sidebar)));
+
+  function readSidebarWidth(): number | undefined {
+    try {
+      const width = Number(localStorage.getItem(sidebarWidthKey));
+      return Number.isFinite(width) && width > 0 ? width : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function changeSidebarWidth(width: number | undefined): void {
+    const clamped = width === undefined ? undefined : Math.round(Math.max(sidebarMinimum, Math.min(sidebarMaximum, width)));
+    if (preferredSidebarWidth === clamped) return;
+    preferredSidebarWidth = clamped;
+    try {
+      if (clamped === undefined) localStorage.removeItem(sidebarWidthKey);
+      else localStorage.setItem(sidebarWidthKey, String(clamped));
+    } catch {
+      // Resizing remains available when persistent storage is blocked.
+    }
+  }
 
   function readSidebar(): boolean {
     try {
@@ -67,7 +98,7 @@
     sidebarCollapsed = !sidebarCollapsed;
     if (sidebarCollapsed) {
       // Focus inside the hidden sidebar would be lost; focus elsewhere (the composer) stays put.
-      if (active && document.querySelector('.sidebar-slot')?.contains(active)) document.getElementById('main')?.focus();
+      if (active?.closest('.sidebar-slot, .sidebar-resize')) document.getElementById('main')?.focus();
     } else if (active?.closest('.rail')) {
       // The rail's "Show sidebar" button is gone now; focus would fall to <body>.
       void tick().then(() => document.querySelector<HTMLElement>('.sidebar-slot [data-sidebar-hide]')?.focus());
@@ -169,6 +200,12 @@
   }
 
   onMount(() => {
+    const tokens = getComputedStyle(frame);
+    layout = {
+      rail: parseFloat(tokens.getPropertyValue('--piui-rail-width')),
+      sidebar: parseFloat(tokens.getPropertyValue('--piui-sidebar-width')),
+      workArea: parseFloat(tokens.getPropertyValue('--piui-panel-width')),
+    };
     // Marks of chats and projects that are gone may only be pruned once the catalog is known.
     marks.liveIds = () =>
       store.catalog.workspaces.length === 0
@@ -297,10 +334,11 @@
         <Button size="sm" variant="ghost" onclick={cancelUnloadedConfirmation}>{$t('Cancel')}</Button>
       </div>
     {/if}
-    <div class="frame">
+    <div class="frame" bind:this={frame} bind:clientWidth={frameWidth}
+      style:--preferred-sidebar-width={preferredSidebarWidth === undefined ? undefined : `${preferredSidebarWidth}px`}>
       <NavRail onSearch={() => (paletteOpen = true)} onNavigate={() => (drawerOpen = false)} sidebarHidden={!narrow && sidebarCollapsed} onShowSidebar={toggleSidebar} />
       {#if narrow ? drawerOpen : !sidebarCollapsed}
-        <div class="sidebar-slot" class:sidebar-slot--drawer={narrow}>
+        <div id="workspace-sidebar" class="sidebar-slot" class:sidebar-slot--drawer={narrow}>
           <Sidebar
             onTrust={openTrust}
             onNavigate={() => (drawerOpen = false)}
@@ -314,6 +352,19 @@
         </div>
         {#if narrow}
           <button type="button" class="scrim" aria-label={$t('Close navigation')} onclick={() => (drawerOpen = false)}></button>
+        {:else if layout.sidebar > 0 && widthBesideRail > 0}
+          <div class="sidebar-resize">
+            <span style:width="{actualSidebarWidth}px"></span>
+            <PaneSplitter
+              direction="row"
+              ratio={actualSidebarWidth / widthBesideRail}
+              label={$t('Resize sidebar')}
+              controls="workspace-sidebar"
+              bounds={{ min: sidebarMinimum / widthBesideRail, max: sidebarMaximum / widthBesideRail }}
+              onResize={(ratio) => changeSidebarWidth(widthBesideRail * ratio)}
+              onReset={() => changeSidebarWidth(undefined)}
+            />
+          </div>
         {/if}
       {/if}
 
@@ -448,9 +499,11 @@
     flex: none;
   }
   .frame {
+    --sidebar-minimum: calc(var(--piui-sidebar-width) - var(--piui-rail-width));
+    --sidebar-maximum: max(var(--sidebar-minimum), calc(100% - var(--piui-rail-width) - var(--piui-panel-width)));
     position: relative;
     display: grid;
-    grid-template-columns: var(--piui-rail-width) var(--piui-sidebar-width) minmax(0, 1fr);
+    grid-template-columns: var(--piui-rail-width) clamp(var(--sidebar-minimum), var(--preferred-sidebar-width, var(--piui-sidebar-width)), var(--sidebar-maximum)) minmax(0, 1fr);
     flex: 1;
     min-height: 0;
   }
@@ -460,6 +513,15 @@
   }
   .sidebar-slot {
     min-height: 0;
+  }
+  .sidebar-resize {
+    position: absolute;
+    inset: 0 0 0 var(--piui-rail-width);
+    display: flex;
+    pointer-events: none;
+  }
+  .sidebar-resize :global(.splitter) {
+    pointer-events: auto;
   }
   .sidebar-slot--drawer {
     position: absolute;
