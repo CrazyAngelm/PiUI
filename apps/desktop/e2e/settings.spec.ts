@@ -8,6 +8,16 @@ import { expect, test, type Lab } from './fixtures';
  */
 const LOGIN = /^Start Nano Desktop when I sign in( to Windows)?$/;
 
+test('Settings → About shows update controls without the two explanatory paragraphs in Russian', async ({ lab, page }) => {
+  await page.addInitScript(() => localStorage.setItem('piui.language', 'ru'));
+  await page.goto('/?lab=demo&updates=current');
+  await page.getByRole('button', { name: /^Настройки\s/ }).click();
+  await page.getByRole('button', { name: 'О программе', exact: true }).press('Enter');
+  await expect(page.getByRole('button', { name: 'Проверить обновления', exact: true })).toBeVisible();
+  await expect(page.getByText('Nano Desktop устанавливает обновление, только если', { exact: false })).toHaveCount(0);
+  await expect(page.getByText('Всё локально: без телеметрии.', { exact: false })).toHaveCount(0);
+});
+
 /** Opens Settings → Harnesses and returns its built-in rows by harness name. */
 async function openHarnesses(lab: Lab, page: Page) {
   const sections = await lab.openSettings();

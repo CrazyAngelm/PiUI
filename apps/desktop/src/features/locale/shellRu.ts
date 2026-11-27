@@ -105,7 +105,6 @@ export const shellRu: Readonly<Record<string, string>> = {
   "Leave the pipeline editor?": "Выйти из редактора конвейера?",
   "Library": "Библиотека",
   "Light": "Светлая",
-  "Local-first: no telemetry. Harnesses talk to their own providers with their own credentials. The optional Nano account is used only once you sign in.": "Всё локально: без телеметрии. Агенты сами общаются со своими провайдерами со своими учётными данными. Необязательный аккаунт Nano используется только после входа.",
   "Manage harnesses": "Управление агентами",
   "Medium": "Средний",
   "Message": "Сообщение",

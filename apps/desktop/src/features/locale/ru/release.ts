@@ -22,8 +22,6 @@ export const releaseRu: Readonly<Record<string, string>> = {
   'Check for updates automatically': 'Проверять обновления автоматически',
   'When Nano Desktop starts and once a day. Nothing installs without your confirmation.':
     'При запуске Nano Desktop и раз в день. Без вашего подтверждения ничего не устанавливается.',
-  'Nano Desktop installs an update only after its signature matches the key built into this version. Checks contact {0}.':
-    'Nano Desktop устанавливает обновление, только если его подпись совпадает с ключом, встроенным в эту версию. Для проверки Nano Desktop обращается к {0}.',
   'Install Nano Desktop {0}?': 'Установить Nano Desktop {0}?',
   'Nano Desktop downloads the update and checks its signature. Then it stops running chats and pipeline steps as it does when you quit, installs the update and starts again.':
     'Nano Desktop загрузит обновление и проверит его подпись. Затем остановит идущие чаты и шаги конвейеров, как при выходе, установит обновление и запустится снова.',

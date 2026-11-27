@@ -3,7 +3,6 @@
   import Download from '@lucide/svelte/icons/download';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
-  import ShieldCheck from '@lucide/svelte/icons/shield-check';
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
   import { language, t } from '../../features/locale/language';
   import { APP_UPDATE_ERROR_COPY, appUpdateHost, type AppUpdateClient } from '../../host-api/appUpdateClient';
@@ -152,14 +151,8 @@
         />
       </div>
     </div>
-    <p class="muted small note">
-      <ShieldCheck size={14} />
-      <span>{$t('Nano Desktop installs an update only after its signature matches the key built into this version. Checks contact {0}.', [status.feedHost ?? ''])}</span>
-    </p>
   </section>
 {/if}
-
-<p class="muted small">{$t('Local-first: no telemetry. Harnesses talk to their own providers with their own credentials. The optional Nano account is used only once you sign in.')}</p>
 
 <Dialog
   bind:open={confirming}
@@ -285,24 +278,12 @@
     justify-content: flex-end;
     gap: var(--piui-space-2);
   }
-  .note {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--piui-space-2);
-  }
-  .note :global(svg) {
-    flex: none;
-    margin-top: 2px;
-  }
   .muted {
     color: var(--piui-text-muted);
   }
   .small {
     font-size: var(--piui-text-sm);
     line-height: var(--piui-leading-normal);
-  }
-  p.small {
-    margin-top: var(--piui-space-4);
   }
   .updates p.small {
     margin-top: 0;

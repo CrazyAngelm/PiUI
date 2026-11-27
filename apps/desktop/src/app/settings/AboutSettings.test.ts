@@ -28,20 +28,21 @@ describe('Settings → About', () => {
     const body = html(await loaded(undefined), true);
     expect(body).toContain('0.2.0');
     expect(body).toMatch(/Safe mode<\/span><span class="muted[^"]*">On</);
-    expect(body).toContain('Local-first: no telemetry. Harnesses talk to their own providers with their own credentials.');
+    expect(body).not.toContain('Local-first: no telemetry.');
     for (const text of ['Updates', 'Check for updates', 'Download and restart', 'Check for updates automatically', 'github.com']) {
       expect(body).not.toContain(text);
     }
   });
 
-  it('shows the check, the automatic-check switch and where checks go when configured', async () => {
+  it('shows the update controls without the explanatory paragraphs', async () => {
     const body = html(await loaded('current'));
     expect(body).toContain('id="about-updates-title"');
     expect(body).toContain('Check for updates');
     expect(body).toContain('Not checked yet.');
     expect(body).toContain('aria-label="Check for updates automatically"');
     expect(body).toContain('aria-checked="false"');
-    expect(body).toContain('Checks contact github.com.');
+    expect(body).not.toContain('Nano Desktop installs an update only after its signature matches');
+    expect(body).not.toContain('Local-first: no telemetry.');
     expect(body).not.toContain('Download and restart');
   });
 
@@ -110,6 +111,8 @@ describe('Settings → About', () => {
     expect(body).toContain('Проверить обновления');
     expect(body).toContain('Доступна версия Nano Desktop 0.2.1.');
     expect(body).toContain('Загрузить и перезапустить');
+    expect(body).not.toContain('Nano Desktop устанавливает обновление, только если');
+    expect(body).not.toContain('Всё локально: без телеметрии.');
     expect(body).toContain('- Runs: the step panel keeps its width after a restart.');
   });
 });
